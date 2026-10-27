@@ -1,10 +1,30 @@
-# Zoom web
+# Zoom web: runnable manual procedure
 
-Status: live account testing pending; no vendor-version compatibility claim.
+Required: 2 participants including the recorder, independent test profiles/accounts;
+440 Hz local / 880 Hz remote. Complete setup.md first. Status: no live version pass recorded yet.
 
-The deterministic PC-free Web Audio topology exposes no discoverable WebRTC or media-element track. Track mode must report waiting rather than inventing a source; manually choose Tab audio and expect one stereo `tab` track. This model does not assert that every Zoom web version is PC-free.
+1. Join the dedicated test call. Confirm the far-end tone is audible before recording. Note
+   Chrome/product versions and each participant's input frequency. Approve test guests if needed.
+2. Open Cassini popup and click **Record separate tracks**. Note the shown source count and
+   complete Recording-UUID path. If still waiting after joining, record that as a gap; never
+   infer success from a red badge alone. The PC-free fixture is only a model. If **Record separate tracks** stays waiting, record that observation, use **Stop and save**, then start a new **Record the whole tab** run. Do not assume a microphone is in the tab mix.
+3. Record at least 10 seconds of steady signal. Mute the local participant in the product for
+   10 seconds, then unmute for 10 seconds; log elapsed times. Expect local silence and continued
+   far-end audio. Select a settled mute interval with summarize.py --start/--duration.
+4. Select a second microphone in the product's device menu, then restore the first. Record
+   timing, track changes and continuity. If only one fake/physical input exists, mark blocked;
+   restarting a browser is not a device-switch pass.
+5. Mute/unmute the far end  for 10 seconds each. Observe source
+   content/count/labels. Compare known tone powers; mixed remote content is not a bleed failure.
+6. Click **Stop and save**, wait for saved status, retain session.json/WAVs and run
+   `python3 conformance/summarize.py /absolute/Recording-UUID --tones 440,880`.
+   Require desired tone power >0.001 and unwanted tone <1% for separated tone sources.
+7. Run a new **Record the whole tab** recording for at least 10 seconds. Confirm playback remains
+   audible and one stereo `tab` source contains the rendered far-end mix. Do not assume local
+   microphone inclusion. Click **Stop and save** and collect that folder/summary separately.
+8. In one final short recording, leave or navigate the meeting tab while audio is active.
+   Require a visible interruption and playable partial WAVs. Complete TEMPLATE.md, attach
+   session.json and summarize output for each mode, and record every blocked or failed step.
 
-Join, start track mode, observe the lack of accessible tracks, stop and select tab fallback. Verify audible playback is preserved, mute/change microphone in the call without claiming it is in the tab mix, then leave and stop. Native microphone capture is a separate source when needed.
-
-Follow every row in TEMPLATE.md, recording join/start/mute/device replacement/leave and playback.
-Use results/ for versioned observations and known gaps. Never substitute fixture results for a live run.
+Only sanitized handwritten observations go into results/. CI fixture outputs are Actions
+artifacts and cannot be substituted for the live product/version result.
