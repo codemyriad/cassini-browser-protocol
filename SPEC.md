@@ -87,7 +87,9 @@ preceding version. Vectors deliberately isolate other errors; wording is not con
 
 The last four are snapshot resource policies, not requirements on third-party hosts.
 Overflow is counted and reported, preserving render-clock gaps instead of compressing time.
-A failed page source is retired while other sources continue. A host transport failure ends
+Transient AudioContext suspension attempts resume for up to four seconds without changing the source.
+Other source failures retry after five seconds under fresh IDs at most three times; only
+then is the source retired. Render-clock gaps remain on the timeline while other sources continue. A host transport failure ends
 the session because its ordered acknowledgements can no longer be trusted.
 
 ## Page trust and browser clocks
@@ -172,3 +174,8 @@ an interrupted session has a nonempty problem. Response examples are complete re
 vector expect objects are partial matchers, not full responses.
 
 After `stopped` the host answers further requests with error `state` and exits on EOF.
+
+An active recording's path/mode/tab/origin is held in extension session storage after the
+host start acknowledgement. Worker restart reports interruption with that path and clears
+the stale badge; it does not claim that unacknowledged audio survived. A worker-crashed tab
+capture document is closed to release the capture stream.
