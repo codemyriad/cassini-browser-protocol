@@ -50,6 +50,8 @@ export async function workerDeathDuringRecording({ context, meetingPage, popup, 
   assert.equal(after.path, before.path);
   assert.equal(await popup.evaluate(() => chrome.action.getBadgeText({})), '');
   assert.ok(metadata.tracks.some(track => track.frames > track.sampleRate * 4), 'audio accepted before worker death survived');
+  const retained = await Promise.all(metadata.tracks.map(track => readFile(path.join(before.path, track.file))));
+  assert.ok(retained.some(wav => wav.subarray(44).some(byte => byte !== 0)), 'the generated tone survived worker death');
   if (mode === 'tab') assert.equal(await popup.evaluate(async () => (await chrome.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] })).length), 0);
   return { path: before.path, status: after, manifest: metadata };
 }

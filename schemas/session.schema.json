@@ -112,7 +112,7 @@
             "type": "integer",
             "minimum": 0,
             "maximum": 2147483629,
-            "$comment": "Raw JSON must use an integer literal: schema alone cannot distinguish 48000.0."
+            "$comment": "Maximum mono PCM16 frames = floor((2^32-1-36)/2); the byte bound is stricter for stereo."
           },
           "startOffsetMs": {
             "type": [

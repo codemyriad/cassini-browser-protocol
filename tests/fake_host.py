@@ -17,6 +17,10 @@ while True:
  prefix=sys.stdin.buffer.read(4)
  if not prefix:break
  size,=struct.unpack('=I',prefix);m=json.loads(sys.stdin.buffer.read(size));kind=m['type']
+ if manifest and manifest['state']=='completed':
+  reply(dict(type='error',code='state',message='Session already stopped'))
+  if mode=='keep-alive-after-stop':continue
+  sys.exit(0 if mode=='zero-after-stop' else 1)
  if kind=='start':
   id=str(uuid.uuid4());directory=root/('Recording-'+id);directory.mkdir()
   manifest=dict(version=1,id=id,createdAt=datetime.datetime.now(datetime.timezone.utc).isoformat(),title=42 if mode=='title' else ('Wrong title' if mode=='semantic-title' else m.get('title','Browser recording')),source='macos' if mode=='source' else 'chromium',state='recording',tracks=[])
