@@ -38,6 +38,6 @@ class SchemaTests(unittest.TestCase):
 
     def test_shared_extension_is_platform_neutral(self):
         for path in (ROOT/'extension').rglob('*'):
-            if path.is_file(): self.assertIsNone(re.search(r'\bmac\b|macos',path.read_text(),re.I),str(path))
+            if path.is_file(): self.assertIsNone(re.search(rb'\bmac\b|macos',path.read_bytes(),re.I),str(path))
 
 if __name__=='__main__': unittest.main()

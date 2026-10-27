@@ -50,9 +50,10 @@ python3 browser-protocol/verify.py --pinned BrowserExtension     # Mac
 python3 browser-protocol/verify.py --pinned browser-extension    # GNOME
 ```
 
-To run the vectors against a host:
+Install the test-only Python dependencies, then run the request/output vectors against a host:
 
 ```sh
+python3 -m pip install -r requirements-test.txt
 python3 conformance/run.py /absolute/path/to/native-host
 ```
 
@@ -116,3 +117,8 @@ updated checksum fails this check. The proof files are app metadata, not upstrea
 The Mac repository owns the approved DrMeyers native runner for manual/nightly jobs only.
 Runner registration and synthetic fixtures do not grant macOS audio consent or replace
 hardware validation. Live product testing is manual and requires test accounts.
+
+The runner validates complete response/session schemas, derives track metadata and exact PCM
+(including gap silence) from accepted requests, checks WAV fmt/sample bytes and returned paths,
+and requires error termination without waiting for EOF. Corrupt-host negative tests are a
+mandatory CI gate. Vector counts alone from older snapshots are framing smoke evidence.
