@@ -13,7 +13,7 @@
 | Action / elapsed session time | Expected signal or lifecycle | Observed | Pass/fail/blocked |
 | --- | --- | --- | --- |
 | Join, before Record | Call audio audible; no recording folder created by capture | | |
-| Record WebRTC tracks | Incoming/outgoing sources, or explicit waiting if inaccessible | | |
+| Record separate tracks | Incoming/outgoing sources, or explicit waiting if inaccessible | | |
 | Local mute for 10 s, then unmute | Local settled RMS <0.005; remote tone continues | | |
 | Change microphone, then restore | New/resumed source stays on timeline; blocked if no second device | | |
 | Far-end mute/speaker change for 10 s | Receiver content changes without inventing participant identity | | |
