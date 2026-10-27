@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "Cassini Local Recorder",
+  "name": "Cassini Recorder",
   "version": "0.1.0",
   "minimum_chrome_version": "116",
-  "description": "Record meeting tracks or tab audio to local WAV files through Cassini.",
+  "description": "Record a meeting’s audio tracks, or the whole tab, to WAV files on this computer with Cassini.",
   "permissions": [
     "activeTab",
     "nativeMessaging",
@@ -16,7 +16,7 @@
   },
   "action": {
     "default_popup": "popup.html",
-    "default_title": "Cassini recording"
+    "default_title": "Cassini Recorder"
   },
   "content_scripts": [
     {
@@ -65,7 +65,7 @@
       "suggested_key": {
         "default": "Ctrl+Shift+9"
       },
-      "description": "Open Cassini recording controls"
+      "description": "Open Cassini Recorder"
     }
   }
 }
