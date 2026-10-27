@@ -177,3 +177,8 @@ vector expect objects are partial matchers, not full responses.
 After `stopped`, any further request is a lifecycle error: answer `error` with code `state`,
 leave the completed session unchanged, and exit nonzero without waiting for EOF. EOF alone
 after `stopped` exits zero.
+
+An active recording's path/mode/tab/origin is held in extension session storage after the
+host start acknowledgement. Worker restart reports interruption with that path and clears
+the stale badge; it does not claim that unacknowledged audio survived. A worker-crashed tab
+capture document is closed to release the capture stream.

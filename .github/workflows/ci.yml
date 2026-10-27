@@ -18,6 +18,13 @@ jobs:
       - run: python3 conformance/check-native-fixture.py
       - run: npm ci
       - run: npx playwright install --with-deps chromium
+      - name: Isolated output device for generated tab tone
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pulseaudio
+          pulseaudio --start --exit-idle-time=-1
+          pactl load-module module-null-sink sink_name=cassini_ci
+          pactl set-default-sink cassini_ci
       - run: npm test
       - uses: actions/upload-artifact@v5
         if: always()

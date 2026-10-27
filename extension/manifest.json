@@ -8,7 +8,8 @@
     "activeTab",
     "nativeMessaging",
     "offscreen",
-    "tabCapture"
+    "tabCapture",
+    "storage"
   ],
   "background": {
     "service_worker": "background.js",

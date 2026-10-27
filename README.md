@@ -122,3 +122,13 @@ The runner validates complete response/session schemas, derives track metadata a
 (including gap silence) from accepted requests, checks WAV fmt/sample bytes and returned paths,
 and requires error termination without waiting for EOF. Corrupt-host negative tests are a
 mandatory CI gate. Vector counts alone from older snapshots are framing smoke evidence.
+
+The shared `npm test` also loads the extension and kills its worker after five seconds of
+saved generated audio, in Separate tracks and Whole tab modes. It checks retained tone,
+interruption/path, cleared badge and closed offscreen capture. CI uses an isolated PulseAudio
+null sink and a small checked-in browser-test writer (not either production recorder).
+Either app runs the same adapter against its real host with
+`CASSINI_NATIVE_HOST=/absolute/executable CASSINI_TEST_EXTENSION=/absolute/extension node tests/worker-recovery.mjs`.
+`CASSINI_WORKER_TEST_MODES=tracks` runs the device-independent portion; Whole tab needs an
+output device and stays on DrMeyers rather than hosted macOS. The Mac loaded-extension and
+tab adapters also call `scenarios/worker-recovery.mjs`; GNOME adopts this adapter with its pin.
