@@ -4,7 +4,7 @@ async function hasOffscreenDocument() {
 
 const frames = new Set();
 let active = null;
-let lastStatus = { recording: false, message: "Ready. Choose WebRTC tracks or Tab audio." };
+let lastStatus = { recording: false, message: "Ready. Choose Separate tracks or Whole tab." };
 
 class NativeHost {
   constructor(onFailure) {
@@ -20,17 +20,17 @@ class NativeHost {
       if (message.type === "error") onFailure(message.message);
     });
     this.port.onDisconnect.addListener(() => {
-      const message = chrome.runtime.lastError?.message || "The local recording host disconnected.";
+      const message = chrome.runtime.lastError?.message || "Lost the connection to Cassini. Audio recorded so far was saved.";
       for (const request of this.pending.splice(0)) { clearTimeout(request.timer); request.reject(new Error(message)); }
       if (!this.closed) onFailure(message);
     });
   }
   send(packet) {
-    if (this.closed) return Promise.reject(new Error("Recording host is closed."));
-    if (this.pending.length >= 512) return Promise.reject(new Error("The recording host cannot keep up with audio."));
+    if (this.closed) return Promise.reject(new Error("Cassini is no longer connected."));
+    if (this.pending.length >= 512) return Promise.reject(new Error("Cassini cannot keep up with the audio. Audio recorded so far was saved."));
     return new Promise((resolve, reject) => {
       const request = { resolve, reject, timer: setTimeout(() => {
-        reject(new Error("The recording host stopped responding."));
+        reject(new Error("Cassini stopped responding. Audio recorded so far was saved."));
         this.close();
       }, 10000) };
       this.pending.push(request);
@@ -40,14 +40,14 @@ class NativeHost {
   }
   close() {
     this.closed = true;
-    for (const request of this.pending.splice(0)) { clearTimeout(request.timer); request.reject(new Error("Recording host closed.")); }
+    for (const request of this.pending.splice(0)) { clearTimeout(request.timer); request.reject(new Error("Cassini is no longer connected.")); }
     this.port.disconnect();
   }
 }
 
 function status() {
   return active ? { recording: true, stopping: active.stopping, tracks: active.tracks,
-    message: active.warning || (!active.tracks ? "Waiting for audio sources. Join the call or choose Tab audio." : `${active.stopping ? "Saving" : "Recording"}: ${active.mode === "tracks" ? "WebRTC tracks" : "tab audio"} · ${active.tracks} sources`), path: active.path } : lastStatus;
+    message: active.warning || (!active.tracks ? "Waiting for audio. Join the call, or record the whole tab instead." : `${active.stopping ? "Saving" : "Recording"} ${active.mode === "tracks" ? "separate tracks" : "the whole tab"} · ${active.tracks} ${active.tracks === 1 ? "track" : "tracks"}`), path: active.path } : lastStatus;
 }
 
 function failure(message) {
@@ -62,7 +62,7 @@ async function stop() {
   try {
     if (session.mode === "tracks") {
       await Promise.all([...session.frames].map(frame => new Promise(resolve => {
-        const timer = setTimeout(() => { session.problem ??= "A meeting frame did not finish sending audio."; resolve(); }, 15000);
+        const timer = setTimeout(() => { session.problem ??= "Part of the meeting page did not finish sending audio. Its last moments are missing from the recording."; resolve(); }, 15000);
         frame.finished = () => { clearTimeout(timer); frame.finished = null; resolve(); };
         try { frame.port.postMessage({ type: "stop", token: session.token }); }
         catch { frame.finished(); }
@@ -73,7 +73,7 @@ async function stop() {
     }
     // Native messages are processed in order, so the stop acknowledgement follows all audio writes.
     const result = await session.host.send({ type: "stop", problem: session.problem });
-    lastStatus = { recording: false, path: result.path, message: session.problem || result.problem || "Recording saved locally." };
+    lastStatus = { recording: false, path: result.path, message: session.problem || result.problem || "Saved on this computer." };
   } catch (error) {
     lastStatus = { recording: false, path: session.path, message: session.problem || error.message };
   } finally {
@@ -88,7 +88,7 @@ async function start(mode) {
   if (active) throw new Error("A recording is already running.");
   if (!["tracks", "tab"].includes(mode)) throw new Error("Unknown recording mode.");
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  if (!tab?.id || !/^https?:/.test(tab.url || "")) throw new Error("Open a meeting in an HTTP or HTTPS tab first.");
+  if (!tab?.id || !/^https?:/.test(tab.url || "")) throw new Error("Open the meeting tab first. Recording works on web pages only.");
   const session = { mode, tabId: tab.id, token: crypto.randomUUID(), origin: Date.now(),
     frames: new Set(), tracks: 0, stopping: false, problem: null };
   active = session;
@@ -106,7 +106,7 @@ async function start(mode) {
         session.frames.add(frame);
         frame.port.postMessage({ type: "start", token: session.token, origin: session.origin });
       }
-      if (!session.frames.size) throw new Error("Reload the meeting tab after installing the extension, then try again.");
+      if (!session.frames.size) throw new Error("Cassini cannot reach this page yet. Reload the meeting tab, then try again.");
 
     } else {
       if (await hasOffscreenDocument()) await chrome.offscreen.closeDocument();
@@ -137,17 +137,17 @@ chrome.runtime.onConnect.addListener(port => {
     const session = active;
     if (!session?.frames.has(frame)) return;
     if (message.type === "stopped") {
-      if (!session.stopping) failure("A meeting frame stopped capture unexpectedly. The partial recording was saved.");
+      if (!session.stopping) failure("The meeting page stopped sending audio. The recording so far was saved.");
       frame.finished?.(); return;
     }
     if (message.type === "warning") {
-      session.warning = "One audio source was interrupted or lost samples. Other sources continue.";
+      session.warning = "One track was interrupted and has a gap. The other tracks continue.";
       session.problem ??= session.warning; return;
     }
     if (message.type === "error") { failure("The meeting frame could not capture audio. Try Tab audio. The partial recording was saved."); return; }
     if (message.type !== "packet" || !["track", "audio"].includes(message.packet?.type)) return;
     try {
-      if (JSON.stringify(message.packet).length > 400000) throw new Error("Audio message exceeds the size limit.");
+      if (JSON.stringify(message.packet).length > 400000) throw new Error("The meeting page sent an oversized audio chunk.");
       await session.host.send(message.packet);
       if (message.packet.type === "track") session.tracks++;
       port.postMessage({ type: "ack", token: session.token, request: message.request });
@@ -161,7 +161,7 @@ chrome.runtime.onConnect.addListener(port => {
     frame.finished?.();
     if (active?.frames.has(frame)) {
       active.frames.delete(frame);
-      if (!active.stopping) failure("The meeting frame closed or navigated. The partial recording was saved.");
+      if (!active.stopping) failure("The meeting page closed or navigated away. The recording so far was saved.");
     }
   });
 });
@@ -189,4 +189,4 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   })().then(respond, error => respond({ error: error.message }));
   return true;
 });
-chrome.tabs.onRemoved.addListener(id => { if (active?.tabId === id) failure("The meeting tab closed. The partial recording was saved."); });
+chrome.tabs.onRemoved.addListener(id => { if (active?.tabId === id) failure("The meeting tab was closed. The recording so far was saved."); });
