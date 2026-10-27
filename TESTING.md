@@ -20,8 +20,12 @@
    sink-only variant does not establish CoreAudio/TCC/device compatibility. Microphone testing
    needs an actual input device. CI builds the app but cannot grant privacy consent.
 
-Mac CI runs layers 1–4 on macos-15 / Xcode 16.4 and builds the signed app with its bundled host.
-Local validation used macOS 27 / Xcode 27; the newly configured CI has not yet been executed.
+Hosted Mac CI runs the contract, native writer/loader and WebRTC/media scenarios on macos-15 /
+Xcode 16.4 and builds the signed app with its bundled host. Real tabCapture runs on DrMeyers:
+hosted macOS has an absent/intermittent Null Audio Device and is not a reliable rendered-tab
+audio gate (https://github.com/actions/runner-images/issues/13668). The native workflow is
+manual/nightly only. Its sink-only mode also runs tabCapture; full mode additionally attempts
+the consent-dependent CoreAudio tap. Local validation uses macOS 27 / Xcode 27.
 Failures preserve generated audio/metadata and logs as CI artifacts. No real conversations
 or microphones are used in unattended tests.
 
