@@ -1,4 +1,15 @@
-# Browser recording protocol v1
+# Browser recording protocol — SPEC v1.1
+
+## Changelog — v1.1 (2026-10-27)
+
+Amends v1 in place; wire `"version": 1` and session `"version": 1` are unchanged. Formalizes
+optional error codes, null-as-absent, integer literals, the closed type set, source enum,
+creation-date grammar, and optional ended/endOffsetMs/problemKind/labelSource. Existing
+v1 clients may ignore the optional additions. Native and browser writers now share the
+same session directory contract; no automatic Opus encoding is required while recording.
+
+Canonical source: https://github.com/codemyriad/cassini-browser-protocol. Changes land here
+first; app repositories vendor an exact commit and verify both its Git identity and bytes.
 
 Normative contract for `com.codemyriad.cassini`. Independent of OS, implementation language,
 transport launch path, and the separate Cassini Ogg Opus format.
@@ -124,3 +135,20 @@ origin-based frame matching on browsers implementing it (Chrome's scripting coun
 119+). use_dynamic_url reduces stable-resource fingerprinting on Chrome 130+ and is ignored
 on earlier Chrome releases. It does not authenticate page messages. The offscreen worklet
 uses an extension-relative URL; MAIN-world imports receive dynamic URLs from runtime.getURL.
+
+
+## Native recorder session requirements (v1.1)
+
+Both native recorders MUST write `Recording-<UUID>/session.json` and one PCM16 WAV per
+source, exactly as described above. macOS uses `source: "macos"`; GNOME uses `source: "gnome"`.
+Microphone and system output remain separate tracks (`kind: "microphone"` / `"system"`);
+selected application output uses `"application"`. Channel count describes that source's
+format, not multiplexed unrelated sources. An Opus file is an export, not the capture folder.
+
+Native sample clocks establish each source's start offset and continuous frame counts;
+clock-drift diagnostics must not be mistaken for browser sequence errors. Device/backend
+metadata may be added as optional fields. Loaders MUST accept both native source values and
+the same safe WAV paths, dates, frame counts, interruption states and optional metadata as
+browser sessions. `conformance/native-session/` is a complete deterministic two-source
+fixture (440 Hz microphone at 0 ms; 880 Hz system stereo at 125 ms), with macOS and GNOME
+manifest variants. It is a synthetic format fixture, not proof of hardware capture.

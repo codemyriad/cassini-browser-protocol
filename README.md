@@ -1,23 +1,35 @@
-# Cassini browser recording protocol snapshot
+# Cassini browser recording protocol
 
-This neutral directory is the interim shared contract. There is no remote upstream yet.
-`SPEC.md`, schemas, raw JSON vectors, and the stdio runner are portable. `extension/` is
-an exact reviewed snapshot; each app keeps its installed extension byte-identical to it.
-Do not edit the app copy independently. `python3 browser-protocol/verify.py BrowserExtension`
-checks both the snapshot SHA list and the installed copy. GNOME passes `browser-extension`.
+Canonical shared protocol, schemas, conformance vectors, extension and deterministic browser
+fixtures for Cassini Mac and GNOME. SPEC v1.1 keeps wire/session version 1. Chromium only;
+minimum Chrome 116. Team priorities: Teams web, Zoom web, then Meet. Live product compatibility
+requires manual account testing; topology fixtures are not evidence of vendor behavior.
 
-Run vectors against either host:
+Changes land here first and are pushed before either app updates its vendored copy. Stage all
+new/changed files, run `python3 refresh-hashes.py`, validate, commit and push. Do not hand-edit
+an app's extension copy. From this clone, update an app with:
 
 ```
-python3 browser-protocol/conformance/run.py /absolute/path/to/native-host
+python3 vendor.py FULL_COMMIT_SHA /path/to/app/browser-protocol /path/to/app/BrowserExtension
 ```
 
-The executable must use native-messaging stdio and return a session folder in `started`.
-The runner deletes only session folders created by its own requests. On failure it retains
-them and prints their paths. Vectors assert response type/code and file results, never error
-wording. Schemas describe structure; lexical integer and byte limits also require vectors.
+GNOME uses `/path/to/app/browser-extension`. `vendor.py` records PINNED_COMMIT and the raw
+upstream commit object. `verify.py --pinned` recomputes the commit SHA and complete Git tree
+from vendored files, including SHA256SUMS, with no network credentials required in app CI.
+Changing the pin alone or changing both a file and its checksum cannot bypass this check.
+The vendored proof files are app metadata, not upstream source files.
 
-Browser scenarios stay in the app adapter directory for now (`BrowserExtension/tests` on
-Mac and `tests/recording` on GNOME). They use the same extension snapshot. A complete merged
-cross-platform browser driver and Talk/HPB/MLS/soak matrix remain a follow-up, not a claim of
-coverage from these vectors. Hardware-native tests are separate platform release gates.
+```
+python3 verify.py
+node --test extension/tests/*.test.cjs
+python3 conformance/run.py /absolute/path/to/native-host
+python3 conformance/check-native-fixture.py
+npm ci
+npx playwright install chromium
+npm test
+```
+
+See TESTING.md and products/README.md for coverage and the manual Teams/Zoom/Meet checklists.
+Self-hosted Mac device jobs live in the Mac repo, only on manual/nightly triggers. Firefox
+and Flatpak remain future work. The schemas permit optional additions, but lexical numeric
+rules and UTF-8 byte limits also need the executable vectors.

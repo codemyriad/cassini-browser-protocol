@@ -1,0 +1,6 @@
+{
+  "name": "cassini-browser-protocol",
+  "private": true,
+  "scripts": {"test": "node --test extension/tests/*.test.cjs && node tests/product-topologies.mjs"},
+  "devDependencies": {"playwright": "1.61.1"}
+}

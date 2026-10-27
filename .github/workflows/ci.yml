@@ -1,0 +1,24 @@
+name: Shared recording contract
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  contract:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: python3 verify.py
+      - run: python3 -m unittest discover -s tests -p "test_*.py"
+      - run: python3 conformance/check-native-fixture.py
+      - run: npm ci
+      - run: npx playwright install --with-deps chromium
+      - run: npm test
+      - uses: actions/upload-artifact@v5
+        if: always()
+        with:
+          name: topology-results
+          path: artifacts/

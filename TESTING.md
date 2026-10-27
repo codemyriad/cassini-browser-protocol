@@ -26,7 +26,11 @@ Failures preserve generated audio/metadata and logs as CI artifacts. No real con
 or microphones are used in unattended tests.
 
 GNOME has separate real user-gesture/Xvfb, PulseAudio/PipeWire, GTK and Talk harnesses. Their
-results are not Mac hardware evidence. Shared publication upstream, a fully merged browser
+results are not Mac hardware evidence. A fully merged browser
 scenario driver, MLS time-code/Talk HPB fixtures, cross-browser minimum-version runs, and
-nightly soaks remain explicit migration work, not implied by a green vector suite. No new
-remote repository or self-hosted CI runner has been provisioned.
+nightly soaks remain explicit migration work, not implied by a green vector suite. The canonical upstream is codemyriad/cassini-browser-protocol; the Mac app owns its approved
+manual/nightly DrMeyers runner. Neither runner setup nor a synthetic fixture grants TCC consent.
+
+SPEC v1.1 adds checked-in macOS/GNOME native-session WAV fixtures, offline Git pin-verification
+regressions, and controlled Teams mixed-receiver / Zoom PC-free / Meet switching-slot browser
+models. Product account/version observations remain manual in products/results/.
