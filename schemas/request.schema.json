@@ -77,6 +77,13 @@
             "string",
             "null"
           ]
+        },
+        "labelSource": {
+          "enum": [
+            "browser",
+            "dom",
+            null
+          ]
         }
       },
       "additionalProperties": true
