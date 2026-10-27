@@ -85,7 +85,7 @@ def run(host, case):
     process = subprocess.Popen([host],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE)
     stderr = bytearray()
     def drain():
-        for chunk in iter(lambda:process.stderr.read(8192),b''):
+        for chunk in iter(lambda:os.read(process.stderr.fileno(),8192),b''):
             stderr.extend(chunk)
             if len(stderr)>16384: del stderr[:-16384]
     reader=threading.Thread(target=drain,daemon=True);reader.start()
@@ -145,6 +145,9 @@ def run(host, case):
         if process.poll() is None:process.kill()
         process.wait(timeout=5);reader.join(timeout=1)
         if stderr:print(stderr.decode('utf-8',errors='replace'),file=sys.stderr)
+        for handle in [process.stdin,process.stdout,process.stderr]:
+            try: handle.close()
+            except OSError: pass
 
 if __name__=='__main__':
     host=str(pathlib.Path(sys.argv[1]).resolve())
