@@ -1,17 +1,16 @@
 # Cassini browser recording protocol
 
-I want to record online meetings with each participant on their own audio track. The
-only place where those tracks still exist separately is inside the browser: once the
-audio reaches the speakers it is one mix, and the operating system cannot tell who said
-what. So the recording has to start in the browser.
+Cassini records online meetings with each participant on their own audio track. The only
+place where those tracks still exist separately is inside the browser: once the audio
+reaches the speakers it is one mix, and the operating system cannot tell who said what.
+So the recording has to start in the browser.
 
 This repository is the code that does that, shared between
 [Cassini for GNOME](https://github.com/codemyriad/cassini-gnome) and
-[Cassini for Mac](https://github.com/codemyriad/cassini-mac) (Windows later, I hope).
-Each app has its own native recorder, written in Python and Swift respectively. What they
-have in common is the browser side, and the agreement on how browser and recorder talk to
-each other. That common part lives here, so there is one copy of it instead of two
-drifting ones.
+[Cassini for Mac](https://github.com/codemyriad/cassini-mac) (Windows later). Each app has
+its own native recorder, written in Python and Swift respectively. What they have in common
+is the browser side, and the agreement on how browser and recorder talk to each other. That
+common part lives here, so there is one copy of it instead of two drifting ones.
 
 ## how it works
 
@@ -27,10 +26,10 @@ drifting ones.
 * `SPEC.md` is the contract between the two: the messages, their types and limits, how
   timestamps and gaps are handled, and the on-disk result (a folder with one WAV per source
   and a `session.json`). `schemas/` holds the same thing as JSON Schema.
-* `conformance/` is how I keep the two implementations honest. `vectors.json` is a list of
-  raw request sequences with the responses and files each one must produce; `run.py` pipes
-  them into any host executable. If a host passes the vectors, the extension will work
-  with it. Error messages are deliberately not part of the contract, only error codes.
+* `conformance/` keeps the two implementations honest. `vectors.json` is a list of raw
+  request sequences with the responses and files each one must produce; `run.py` pipes
+  them into any host executable. A host that passes the vectors works with the extension.
+  Error messages are deliberately not part of the contract, only error codes.
 * `scenarios/` has the audio helpers the browser tests in both apps share (tone
   generation, Goertzel power, silence scanning), so a test that proves "the 880 Hz source
   did not bleed into the 440 Hz one" reads the same on both platforms.
@@ -78,7 +77,6 @@ vector fail is a protocol change, not a bug fix, and gets discussed as one. The 
 version stays at 1 as long as additions are optional and old hosts keep working; `SPEC.md`
 has the changelog.
 
-Most of this code was written by coding agents (one per app, plus a reviewer), with me
-steering and reading, not proof-reading every line. The vectors and the browser tests are
-what I trust, more than my reading of the code. If you find a gap in them I'd honestly
-like to know.
+Most of this code was written by coding agents (one per app, plus a reviewer), steered and
+read by a human but not proof-read line by line. The vectors and the browser tests are the
+evidence that it works; a gap in them is a bug worth reporting.
