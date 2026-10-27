@@ -2,7 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const path = require('node:path');
 const fs = require('node:fs');
-const { runCase, setup } = require('./support/app-control-harness.cjs');
+const { runCase, setup, until } = require('./support/app-control-harness.cjs');
 const root = path.resolve(__dirname, '../..');
 const contract = fs.existsSync(path.join(root, 'conformance/control/vectors.json')) ? root : path.join(root, 'browser-protocol');
 const vectors = JSON.parse(fs.readFileSync(path.join(contract, 'conformance/control/vectors.json')));
@@ -16,4 +16,18 @@ test('app control: ignores uncorrelatable commands and reconnects with the Chrom
     app.ports[0].disconnect(); assert.equal(app.alarms.get('cassini-app-control').periodInMinutes, 1);
     app.chrome.alarms.onAlarm.emit({ name: 'cassini-app-control' }); assert.equal(app.ports.length, 2);
   } finally { app.close(); }
+});
+
+test('app control: a pending explicit-tab lookup reserves the same recording slot as the popup', async () => {
+  const app = await setup();
+  let release;
+  try {
+    const lookup = app.chrome.tabs.get; let entered = false;
+    const gate = new Promise(resolve => { release = resolve; });
+    app.chrome.tabs.get = async id => { entered = true; await gate; return lookup(id); };
+    const recording = app.command({type:'command',requestId:'lookup',action:'start',tabId:2,mode:'tracks'});
+    await until(() => entered);
+    await assert.rejects(app.api.start('tracks'), /A recording is already running. Stop it before starting another./);
+    release();assert.equal((await recording).ok,true);assert.equal(app.audio.length,1);
+  } finally { release?.();app.close(); }
 });

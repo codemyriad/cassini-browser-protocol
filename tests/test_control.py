@@ -27,6 +27,15 @@ class ControlTests(unittest.TestCase):
         # extension semantics and the same corpus are exercised by the VM runner.
         subprocess.run(['node', str(ROOT / 'conformance/control/run-extension.cjs')], check=True, stdout=subprocess.DEVNULL)
 
+    def test_host_schema_matches_valid_and_invalid_commands(self):
+        validator=Draft202012Validator(json.loads((ROOT/'schemas/control-host.schema.json').read_text()))
+        invalid={'invalid-action','invalid-tab-id','missing-mode','whole-tab-needs-browser-click'}
+        for case in json.loads((ROOT/'conformance/control/vectors.json').read_text()):
+            for command in case.get('commands',[]):
+                self.assertEqual(validator.is_valid(command),case['name'] not in invalid,case['name'])
+        self.assertTrue(validator.is_valid(dict(type='command',requestId=0,action='stop',tabId=0,mode='ignored-extra')))
+        self.assertFalse(validator.is_valid(dict(type='command',requestId=True,action='stop',tabId=2)))
+
     def test_mutated_control_hosts_are_rejected(self):
         cases = json.loads((ROOT / 'conformance/control/vectors.json').read_text())
         fixture = ROOT / 'conformance/control/fixture-host.py'
