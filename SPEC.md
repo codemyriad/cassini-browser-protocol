@@ -20,7 +20,8 @@ Each message is a native-endian uint32 byte length followed by UTF-8 JSON (littl
 on supported arm64/x86-64 hosts). Read partial pipe input until complete. stdout contains
 only framed responses. One connection owns one session. Each request receives one response
 in FIFO order, including pipelined requests. On a protocol/IO error return `error`, finalize
-partial audio as interrupted, then exit. EOF before stop also finalizes as interrupted.
+partial audio as interrupted, then exit nonzero without waiting for EOF. EOF before stop
+also finalizes as interrupted; EOF after a successful stop exits zero.
 Start/stop and filesystem destinations are extension/host decisions, never page commands.
 
 JSON objects reject duplicate members. Unknown extra fields are ignored. Recognized fields
@@ -46,7 +47,7 @@ inferred. There is no track-end wire message in v1. A replaced source may use a 
 reversible sender muting should retain its ID and send silence.
 
 An omitted/null title defaults to a host title. An omitted/null label defaults to kind.
-Titles are bounded to 500 Unicode characters; labels strip Unicode control characters and
+Titles are bounded to 500 Unicode characters; labels strip Unicode categories Cc and Cf (including U+200B, preserving private-use Co) and
 are bounded to 200 characters. Empty/null/absent stop problem means no interruption unless
 IO failure or an empty session independently requires one. Empty sessions are interrupted.
 
@@ -70,7 +71,7 @@ preceding version. Vectors deliberately isolate other errors; wording is not con
 | Item | Limit |
 | --- | --- |
 | Native JSON frame | 1–524288 bytes |
-| JSON depth | 64 levels |
+| JSON depth | 64 nested object/array containers, counting the root; scalar leaves add no level |
 | Sources per session | 64, including ended sources |
 | ID | 1–200 UTF-8 bytes |
 | Sample rate | integer 8000–192000 Hz |
@@ -119,6 +120,8 @@ labelSource optionally identifies browser, device, user, or recovered; omission 
 
 WAVs use a 44-byte PCM16 RIFF header. Complete PCM frames on disk are authoritative over
 periodically checkpointed frame counts, including a header one append behind after a crash.
+Before acknowledging start, write session.json; before each track acknowledgement, checkpoint
+the new track metadata. A filesystem error at either step returns `error io` and exits nonzero.
 Each file contains only the data chunk after that header. Writers sync audio before metadata,
 sync temporary metadata, then rename atomically; platform disk-cache flushes may be stronger.
 An interrupted recording is recoverable from its WAVs. Without trustworthy metadata, readers
@@ -152,3 +155,30 @@ the same safe WAV paths, dates, frame counts, interruption states and optional m
 browser sessions. `conformance/native-session/` is a complete deterministic two-source
 fixture (440 Hz microphone at 0 ms; 880 Hz system stereo at 125 ms), with macOS and GNOME
 manifest variants. It is a synthetic format fixture, not proof of hardware capture.
+
+
+## Executable JSON examples and schema bounds
+
+See [start](conformance/examples/start.json), [track](conformance/examples/track.json),
+[audio](conformance/examples/audio.json), [stop](conformance/examples/stop.json),
+[responses](conformance/examples/responses.json), and [session](conformance/examples/session.json).
+For example, a complete start request is:
+
+```json
+{"type":"start","version":1,"title":"Example meeting"}
+```
+
+Schema lengths count Unicode code points; ID limits additionally count UTF-8 bytes.
+endOffsetMs is bounded at 86460000 ms (24 hours plus one minute), allowing the final chunk
+after the latest legal start offset. A completed session has no non-null problem/problemKind;
+an interrupted session has a nonempty problem. Response examples are complete responses;
+vector expect objects are partial matchers, not full responses.
+
+After `stopped`, any further request is a lifecycle error: answer `error` with code `state`,
+leave the completed session unchanged, and exit nonzero without waiting for EOF. EOF alone
+after `stopped` exits zero.
+
+An active recording's path/mode/tab/origin is held in extension session storage after the
+host start acknowledgement. Worker restart reports interruption with that path and clears
+the stale badge; it does not claim that unacknowledged audio survived. A worker-crashed tab
+capture document is closed to release the capture stream.

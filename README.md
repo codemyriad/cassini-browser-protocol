@@ -50,9 +50,10 @@ python3 browser-protocol/verify.py --pinned BrowserExtension     # Mac
 python3 browser-protocol/verify.py --pinned browser-extension    # GNOME
 ```
 
-To run the vectors against a host:
+Install the test-only Python dependencies, then run the request/output vectors against a host:
 
 ```sh
+python3 -m pip install -r requirements-test.txt
 python3 conformance/run.py /absolute/path/to/native-host
 ```
 
@@ -116,3 +117,18 @@ updated checksum fails this check. The proof files are app metadata, not upstrea
 The Mac repository owns the approved DrMeyers native runner for manual/nightly jobs only.
 Runner registration and synthetic fixtures do not grant macOS audio consent or replace
 hardware validation. Live product testing is manual and requires test accounts.
+
+The runner validates complete response/session schemas, derives track metadata and exact PCM
+(including gap silence) from accepted requests, checks WAV fmt/sample bytes and returned paths,
+and requires error termination without waiting for EOF. Corrupt-host negative tests are a
+mandatory CI gate. Vector counts alone from older snapshots are framing smoke evidence.
+
+The shared `npm test` also loads the extension and kills its worker after five seconds of
+saved generated audio, in Separate tracks and Whole tab modes. It checks retained tone,
+interruption/path, cleared badge and closed offscreen capture. CI uses an isolated PulseAudio
+null sink and a small checked-in browser-test writer (not either production recorder).
+Either app runs the same adapter against its real host with
+`CASSINI_NATIVE_HOST=/absolute/executable CASSINI_TEST_EXTENSION=/absolute/extension node tests/worker-recovery.mjs`.
+`CASSINI_WORKER_TEST_MODES=tracks` runs the device-independent portion; Whole tab needs an
+output device and stays on DrMeyers rather than hosted macOS. The Mac loaded-extension and
+tab adapters also call `scenarios/worker-recovery.mjs`; GNOME adopts this adapter with its pin.
