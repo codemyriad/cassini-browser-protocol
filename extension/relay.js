@@ -38,6 +38,10 @@
   window.addEventListener("message", event => {
     if (event.source !== window || event.data?.channel !== "cassini-page") return;
     const { type, packet, request } = event.data;
+    if (drainingToken && event.data.token === drainingToken && type === "packet") {
+      control({ type: "ack", token: drainingToken, request, error: "The recording worker disconnected." });
+      return;
+    }
     if (drainingToken && event.data.token === drainingToken && type === "stopped") {
       drainingToken = null;
       const next = pendingStart; pendingStart = null;

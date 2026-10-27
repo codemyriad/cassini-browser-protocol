@@ -8,6 +8,8 @@ test('worker disconnect drains old page requests before forwarding a new session
  ports[0].onMessage.emit({type:'start',token:'old'});
  handler({source:window,data:{channel:'cassini-page',token:'old',type:'packet',request:1,packet:{type:'audio'}}});
  ports[0].onDisconnect.emit();assert.ok(page.some(m=>m.type==='ack'&&m.request===1&&m.error));
+ handler({source:window,data:{channel:'cassini-page',token:'old',type:'packet',request:2,packet:{type:'audio'}}});
+ assert.ok(page.some(m=>m.type==='ack'&&m.request===2&&m.error),'late orphaned requests must also drain');
  runtime.emit({type:'cassini-connect'},{},()=>{});ports[1].onMessage.emit({type:'start',token:'new'});
  assert.equal(page.filter(m=>m.type==='start').length,1);
  handler({source:window,data:{channel:'cassini-page',token:'old',type:'stopped'}});
