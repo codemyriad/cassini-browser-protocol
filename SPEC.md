@@ -1,4 +1,22 @@
-# Browser recording protocol — SPEC v1.1
+# Browser recording protocol — SPEC v1.2 draft
+
+## Proposed changelog — v1.2 (awaiting both host implementations)
+
+Wire and session version remain 1. `track` gains optional `labelSource`, using the session
+provenance enum plus `dom`. Omitted/null means `browser` for a browser-host registration.
+Explicit values must be strings from `browser`, `dom`, `device`, `user`, `recovered`; other
+values fail with code `source`. The chosen provenance is persisted in the matching session
+track. It describes how the display label was obtained, not verified participant identity.
+
+`dom` means page DOM text supplied the label at registration time. It is untrusted and goes
+through the existing control stripping/200-character limit. It is a static snapshot: a Meet
+receiver slot changing speaker does not update this label or create speaker attribution.
+No new update/participant message is introduced. An overlay toggle and source health are
+extension UI state and need no additional host field at this stage.
+
+This draft must not merge until Swift and Python implementations and the new vectors can
+land in the same window. Existing v1.1 hosts may ignore the optional field, so a client must
+not claim persisted DOM provenance when connected to an older host.
 
 ## Changelog — v1.1 (2026-10-27)
 
@@ -34,7 +52,7 @@ exponents are permitted for offsetMs; NaN and Infinity tokens are invalid JSON.
 | Request | Required fields | Optional fields | Response |
 | --- | --- | --- | --- |
 | start | type="start" | version integer 1, title string | started, path string |
-| track | type="track", id string, kind string, sampleRate integer, channels integer | label string | ack |
+| track | type="track", id string, kind string, sampleRate integer, channels integer | label string, labelSource string | ack |
 | audio | type="audio", id string, sequence integer, offsetMs number, pcm base64 string | none | ack |
 | stop | type="stop" | problem string | stopped, path string, optional problem string |
 
@@ -115,7 +133,7 @@ Tracks contain id, label, kind, generated safe WAV basename file, sampleRate, ch
 frames, optional startOffsetMs, endOffsetMs, ended, labelSource. Frame count is per channel
 and includes inserted silence. ended=true means the writer finalized the source; it does
 not establish participant departure. endOffsetMs=startOffsetMs+frames/rate*1000 when known.
-labelSource optionally identifies browser, device, user, or recovered; omission means unknown.
+labelSource optionally identifies browser, dom, device, user, or recovered; omission means unknown.
 
 WAVs use a 44-byte PCM16 RIFF header. Complete PCM frames on disk are authoritative over
 periodically checkpointed frame counts, including a header one append behind after a crash.

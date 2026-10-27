@@ -700,5 +700,134 @@
       }
     ],
     "state": "interrupted"
+  },
+  {
+    "name": "label-source-dom",
+    "requests": [
+      "{\"type\":\"start\",\"title\":\"Label provenance conformance\"}",
+      "{\"type\":\"track\",\"id\":\"x\",\"kind\":\"remote\",\"sampleRate\":48000,\"channels\":1,\"label\":\"Page display name\",\"labelSource\":\"dom\"}",
+      "{\"type\":\"audio\",\"id\":\"x\",\"sequence\":0,\"offsetMs\":0,\"pcm\":\"AQACAA==\"}",
+      "{\"type\":\"stop\"}"
+    ],
+    "expect": [
+      {
+        "type": "started"
+      },
+      {
+        "type": "ack"
+      },
+      {
+        "type": "ack"
+      },
+      {
+        "type": "stopped"
+      }
+    ],
+    "state": "completed",
+    "labelSources": [
+      "dom"
+    ]
+  },
+  {
+    "name": "label-source-explicit-browser",
+    "requests": [
+      "{\"type\":\"start\",\"title\":\"Label provenance conformance\"}",
+      "{\"type\":\"track\",\"id\":\"x\",\"kind\":\"remote\",\"sampleRate\":48000,\"channels\":1,\"label\":\"Page display name\",\"labelSource\":\"browser\"}",
+      "{\"type\":\"audio\",\"id\":\"x\",\"sequence\":0,\"offsetMs\":0,\"pcm\":\"AQACAA==\"}",
+      "{\"type\":\"stop\"}"
+    ],
+    "expect": [
+      {
+        "type": "started"
+      },
+      {
+        "type": "ack"
+      },
+      {
+        "type": "ack"
+      },
+      {
+        "type": "stopped"
+      }
+    ],
+    "state": "completed",
+    "labelSources": [
+      "browser"
+    ]
+  },
+  {
+    "name": "label-source-null",
+    "requests": [
+      "{\"type\":\"start\",\"title\":\"Label provenance conformance\"}",
+      "{\"type\":\"track\",\"id\":\"x\",\"kind\":\"remote\",\"sampleRate\":48000,\"channels\":1,\"label\":\"Page display name\",\"labelSource\":null}",
+      "{\"type\":\"audio\",\"id\":\"x\",\"sequence\":0,\"offsetMs\":0,\"pcm\":\"AQACAA==\"}",
+      "{\"type\":\"stop\"}"
+    ],
+    "expect": [
+      {
+        "type": "started"
+      },
+      {
+        "type": "ack"
+      },
+      {
+        "type": "ack"
+      },
+      {
+        "type": "stopped"
+      }
+    ],
+    "state": "completed",
+    "labelSources": [
+      "browser"
+    ]
+  },
+  {
+    "name": "invalid-label-source-number",
+    "requests": [
+      "{\"type\":\"start\",\"title\":\"Label provenance conformance\"}",
+      "{\"type\":\"track\",\"id\":\"x\",\"kind\":\"remote\",\"sampleRate\":48000,\"channels\":1,\"label\":\"Page display name\",\"labelSource\":17}"
+    ],
+    "expect": [
+      {
+        "type": "started"
+      },
+      {
+        "type": "error",
+        "code": "source"
+      }
+    ]
+  },
+  {
+    "name": "invalid-label-source-boolean",
+    "requests": [
+      "{\"type\":\"start\",\"title\":\"Label provenance conformance\"}",
+      "{\"type\":\"track\",\"id\":\"x\",\"kind\":\"remote\",\"sampleRate\":48000,\"channels\":1,\"label\":\"Page display name\",\"labelSource\":true}"
+    ],
+    "expect": [
+      {
+        "type": "started"
+      },
+      {
+        "type": "error",
+        "code": "source"
+      }
+    ]
+  },
+  {
+    "name": "invalid-label-source-unknown",
+    "requests": [
+      "{\"type\":\"start\",\"title\":\"Label provenance conformance\"}",
+      "{\"type\":\"track\",\"id\":\"x\",\"kind\":\"remote\",\"sampleRate\":48000,\"channels\":1,\"label\":\"Page display name\",\"labelSource\":\"verified-participant\"}"
+    ],
+    "expect": [
+      {
+        "type": "started"
+      },
+      {
+        "type": "error",
+        "code": "source"
+      }
+    ]
   }
 ]

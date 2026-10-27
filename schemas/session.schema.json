@@ -135,6 +135,7 @@
           "labelSource": {
             "enum": [
               "browser",
+              "dom",
               "device",
               "user",
               "recovered",

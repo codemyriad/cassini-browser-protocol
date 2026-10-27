@@ -41,6 +41,7 @@ def run(host, case):
         if directory:
             manifest = json.loads((directory / 'session.json').read_text())
             if 'state' in case: assert manifest['state'] == case['state'], manifest
+            if 'labelSources' in case: assert [track.get('labelSource') for track in manifest['tracks']] == case['labelSources'], manifest
             if 'frames' in case: assert [track['frames'] for track in manifest['tracks']] == case['frames'], manifest
             for track in manifest['tracks']:
                 assert pathlib.Path(track['file']).name == track['file']
