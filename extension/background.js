@@ -15,7 +15,10 @@ const recovery = (async () => {
     await chrome.storage.session.remove("cassiniActive");
     await chrome.action.setBadgeText({ text: "" });
   }
-})();
+})().catch(async () => {
+  lastStatus = { recording: false, message: "Cassini could not check the previous recording status. Saved audio remains on this computer." };
+  await chrome.action.setBadgeText({ text: "" }).catch(() => {});
+});
 
 class NativeHost {
   constructor(onFailure) {
@@ -58,17 +61,22 @@ class NativeHost {
 
 function status() {
   return active ? { recording: true, stopping: active.stopping, tracks: active.tracks,
-    message: active.warning || (!active.tracks ? "Waiting for audio. Join the call, or record the whole tab instead." : `${active.stopping ? "Saving" : "Recording"} ${active.mode === "tracks" ? "separate tracks" : "the whole tab"} · ${active.tracks} ${active.tracks === 1 ? "track" : "tracks"}`), path: active.path } : lastStatus;
+    message: active.warning || (!active.tracks ? "Waiting for audio. Join the call, or record the whole tab instead." : `${active.stopping ? "Saving" : "Recording"} ${active.mode === "tracks" ? "separate tracks" : "the whole tab"} · ${active.tracks} ${active.tracks === 1 ? "recorded track" : "recorded tracks"}`), path: active.path } : lastStatus;
 }
 
 function failure(message) {
   if (active) { active.problem ??= message; void stop(); }
 }
 
-async function stop() {
-  const session = active;
-  if (!session || session.stopping) return;
+async function stop(session = active) {
+  if (!session) return;
+  if (session.stopPromise) return session.stopPromise;
   session.stopping = true;
+  session.stopPromise = (async () => {
+  // Let a cancelled start settle before closing resources or clearing stored state.
+  // The start operation never waits for stop, so a failure during discovery/host ACK
+  // cannot deadlock this join or create a host after cleanup has already run.
+  await session.starting?.catch(() => {});
   try {
     if (session.mode === "tracks") {
       await Promise.all([...session.frames].map(frame => new Promise(resolve => {
@@ -82,17 +90,21 @@ async function stop() {
       if (response?.error) session.problem ??= response.error;
     }
     // Native messages are processed in order, so the stop acknowledgement follows all audio writes.
-    const result = await session.host.send({ type: "stop", problem: session.problem });
+    const result = session.host ? await session.host.send({ type: "stop", problem: session.problem }) : {};
     lastStatus = { recording: false, path: result.path, message: session.problem || result.problem || "Saved on this computer." };
   } catch (error) {
     lastStatus = { recording: false, path: session.path, message: session.problem || error.message };
   } finally {
     session.host?.close();
-    await chrome.storage.session.remove("cassiniActive");
+    await chrome.storage.session.remove("cassiniActive").catch(() => {
+      lastStatus.message += " Cassini could not update recording status.";
+    });
     if (session.mode === "tab" && await hasOffscreenDocument()) await chrome.offscreen.closeDocument();
     if (active === session) active = null;
     await chrome.action.setBadgeText({ text: "" });
   }
+  })();
+  return session.stopPromise;
 }
 
 async function start(mode) {
@@ -104,12 +116,15 @@ async function start(mode) {
   const session = { mode, tabId: tab.id, token: crypto.randomUUID(), origin: Date.now(),
     frames: new Set(), tracks: 0, stopping: false, problem: null };
   active = session;
-  try {
+  const checkStarting = () => {
+    if (session.stopping || active !== session) throw new Error("Recording could not start.");
+  };
+  session.starting = (async () => {
     let streamId;
     if (mode === "tracks") {
       await chrome.tabs.sendMessage(tab.id, { type: "cassini-connect" }).catch(() => {});
       const deadline = Date.now() + 500;
-      while (![...frames].some(frame => frame.tabId === tab.id) && Date.now() < deadline) {
+      while (!session.stopping && ![...frames].some(frame => frame.tabId === tab.id) && Date.now() < deadline) {
         await new Promise(resolve => setTimeout(resolve, 50));
       }
       if (![...frames].some(frame => frame.tabId === tab.id)) throw new Error("Cassini cannot reach this page yet. Reload the meeting tab, then try again.");
@@ -117,11 +132,13 @@ async function start(mode) {
       streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
     }
     // No output folder exists until discovery or the invocation grant has succeeded.
+    checkStarting();
     session.host = new NativeHost(failure);
     const result = await session.host.send({ type: "start", version: 1, title: tab.title || "Browser meeting" });
     session.path = result.path;
+    checkStarting();
     await chrome.storage.session.set({ cassiniActive: { recording: true, mode, path: session.path, tabId: tab.id, startedAt: session.origin } });
-    if (session.stopping) throw new Error("Recording could not start.");
+    checkStarting();
     session.ready = true;
     if (mode === "tracks") {
       for (const frame of frames) {
@@ -131,15 +148,19 @@ async function start(mode) {
       }
     } else {
       if (await hasOffscreenDocument()) await chrome.offscreen.closeDocument();
+      checkStarting();
       await chrome.offscreen.createDocument({ url: "offscreen.html", reasons: ["USER_MEDIA"], justification: "Record the selected tab audio locally while the popup is closed." });
+      checkStarting();
       const response = await chrome.runtime.sendMessage({ target: "offscreen", type: "start", streamId, origin: session.origin });
       if (response?.error) throw new Error(response.error);
     }
+    checkStarting();
     await chrome.action.setBadgeBackgroundColor({ color: "#C62828" });
     await chrome.action.setBadgeText({ text: "REC" });
-  } catch (error) {
+  })();
+  try { await session.starting; } catch (error) {
     session.problem ??= error.message;
-    await stop();
+    await stop(session);
     throw error;
   }
 }
@@ -169,7 +190,7 @@ chrome.runtime.onConnect.addListener(port => {
     try {
       if (JSON.stringify(message.packet).length > 400000) throw new Error("The meeting page sent an oversized audio chunk.");
       await session.host.send(message.packet);
-      if (message.packet.type === "track") session.tracks++;
+      if (message.packet.type === "track") { session.tracks++; session.warning = null; }
       port.postMessage({ type: "ack", token: session.token, request: message.request });
     } catch (error) {
       try { port.postMessage({ type: "ack", token: session.token, request: message.request, error: error.message }); } catch {}

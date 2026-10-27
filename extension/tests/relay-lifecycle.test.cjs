@@ -15,4 +15,8 @@ test('worker disconnect drains old page requests before forwarding a new session
  handler({source:window,data:{channel:'cassini-page',token:'old',type:'stopped'}});
  assert.equal(page.filter(m=>m.type==='start').length,2);assert.equal(page.at(-1).token,'new');
  assert.equal(ports[1].sent.length,0,'old stop cannot stop the new session');
+ handler({source:window,data:{channel:'cassini-page',token:'new',type:'packet',request:3,packet:{type:'audio'}}});
+ handler({source:window,data:{channel:'cassini-page',token:'new',type:'stopped'}});
+ ports[1].onMessage.emit({type:'start',token:'third'});ports[1].onDisconnect.emit();
+ assert.ok(!page.some(m=>m.type==='ack'&&m.token==='third'&&m.request===3),'normal stop clears old request ids before the next session');
 });

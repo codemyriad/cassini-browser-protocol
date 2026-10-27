@@ -1666,7 +1666,7 @@
   {
     "name": "depth-64",
     "requests": [
-      "{\"type\":\"start\",\"extra\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[0]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}",
+      "{\"type\":\"start\",\"extra\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}",
       "{\"type\":\"stop\"}"
     ],
     "expect": [
@@ -1681,7 +1681,7 @@
   {
     "name": "depth-65",
     "requests": [
-      "{\"type\":\"start\",\"extra\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[0]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}"
+      "{\"type\":\"start\",\"extra\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}"
     ],
     "expect": [
       {
@@ -1815,5 +1815,347 @@
     ],
     "state": "completed",
     "pipelined": true
+  },
+  {
+    "name": "integer-version-9007199254740991",
+    "requests": [
+      "{\"type\":\"start\",\"version\":9007199254740991}"
+    ],
+    "expect": [
+      {
+        "type": "error",
+        "code": "version"
+      }
+    ]
+  },
+  {
+    "name": "integer-version--9007199254740991",
+    "requests": [
+      "{\"type\":\"start\",\"version\":-9007199254740991}"
+    ],
+    "expect": [
+      {
+        "type": "error",
+        "code": "version"
+      }
+    ]
+  },
+  {
+    "name": "integer-version-9007199254740992",
+    "requests": [
+      "{\"type\":\"start\",\"version\":9007199254740992}"
+    ],
+    "expect": [
+      {
+        "type": "error",
+        "code": "version"
+      }
+    ]
+  },
+  {
+    "name": "integer-version--9007199254740992",
+    "requests": [
+      "{\"type\":\"start\",\"version\":-9007199254740992}"
+    ],
+    "expect": [
+      {
+        "type": "error",
+        "code": "version"
+      }
+    ]
+  },
+  {
+    "name": "ignored-integer-9007199254740991",
+    "requests": [
+      "{\"type\":\"start\",\"extra\":9007199254740991}",
+      "{\"type\":\"stop\"}"
+    ],
+    "expect": [
+      {
+        "type": "started"
+      },
+      {
+        "type": "stopped"
+      }
+    ]
+  },
+  {
+    "name": "ignored-integer--9007199254740991",
+    "requests": [
+      "{\"type\":\"start\",\"extra\":-9007199254740991}",
+      "{\"type\":\"stop\"}"
+    ],
+    "expect": [
+      {
+        "type": "started"
+      },
+      {
+        "type": "stopped"
+      }
+    ]
+  },
+  {
+    "name": "offset-positive-exponent",
+    "requests": [
+      "{\"type\":\"start\",\"title\":\"Boundary conformance\"}",
+      "{\"type\":\"track\",\"id\":\"x\",\"kind\":\"remote\",\"sampleRate\":8000,\"channels\":1}",
+      "{\"type\":\"audio\",\"id\":\"x\",\"sequence\":0,\"offsetMs\":2.5e2,\"pcm\":\"AQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAA==\"}",
+      "{\"type\":\"stop\"}"
+    ],
+    "expect": [
+      {
+        "type": "started"
+      },
+      {
+        "type": "ack"
+      },
+      {
+        "type": "ack"
+      },
+      {
+        "type": "stopped"
+      }
+    ]
+  },
+  {
+    "name": "gap-exactly-minute",
+    "requests": [
+      "{\"type\":\"start\",\"title\":\"Boundary conformance\"}",
+      "{\"type\":\"track\",\"id\":\"x\",\"kind\":\"remote\",\"sampleRate\":8000,\"channels\":1}",
+      "{\"type\":\"audio\",\"id\":\"x\",\"sequence\":0,\"offsetMs\":0,\"pcm\":\"AQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAA==\"}",
+      "{\"type\":\"audio\",\"id\":\"x\",\"sequence\":1,\"offsetMs\":60010,\"pcm\":\"AQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAA==\"}",
+      "{\"type\":\"stop\"}"
+    ],
+    "expect": [
+      {
+        "type": "started"
+      },
+      {
+        "type": "ack"
+      },
+      {
+        "type": "ack"
+      },
+      {
+        "type": "ack"
+      },
+      {
+        "type": "stopped"
+      }
+    ]
+  },
+  {
+    "name": "delta-exactly-negative-tolerance",
+    "requests": [
+      "{\"type\":\"start\",\"title\":\"Boundary conformance\"}",
+      "{\"type\":\"track\",\"id\":\"x\",\"kind\":\"remote\",\"sampleRate\":8000,\"channels\":1}",
+      "{\"type\":\"audio\",\"id\":\"x\",\"sequence\":0,\"offsetMs\":250,\"pcm\":\"AQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAA==\"}",
+      "{\"type\":\"audio\",\"id\":\"x\",\"sequence\":1,\"offsetMs\":240,\"pcm\":\"AQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAA==\"}",
+      "{\"type\":\"stop\"}"
+    ],
+    "expect": [
+      {
+        "type": "started"
+      },
+      {
+        "type": "ack"
+      },
+      {
+        "type": "ack"
+      },
+      {
+        "type": "ack"
+      },
+      {
+        "type": "stopped"
+      }
+    ]
+  },
+  {
+    "name": "gap-exactly-tolerance",
+    "requests": [
+      "{\"type\":\"start\",\"title\":\"Boundary conformance\"}",
+      "{\"type\":\"track\",\"id\":\"x\",\"kind\":\"remote\",\"sampleRate\":8000,\"channels\":1}",
+      "{\"type\":\"audio\",\"id\":\"x\",\"sequence\":0,\"offsetMs\":0,\"pcm\":\"AQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAA==\"}",
+      "{\"type\":\"audio\",\"id\":\"x\",\"sequence\":1,\"offsetMs\":30,\"pcm\":\"AQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAA==\"}",
+      "{\"type\":\"stop\"}"
+    ],
+    "expect": [
+      {
+        "type": "started"
+      },
+      {
+        "type": "ack"
+      },
+      {
+        "type": "ack"
+      },
+      {
+        "type": "ack"
+      },
+      {
+        "type": "stopped"
+      }
+    ]
+  },
+  {
+    "name": "gap-tolerance-plus-one-frame",
+    "requests": [
+      "{\"type\":\"start\",\"title\":\"Boundary conformance\"}",
+      "{\"type\":\"track\",\"id\":\"x\",\"kind\":\"remote\",\"sampleRate\":8000,\"channels\":1}",
+      "{\"type\":\"audio\",\"id\":\"x\",\"sequence\":0,\"offsetMs\":0,\"pcm\":\"AQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAA==\"}",
+      "{\"type\":\"audio\",\"id\":\"x\",\"sequence\":1,\"offsetMs\":30.125,\"pcm\":\"AQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAA==\"}",
+      "{\"type\":\"stop\"}"
+    ],
+    "expect": [
+      {
+        "type": "started"
+      },
+      {
+        "type": "ack"
+      },
+      {
+        "type": "ack"
+      },
+      {
+        "type": "ack"
+      },
+      {
+        "type": "stopped"
+      }
+    ]
+  },
+  {
+    "name": "label-cc-cf-and-private-use",
+    "requests": [
+      "{\"type\":\"start\",\"title\":\"Boundary conformance\"}",
+      "{\"type\":\"track\",\"id\":\"x\",\"kind\":\"remote\",\"sampleRate\":8000,\"channels\":1,\"label\":\"A\\u0000​B\"}",
+      "{\"type\":\"audio\",\"id\":\"x\",\"sequence\":0,\"offsetMs\":0,\"pcm\":\"AQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAA==\"}",
+      "{\"type\":\"stop\"}"
+    ],
+    "expect": [
+      {
+        "type": "started"
+      },
+      {
+        "type": "ack"
+      },
+      {
+        "type": "ack"
+      },
+      {
+        "type": "stopped"
+      }
+    ],
+    "tracks": {
+      "x": {
+        "label": "AB"
+      }
+    }
+  },
+  {
+    "name": "audio-after-stop",
+    "requests": [
+      "{\"type\":\"start\",\"title\":\"Request-derived conformance\"}",
+      "{\"type\":\"track\",\"id\":\"x\",\"kind\":\"remote\",\"sampleRate\":48000,\"channels\":1}",
+      "{\"type\":\"audio\",\"id\":\"x\",\"sequence\":0,\"offsetMs\":250,\"pcm\":\"AQACAA==\"}",
+      "{\"type\":\"stop\"}",
+      "{\"type\":\"audio\",\"id\":\"x\",\"sequence\":1,\"offsetMs\":260,\"pcm\":\"AQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAAEAAQABAA==\"}"
+    ],
+    "expect": [
+      {
+        "type": "started"
+      },
+      {
+        "type": "ack"
+      },
+      {
+        "type": "ack"
+      },
+      {
+        "type": "stopped"
+      },
+      {
+        "type": "error",
+        "code": "state"
+      }
+    ],
+    "state": "completed",
+    "pipelined": true
+  },
+  {
+    "name": "stop-after-stop",
+    "requests": [
+      "{\"type\":\"start\",\"title\":\"Request-derived conformance\"}",
+      "{\"type\":\"track\",\"id\":\"x\",\"kind\":\"remote\",\"sampleRate\":48000,\"channels\":1}",
+      "{\"type\":\"audio\",\"id\":\"x\",\"sequence\":0,\"offsetMs\":250,\"pcm\":\"AQACAA==\"}",
+      "{\"type\":\"stop\"}",
+      "{\"type\":\"stop\"}"
+    ],
+    "expect": [
+      {
+        "type": "started"
+      },
+      {
+        "type": "ack"
+      },
+      {
+        "type": "ack"
+      },
+      {
+        "type": "stopped"
+      },
+      {
+        "type": "error",
+        "code": "state"
+      }
+    ],
+    "state": "completed",
+    "pipelined": true
+  },
+  {
+    "name": "start-after-stop",
+    "requests": [
+      "{\"type\":\"start\",\"title\":\"Request-derived conformance\"}",
+      "{\"type\":\"track\",\"id\":\"x\",\"kind\":\"remote\",\"sampleRate\":48000,\"channels\":1}",
+      "{\"type\":\"audio\",\"id\":\"x\",\"sequence\":0,\"offsetMs\":250,\"pcm\":\"AQACAA==\"}",
+      "{\"type\":\"stop\"}",
+      "{\"type\":\"start\",\"title\":\"Boundary conformance\"}"
+    ],
+    "expect": [
+      {
+        "type": "started"
+      },
+      {
+        "type": "ack"
+      },
+      {
+        "type": "ack"
+      },
+      {
+        "type": "stopped"
+      },
+      {
+        "type": "error",
+        "code": "state"
+      }
+    ],
+    "state": "completed",
+    "pipelined": true
+  },
+  {
+    "name": "depth-64-scalar-leaf",
+    "requests": [
+      "{\"type\":\"start\",\"extra\":[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[0]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]}",
+      "{\"type\":\"stop\"}"
+    ],
+    "expect": [
+      {
+        "type": "started"
+      },
+      {
+        "type": "stopped"
+      }
+    ]
   }
 ]

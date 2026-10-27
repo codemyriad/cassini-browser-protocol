@@ -24,7 +24,7 @@
       if (port !== connected) return;
       if (token) {
         drainingToken = token;
-        for (const request of pending) control({ type: "ack", token, request, error: "The recording worker disconnected." });
+        for (const request of pending) control({ type: "ack", token, request, error: "Cassini disconnected. Audio recorded so far was saved." });
         control({ type: "stop", token });
       }
       pending.clear(); pendingStart = null; token = null; port = null;
@@ -39,7 +39,7 @@
     if (event.source !== window || event.data?.channel !== "cassini-page") return;
     const { type, packet, request } = event.data;
     if (drainingToken && event.data.token === drainingToken && type === "packet") {
-      control({ type: "ack", token: drainingToken, request, error: "The recording worker disconnected." });
+      control({ type: "ack", token: drainingToken, request, error: "Cassini disconnected. Audio recorded so far was saved." });
       return;
     }
     if (drainingToken && event.data.token === drainingToken && type === "stopped") {
@@ -55,7 +55,7 @@
       if (JSON.stringify(packet).length <= 400000) { pending.add(request); port?.postMessage({ type, packet, request }); }
     } else if (["ready", "stopped", "error", "warning"].includes(type)) {
       port?.postMessage({ type });
-      if (type === "stopped") token = null;
+      if (type === "stopped") { token = null; pending.clear(); }
     }
   });
 })();

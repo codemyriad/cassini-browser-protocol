@@ -1,17 +1,17 @@
-# Manual product compatibility
+# Manual product runs: Teams, Zoom, then Meet
 
-Priority: Microsoft Teams web, Zoom web, Google Meet. Chromium only, Chrome 116 minimum.
-Use dedicated test calls and generated test audio with authorized test participants. Real
-accounts are required, so live product checks are manual and do not run in CI. Record Chrome
-version, OS/app/extension commit, product build/version (or URL/date if the product hides it),
-call topology and each result in a new file under results/. Do not store account credentials,
-meeting URLs containing access tokens, or real participant identities/audio in this repo.
+These are live account checks for Silvio. Start with [setup.md](setup.md), then follow the
+numbered product procedure. Use only dedicated test calls and generated input. Real product
+behavior is an observation to record, not something inferred from the topology fixtures.
+Chromium is the current target (Chrome 116 minimum).
 
-The fixtures are deliberately controlled topology models, not claims that any current vendor
-always uses that topology. A live pass must not be inferred from their green tests.
+Use the exact popup buttons **Record separate tracks**, **Record the whole tab**, and **Stop and save**.
+Each recording creates `~/Music/Cassini/Recording-<UUID>/`; copy the path shown in the popup.
+Retain that folder. After Stop, attach session.json and the output of
+`python3 conformance/summarize.py /absolute/Recording-UUID --tones 440,880` to a result
+using TEMPLATE.md. Copy sanitized handwritten results into results/; generated CI model
+results are only in artifacts/ and the Actions artifact, not results/.
 
-- [Teams web](teams.md): one mixed remote receiver; individual speakers may not be separable.
-- [Zoom web](zoom.md): model a PC-free Web Audio path; fall back explicitly to tab audio.
-- [Meet](meet.md): three receive-only slots; a changed speaker may keep the same receiver ID.
-
-Write results using TEMPLATE.md. No live product/account run has been claimed as of SPEC v1.1.
+Manual order: Teams two-person call; Zoom two-person call and explicit tab fallback; Meet
+four-person call if accounts permit. Mark unavailable accounts/devices as blocked. Do not
+report a device switch, live version or speaker association that was not actually observed.
