@@ -152,3 +152,21 @@ the same safe WAV paths, dates, frame counts, interruption states and optional m
 browser sessions. `conformance/native-session/` is a complete deterministic two-source
 fixture (440 Hz microphone at 0 ms; 880 Hz system stereo at 125 ms), with macOS and GNOME
 manifest variants. It is a synthetic format fixture, not proof of hardware capture.
+
+
+## Executable JSON examples and schema bounds
+
+See [start](conformance/examples/start.json), [track](conformance/examples/track.json),
+[audio](conformance/examples/audio.json), [stop](conformance/examples/stop.json),
+[responses](conformance/examples/responses.json), and [session](conformance/examples/session.json).
+For example, a complete start request is:
+
+```json
+{"type":"start","version":1,"title":"Example meeting"}
+```
+
+Schema lengths count Unicode code points; ID limits additionally count UTF-8 bytes.
+endOffsetMs is bounded at 86460000 ms (24 hours plus one minute), allowing the final chunk
+after the latest legal start offset. A completed session has no non-null problem/problemKind;
+an interrupted session has a nonempty problem. Response examples are complete responses;
+vector expect objects are partial matchers, not full responses.
