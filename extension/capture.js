@@ -36,14 +36,14 @@ export async function capture({ stream, id, label, kind, origin, workletURL, sen
     fail(error.message);
   }
   try {
-    await bounded(context.audioWorklet.addModule(workletURL), "The meeting page blocked the audio worklet. Use Tab audio instead.");
+    await bounded(context.audioWorklet.addModule(workletURL), "This meeting page blocks separate-track recording. Record the whole tab instead.");
     // Chromium may not decode a receiver for Web Audio until a media renderer exists.
     // Keep a silent renderer alive (crbug.com/40094084), without playing remote audio twice.
     if (kind === "remote") {
       remotePlayback = new Audio();
       remotePlayback.muted = true;
       remotePlayback.srcObject = stream;
-      await bounded(remotePlayback.play(), "The remote audio source did not start. Use Tab audio instead.");
+      await bounded(remotePlayback.play(), "A participant’s audio did not start. Record the whole tab instead.");
     }
     source = context.createMediaStreamSource(stream);
     node = new AudioWorkletNode(context, "cassini-pcm", {
@@ -54,11 +54,11 @@ export async function capture({ stream, id, label, kind, origin, workletURL, sen
     silent.gain.value = 0;
     source.connect(node).connect(silent).connect(context.destination);
     if (audible) source.connect(context.destination);
-    await bounded(context.resume(), "Interact with the meeting page to allow audio, then try again or use Tab audio.");
+    await bounded(context.resume(), "Click somewhere in the meeting page so the browser allows audio, then try again. Or record the whole tab.");
     if (context.state !== "running") throw new Error("Audio capture is suspended. Interact with the meeting page, then try again or use Tab audio.");
     let clockOffset = clocks.get(context);
     await send({ type: "track", id, label, kind, sampleRate: context.sampleRate, channels });
-    node.onprocessorerror = () => abort(new Error("The audio worklet stopped unexpectedly."));
+    node.onprocessorerror = () => abort(new Error("Audio capture stopped unexpectedly."));
     stateChanged = () => {
       if (!ending && context.state !== "running") abort(new Error("Browser audio capture was suspended. The partial recording was saved."));
     };
@@ -79,7 +79,7 @@ export async function capture({ stream, id, label, kind, origin, workletURL, sen
       }
       if (pendingFrames + frames > context.sampleRate * 10) {
         droppedFrames += frames;
-        warn("A source exceeded its ten-second audio buffer. Its timeline contains a gap; other sources continue.");
+        warn("One track fell more than ten seconds behind and has a gap. The other tracks continue.");
         return;
       }
       pendingFrames += frames;
@@ -99,7 +99,7 @@ export async function capture({ stream, id, label, kind, origin, workletURL, sen
         ending = true;
         if (context.state === "running") {
           await new Promise((resolve, reject) => {
-            const timer = setTimeout(() => reject(new Error("Audio worklet did not finish.")), 2000);
+            const timer = setTimeout(() => reject(new Error("Audio capture did not finish in time.")), 2000);
             flushed = () => { clearTimeout(timer); resolve(); };
             node.port.postMessage("stop");
           }).catch(abort);
