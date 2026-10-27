@@ -6,6 +6,17 @@ const frames = new Set();
 let active = null;
 let lastStatus = { recording: false, message: "Ready. Choose Separate tracks or Whole tab." };
 
+const recovery = (async () => {
+  const { cassiniActive } = await chrome.storage.session.get("cassiniActive");
+  if (cassiniActive) {
+    lastStatus = { recording: false, path: cassiniActive.path,
+      message: "Recording was interrupted. Audio recorded so far was saved." };
+    if (cassiniActive.mode === "tab" && await hasOffscreenDocument()) await chrome.offscreen.closeDocument();
+    await chrome.storage.session.remove("cassiniActive");
+    await chrome.action.setBadgeText({ text: "" });
+  }
+})();
+
 class NativeHost {
   constructor(onFailure) {
     this.pending = [];
@@ -58,7 +69,6 @@ async function stop() {
   const session = active;
   if (!session || session.stopping) return;
   session.stopping = true;
-  clearTimeout(session.discoveryTimer);
   try {
     if (session.mode === "tracks") {
       await Promise.all([...session.frames].map(frame => new Promise(resolve => {
@@ -78,6 +88,7 @@ async function stop() {
     lastStatus = { recording: false, path: session.path, message: session.problem || error.message };
   } finally {
     session.host?.close();
+    await chrome.storage.session.remove("cassiniActive");
     if (session.mode === "tab" && await hasOffscreenDocument()) await chrome.offscreen.closeDocument();
     if (active === session) active = null;
     await chrome.action.setBadgeText({ text: "" });
@@ -85,6 +96,7 @@ async function stop() {
 }
 
 async function start(mode) {
+  await recovery;
   if (active) throw new Error("A recording is already running.");
   if (!["tracks", "tab"].includes(mode)) throw new Error("Unknown recording mode.");
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -93,25 +105,33 @@ async function start(mode) {
     frames: new Set(), tracks: 0, stopping: false, problem: null };
   active = session;
   try {
+    let streamId;
+    if (mode === "tracks") {
+      await chrome.tabs.sendMessage(tab.id, { type: "cassini-connect" }).catch(() => {});
+      const deadline = Date.now() + 500;
+      while (![...frames].some(frame => frame.tabId === tab.id) && Date.now() < deadline) {
+        await new Promise(resolve => setTimeout(resolve, 50));
+      }
+      if (![...frames].some(frame => frame.tabId === tab.id)) throw new Error("Cassini cannot reach this page yet. Reload the meeting tab, then try again.");
+    } else {
+      streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
+    }
+    // No output folder exists until discovery or the invocation grant has succeeded.
     session.host = new NativeHost(failure);
     const result = await session.host.send({ type: "start", version: 1, title: tab.title || "Browser meeting" });
     session.path = result.path;
+    await chrome.storage.session.set({ cassiniActive: { recording: true, mode, path: session.path, tabId: tab.id, startedAt: session.origin } });
     if (session.stopping) throw new Error("Recording could not start.");
+    session.ready = true;
     if (mode === "tracks") {
-      // Idle MV3 workers lose ports. Wake every existing isolated relay on demand.
-      await chrome.tabs.sendMessage(tab.id, { type: "cassini-connect" }).catch(() => {});
-      await new Promise(resolve => setTimeout(resolve, 100));
       for (const frame of frames) {
         if (frame.tabId !== tab.id || session.frames.has(frame)) continue;
         session.frames.add(frame);
         frame.port.postMessage({ type: "start", token: session.token, origin: session.origin });
       }
-      if (!session.frames.size) throw new Error("Cassini cannot reach this page yet. Reload the meeting tab, then try again.");
-
     } else {
       if (await hasOffscreenDocument()) await chrome.offscreen.closeDocument();
       await chrome.offscreen.createDocument({ url: "offscreen.html", reasons: ["USER_MEDIA"], justification: "Record the selected tab audio locally while the popup is closed." });
-      const streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
       const response = await chrome.runtime.sendMessage({ target: "offscreen", type: "start", streamId, origin: session.origin });
       if (response?.error) throw new Error(response.error);
     }
@@ -129,7 +149,7 @@ chrome.runtime.onConnect.addListener(port => {
   const frame = { port, tabId: port.sender.tab.id };
   frames.add(frame);
   // Newly inserted frames may carry meeting tracks; they share the original session clock.
-  if (active?.mode === "tracks" && !active.stopping && active.tabId === frame.tabId) {
+  if (active?.ready && active.mode === "tracks" && !active.stopping && active.tabId === frame.tabId) {
     active.frames.add(frame);
     port.postMessage({ type: "start", token: active.token, origin: active.origin });
   }
@@ -144,7 +164,7 @@ chrome.runtime.onConnect.addListener(port => {
       session.warning = "One track was interrupted and has a gap. The other tracks continue.";
       session.problem ??= session.warning; return;
     }
-    if (message.type === "error") { failure("The meeting frame could not capture audio. Try Tab audio. The partial recording was saved."); return; }
+    if (message.type === "error") { failure("The meeting page could not record separate tracks. Record the whole tab instead. Audio recorded so far was saved."); return; }
     if (message.type !== "packet" || !["track", "audio"].includes(message.packet?.type)) return;
     try {
       if (JSON.stringify(message.packet).length > 400000) throw new Error("The meeting page sent an oversized audio chunk.");
@@ -171,6 +191,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   const popup = sender.url === chrome.runtime.getURL("popup.html");
   const offscreen = sender.url === chrome.runtime.getURL("offscreen.html");
   (async () => {
+    await recovery;
     if (offscreen) {
       if (message.type === "warning" && active) { active.problem ??= "Tab audio lost samples during a recording stall."; active.warning = active.problem; return {}; }
       if (message.type === "error") { failure(message.message); return {}; }
