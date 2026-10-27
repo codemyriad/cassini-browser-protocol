@@ -170,3 +170,5 @@ endOffsetMs is bounded at 86460000 ms (24 hours plus one minute), allowing the f
 after the latest legal start offset. A completed session has no non-null problem/problemKind;
 an interrupted session has a nonempty problem. Response examples are complete responses;
 vector expect objects are partial matchers, not full responses.
+
+After `stopped` the host answers further requests with error `state` and exits on EOF.
