@@ -53,6 +53,7 @@
         "capture",
         "io",
         "recovery",
+        "gap",
         null
       ]
     },
@@ -144,6 +145,22 @@
               "recovered",
               null
             ]
+          },
+          "gapFrames": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 2147483629
+          },
+          "droppedFrames": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 2147483629
           }
         },
         "additionalProperties": true
