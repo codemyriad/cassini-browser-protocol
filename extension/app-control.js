@@ -1,7 +1,7 @@
 // Persistent app management, independent of the per-recording PCM connection.
 export class AppControl {
   constructor({ runtime, alarms, snapshot, command, connected = async () => {},
-                later = setTimeout, cancel = clearTimeout }) {
+                later = (fn, ms) => setTimeout(fn, ms), cancel = id => clearTimeout(id) }) {
     Object.assign(this, { runtime, alarms, snapshot, command, connected, later, cancel });
     this.port = null;
     this.retry = null;

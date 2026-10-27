@@ -31,3 +31,26 @@ test('app control: a pending explicit-tab lookup reserves the same recording slo
     release();assert.equal((await recording).ok,true);assert.equal(app.audio.length,1);
   } finally { release?.();app.close(); }
 });
+
+test('app control: default timers preserve their global receiver', async () => {
+  const vm = require('node:vm');
+  const context = vm.createContext({});
+  vm.runInContext(`
+    const scheduled=[];
+    function setTimeout(fn, ms) { if(this !== globalThis) throw new TypeError('Illegal invocation'); scheduled.push({fn,ms}); return scheduled.length; }
+    function clearTimeout(id) { if(this !== globalThis) throw new TypeError('Illegal invocation'); }
+    globalThis.scheduled=scheduled;
+  `,context);
+  assert.throws(() => vm.runInContext('({cancel:clearTimeout}).cancel(null)', context), /Illegal invocation/);
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'../app-control.js'),'utf8').replace('export class AppControl','class AppControl') + '\nglobalThis.Control=AppControl;',context);
+  const { event } = require('./support/app-control-harness.cjs');
+  const ports=[];
+  const runtime={connectNative(){const port={onMessage:event(),onDisconnect:event(),postMessage(){},disconnect(){}};ports.push(port);return port}};
+  const alarms={onAlarm:event(),async create(){},async clear(){}};
+  const control=new context.Control({runtime,alarms,snapshot:async()=>[],command:async()=>({})});
+  try {
+    control.start();assert.equal(ports.length,1,'default cancel must not prevent connectNative');
+    ports[0].onDisconnect.emit();assert.equal(context.scheduled.length,1,'default later schedules a reconnect');
+    context.scheduled[0].fn();assert.equal(ports.length,2);
+  } finally {control.close();}
+});
