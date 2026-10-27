@@ -6,18 +6,20 @@ assert a.start is None or a.start>=0
 assert a.duration is None or a.duration>0
 root=a.folder.resolve();m=json.loads((root/'session.json').read_text());tones=[int(v) for v in a.tones.split(',') if v];assert all(20<=v<=10000 for v in tones)
 def display(value):return ''.join(c for c in str(value) if unicodedata.category(c) not in ['Cc','Cf'])
-print(f"{root.name}: state={m['state']} title={display(m.get('title'))!r} problem={display(m.get('problem'))!r}")
+print(f"{root.name}: state={m['state']} title={display(m.get('title'))!r} problem={display(m['problem']) if m.get('problem') is not None else None!r}")
 for t in m['tracks']:
  try:
   file=(root/t['file']).resolve();assert file.parent==root,'unsafe WAV path'
   with wave.open(str(file)) as w:
    rate,ch,total=w.getframerate(),w.getnchannels(),w.getnframes();assert w.getsampwidth()==2,'PCM16 required'
-   offset=t.get('startOffsetMs');start=0
-   if a.start is not None:
-    assert offset is not None,'start offset unknown; cannot select a session-relative interval'
-    start=max(0,round((a.start-offset/1000)*rate))
-   start=min(start,total);w.setpos(start);left=total-start
-   if a.duration is not None:left=min(left,max(0,round(a.duration*rate)))
+   offset=t.get('startOffsetMs')
+   if a.start is not None:assert offset is not None,'start offset unknown; cannot select a session-relative interval'
+   track_start=offset/1000 if offset is not None else 0
+   requested_start=a.start if a.start is not None else track_start
+   requested_end=requested_start+a.duration if a.duration is not None else math.inf
+   start=min(total,max(0,round((max(requested_start,track_start)-track_start)*rate)))
+   end=min(total,max(0,round((min(requested_end,track_start+total/rate)-track_start)*rate)))
+   w.setpos(start);left=max(0,end-start)
    squares=0;count=0;peak=0;active=0;power={}
    while left:
     frames=min(left,max(1,rate//2));data=w.readframes(frames);samples=struct.unpack('<'+'h'*(len(data)//2),data)
@@ -38,4 +40,4 @@ for t in m['tracks']:
    rms=math.sqrt(squares/count)/32768
    spectrum=' '.join(f'power{f}={v:.6g}' for f,v in power.items())
    print(f"  {t['kind']:<11} {display(t['label'])[:48]:<48} {total/rate:7.2f}s start={offset if offset is not None else 'unknown'}ms rms={rms:.5f} peak={peak/32768:.4f} active={active:.2f}s measured={count/ch/rate:.2f}s {spectrum}")
- except (OSError,ValueError,AssertionError,wave.Error) as e:print(f"  {display(t.get('id'))}: unavailable: {e}")
+ except (OSError,ValueError,TypeError,KeyError,AssertionError,wave.Error) as e:print(f"  {display(t.get('id') if isinstance(t,dict) else 'unknown')}: unavailable: {e}")

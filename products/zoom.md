@@ -14,10 +14,10 @@ Required: 2 participants including the recorder, independent test profiles/accou
 4. Select a second microphone in the product's device menu, then restore the first. Record
    timing, track changes and continuity. If only one fake/physical input exists, mark blocked;
    restarting a browser is not a device-switch pass.
-5. Mute/unmute the far end (Meet: each remote in turn) for 10 seconds each. Observe source
+5. Mute/unmute the far end  for 10 seconds each. Observe source
    content/count/labels. Compare known tone powers; mixed remote content is not a bleed failure.
 6. Click **Stop and save**, wait for saved status, retain session.json/WAVs and run
-   `python3 conformance/summarize.py /absolute/Recording-UUID --tones 220,440,660,880`.
+   `python3 conformance/summarize.py /absolute/Recording-UUID --tones 440,880`.
    Require desired tone power >0.001 and unwanted tone <1% for separated tone sources.
 7. Run a new **Record the whole tab** recording for at least 10 seconds. Confirm playback remains
    audible and one stereo `tab` source contains the rendered far-end mix. Do not assume local

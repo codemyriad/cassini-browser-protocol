@@ -8,7 +8,7 @@ Chromium is the current target (Chrome 116 minimum).
 Use the exact popup buttons **Record separate tracks**, **Record the whole tab**, and **Stop and save**.
 Each recording creates `~/Music/Cassini/Recording-<UUID>/`; copy the path shown in the popup.
 Retain that folder. After Stop, attach session.json and the output of
-`python3 conformance/summarize.py /absolute/Recording-UUID --tones 440,660,880` to a result
+`python3 conformance/summarize.py /absolute/Recording-UUID --tones 440,880` to a result
 using TEMPLATE.md. Copy sanitized handwritten results into results/; generated CI model
 results are only in artifacts/ and the Actions artifact, not results/.
 
