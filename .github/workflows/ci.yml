@@ -11,7 +11,9 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - run: python3 refresh-hashes.py && git diff --exit-code -- SHA256SUMS
       - run: python3 verify.py
+      - run: python3 -m pip install -r requirements-test.txt
       - run: python3 -m unittest discover -s tests -p "test_*.py"
       - run: python3 conformance/check-native-fixture.py
       - run: npm ci
