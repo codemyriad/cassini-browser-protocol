@@ -1,6 +1,10 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const root = path.resolve(__dirname, '../..');
+const contract = fs.existsSync(path.join(root, 'conformance/control/independent-vectors.json')) ? root : path.join(root, 'browser-protocol');
 const { setup, until } = require('./support/app-control-harness.cjs');
 const command = (id, action, tabId, extra = {}) => ({type:'command',requestId:id,action,tabId,mode:'tracks',independent:true,...extra});
 async function twoMeetings() {
@@ -86,7 +90,7 @@ test('worker recovery reports all interrupted paths and never recreates capture'
     assert.equal(next.audio.length,0);assert.ok(status.interrupted.every(s=>s.recording===false));
   } finally {next?.close();app.close();}
 });
-for(const vector of require('../../conformance/control/independent-vectors.json'))test('independent conformance: '+vector.name,async()=>{
+for(const vector of JSON.parse(fs.readFileSync(path.join(contract, 'conformance/control/independent-vectors.json'))))test('independent conformance: '+vector.name,async()=>{
   const app=await twoMeetings();
   try {
     for(const [index,input] of vector.commands.entries()){
