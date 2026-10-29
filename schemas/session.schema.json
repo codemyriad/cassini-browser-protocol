@@ -53,6 +53,7 @@
         "capture",
         "io",
         "recovery",
+        "gap",
         null
       ]
     },
@@ -153,6 +154,22 @@
             "minLength": 1,
             "maxLength": 200,
             "$comment": "Opaque source identity, at most 200 UTF-8 bytes in addition to the Unicode length limit. Omit when unknown, and for microphone/system sources. Never derive identity from labels."
+          },
+          "gapFrames": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 2147483629
+          },
+          "droppedFrames": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 0,
+            "maximum": 2147483629
           }
         },
         "additionalProperties": true

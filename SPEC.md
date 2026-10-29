@@ -240,3 +240,22 @@ An active recording's path/mode/tab/origin is held in extension session storage 
 host start acknowledgement. Worker restart reports interruption with that path and clears
 the stale badge; it does not claim that unacknowledged audio survived. A worker-crashed tab
 capture document is closed to release the capture stream.
+
+
+## Native host-time discontinuities (v1.1 clarification)
+
+After the first-buffer anchor, samples drive continuity. A forward jump between native
+input buffers of at least one second beyond the previous buffer's duration becomes counted
+silence. Compute `lagMs = currentHostMs - previousHostMs - previousInputFrames/rate*1000`,
+round its positive duration to sample frames, and insert it when at least `rate` frames.
+Use input-buffer host stamps, not callback delivery/arrival time. This per-buffer difference
+protects smooth device drift: comparing absolute session-start lag would incorrectly count
+10 hours at +50 ppm (1.8 seconds) as missing audio. Smaller/negative divergence is diagnostic;
+it must not reorder samples or silently compress a forward discontinuity.
+
+`gapFrames` and `droppedFrames` are optional per-track nonnegative integer counts, included
+in the final WAV/manifest frames. Gaps indicate missing input time; dropped frames indicate
+writer-queue overflow. Report only-gap loss with session problemKind=`gap`; writer loss takes
+problemKind=`io` if both occurred. Both preserve available audio and explicit silence.
+The complete `conformance/native-session-gap/` fixture contains continuous mic audio and a
+one-second system gap, with both macos/gnome manifest variants.
