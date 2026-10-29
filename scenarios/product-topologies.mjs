@@ -42,7 +42,22 @@ export async function connectReceiveSlots(local, remote, frequencies, { prejoin 
     return peer.localDescription.toJSON();
   }, { offer, frequencies, prejoin });
   await local.evaluate(answer => topologyPeer.setRemoteDescription(answer), answer);
-  await local.waitForFunction(() => topologyPeer.connectionState === 'connected');
+  try {
+    await local.waitForFunction(() => topologyPeer.connectionState === 'connected');
+  } catch (error) {
+    const describe = remoteSide => {
+      const peer = remoteSide ? topologyRemote.peer : topologyPeer;
+      return {connection:peer.connectionState,ice:peer.iceConnectionState,
+        localCandidates:(peer.localDescription?.sdp.match(/^a=candidate:/gm)||[]).length,
+        remoteCandidates:(peer.remoteDescription?.sdp.match(/^a=candidate:/gm)||[]).length,
+        directions:peer.getTransceivers().map(t=>({direction:t.currentDirection,sender:!!t.sender.track,receiver:t.receiver.track.readyState}))};
+    };
+    console.error('Synthetic topology ICE diagnostics', JSON.stringify({
+      local:await local.evaluate(describe, false),
+      remote:await remote.evaluate(describe, true)
+    }));
+    throw error;
+  }
 }
 
 export async function switchReceiveSlot(remote, slot, frequencies) {
