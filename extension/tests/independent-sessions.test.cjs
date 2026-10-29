@@ -255,6 +255,9 @@ const autoStartCases=JSON.parse(fs.readFileSync(path.join(contract,'conformance/
 for(const vector of autoStartCases)test('desktop manual vector: '+vector.name,async()=>{
   const app=await setup(vector.meeting.sourceCount);
   try {
+    const expectedCapabilities=vector.capabilities.includes('call-evidence-v1')
+      ?app.ports[0].sent.find(packet=>packet.type==='hello').capabilities:['independent-sessions-v1'];
+    assert.deepEqual(vector.capabilities,expectedCapabilities,'vectors use a real compatible transport hello');
     app.pages[0].onMessage.emit({type:'discovery',sourceCount:vector.meeting.sourceCount,heard:vector.meeting.heard});
     const result=await app.command(command('vector-manual','start',vector.meeting.tabId));
     assert.equal(result.ok,vector.expect.manual,vector.name);

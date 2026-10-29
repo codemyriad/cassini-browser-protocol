@@ -84,9 +84,10 @@
     else if (zeroSince === null) zeroSince = now;
     else if (now - zeroSince >= 10000) resetEvidence();
     if (latched) {
-      if ([...owners].some(connected)) orphanedSince = null;
+      // Expiry is authoritative even if an owner reconnects before this snapshot.
+      if (orphanedSince !== null && now - orphanedSince >= 5000) resetEvidence();
+      else if ([...owners].some(connected)) orphanedSince = null;
       else if (orphanedSince === null) orphanedSince = now;
-      else if (now - orphanedSince >= 5000) resetEvidence();
     }
     // Retain a short handoff opportunity, but never lend an old peer's latch
     // to new pre-join receivers that have not supplied their own packet vote.

@@ -2,6 +2,7 @@
   {
     "name": "capable-missing-heard-manual-is-allowed",
     "capabilities": [
+      "independent-sessions-v1",
       "call-evidence-v1"
     ],
     "meeting": {
@@ -18,6 +19,7 @@
   {
     "name": "capable-false-heard-manual-is-allowed",
     "capabilities": [
+      "independent-sessions-v1",
       "call-evidence-v1"
     ],
     "meeting": {
@@ -35,6 +37,7 @@
   {
     "name": "capable-true-heard-and-receivers",
     "capabilities": [
+      "independent-sessions-v1",
       "call-evidence-v1"
     ],
     "meeting": {
@@ -52,6 +55,7 @@
   {
     "name": "capable-true-heard-without-receivers",
     "capabilities": [
+      "independent-sessions-v1",
       "call-evidence-v1"
     ],
     "meeting": {
@@ -68,7 +72,9 @@
   },
   {
     "name": "legacy-missing-heard",
-    "capabilities": [],
+    "capabilities": [
+      "independent-sessions-v1"
+    ],
     "meeting": {
       "tabId": 2,
       "title": "Synthetic meeting",
@@ -82,7 +88,9 @@
   },
   {
     "name": "legacy-false-heard",
-    "capabilities": [],
+    "capabilities": [
+      "independent-sessions-v1"
+    ],
     "meeting": {
       "tabId": 2,
       "title": "Synthetic meeting",
@@ -97,7 +105,9 @@
   },
   {
     "name": "legacy-true-heard",
-    "capabilities": [],
+    "capabilities": [
+      "independent-sessions-v1"
+    ],
     "meeting": {
       "tabId": 2,
       "title": "Synthetic meeting",
@@ -112,7 +122,9 @@
   },
   {
     "name": "legacy-without-receivers",
-    "capabilities": [],
+    "capabilities": [
+      "independent-sessions-v1"
+    ],
     "meeting": {
       "tabId": 2,
       "title": "Synthetic meeting",

@@ -133,3 +133,18 @@ test('a disconnected owner cannot reclaim a latch after five seconds without fre
   pc.receivers[0].reports=[report(1010)];await f.tick();assert.equal(f.state().heard,false);
   pc.receivers[0].reports=[report(1020)];await f.tick();assert.equal(f.state().heard,true);
 });
+
+for(const [name,afterLastDiscover] of [['at the deadline',250],['after the deadline',300]])
+test('owner reconnect '+name+' before the next discover requires fresh evidence',async()=>{
+  const f=fixture(),pc=f.peer();pc.receivers[0].reports=[report(0)];await f.tick();
+  pc.receivers[0].reports=[report(10)];await f.tick();
+  pc.receivers[0].reports=[report(20)];await f.tick();assert.equal(f.state().heard,true);
+  f.advance(250);pc.connectionState='disconnected';f.discover();assert.equal(f.state().heard,false);
+  f.advance(4750);f.discover();assert.equal(f.state().heard,false);
+  // The owner returns before any discover has observed the expired deadline.
+  f.advance(afterLastDiscover);pc.connectionState='connected';f.discover();
+  assert.equal(f.state().heard,false,'a returning owner cannot erase an expired grace');
+  pc.receivers[0].reports=[report(1000)];await f.tick();assert.equal(f.state().heard,false,'new baseline');
+  pc.receivers[0].reports=[report(1010)];await f.tick();assert.equal(f.state().heard,false,'one fresh vote');
+  pc.receivers[0].reports=[report(1020)];await f.tick();assert.equal(f.state().heard,true,'two fresh votes');
+});

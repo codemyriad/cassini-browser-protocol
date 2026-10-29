@@ -6,7 +6,13 @@ path after adopting this protocol snapshot. The extension has no automatic-start
 policy: it publishes discovery and accepts explicit app commands.
 
 Each case contains the hello `capabilities`, one listed `meeting`, and hand-written
-`expect.automatic` / `expect.manual` booleans. Assume automatic recording is On,
+`expect.automatic` / `expect.manual` booleans. These are full hello capability
+lists on a compatible transport: pre-D30 companion 0.2.1 advertises
+`["independent-sessions-v1"]`; D30 adds `"call-evidence-v1"` to that baseline.
+The legacy cases mean this usable pre-D30 transport, not older peers that an app
+may accept only for stopping an existing capture. Keep both apps' transport and
+start guards unchanged. The protocol tests compare D30 lists with the real
+extension hello and require the baseline list for pre-D30 cases. Assume automatic recording is On,
 no capture/start is pending, and no other lifecycle or ownership guard blocks a
 start. `automatic` says whether this candidate may start automatically; `manual`
 says whether explicitly recording that tab is allowed. The zero-source cases

@@ -115,7 +115,9 @@ The latch belongs to the peers that voted. When the last owner closes or leaves
 the connected state, start a **five-second monotonic grace**. A new peer inherits
 only after its own qualifying vote within that grace; until then its receivers
 publish heard false. An original owner reconnecting inside the grace retains its
-latch. Without a proven handoff/reconnection, expire the latch, counter baselines
+latch. A stored grace deadline is checked before considering connected owners:
+at or after that deadline, even a reconnect observed before the next periodic
+snapshot must start unheard. Without a proven handoff/reconnection, expire the latch, counter baselines
 and tick history. Thereafter a new baseline and two qualifying ticks are required.
 Keep sampling during a latch to observe new peers. Silence on a connected owner
 with live receivers does not clear it. The existing **ten-second monotonic
