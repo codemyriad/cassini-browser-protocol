@@ -2,6 +2,8 @@
   if (!window.RTCPeerConnection) return;
   const peers = new Set();
   const knownLocalTracks = new WeakSet();
+  const sourceRoots = new WeakMap();
+  const sourceRoot = track => sourceRoots.get(track) || track;
   // Remember microphone origins before they become senders, including local previews.
   const devices = navigator.mediaDevices;
   if (devices?.getUserMedia) {
@@ -15,7 +17,8 @@
     const clone = MediaStreamTrack.prototype.clone;
     MediaStreamTrack.prototype.clone = function (...args) {
       const track = Reflect.apply(clone, this, args);
-      if (knownLocalTracks.has(this)) knownLocalTracks.add(track);
+      sourceRoots.set(track, sourceRoot(this));
+      if (knownLocalTracks.has(sourceRoot(this))) knownLocalTracks.add(track);
       return track;
     };
   }
@@ -38,11 +41,36 @@
     const method = original.prototype[name];
     original.prototype[name] = function (...args) { remember(this); return Reflect.apply(method, this, args); };
   }
+  // Discovery is independent of capture: no AudioContext, cloned stream or PCM
+  // is created until an explicit recording command arrives.
+  let lastSourceCount = -1;
+  function discover(force = false) {
+    const sources = new Set();
+    for (const pc of peers) {
+      if (pc.signalingState === "closed") { peers.delete(pc); continue; }
+      if (pc.connectionState !== "connected" && !["connected", "completed"].includes(pc.iceConnectionState)) continue;
+      for (const transceiver of pc.getTransceivers()) {
+        const track = transceiver.receiver?.track;
+        if (["recvonly", "sendrecv"].includes(transceiver.currentDirection) && track?.kind === "audio" && track.readyState === "live") sources.add(track);
+      }
+      for (const sender of pc.getSenders()) {
+        const track = sender.track;
+        if (track?.kind === "audio" && track.readyState === "live") sources.add(track);
+      }
+    }
+    const sourceCount = Math.min(64, sources.size);
+    if (force || sourceCount !== lastSourceCount) {
+      lastSourceCount = sourceCount;
+      window.postMessage({ channel: "cassini-page", type: "discovery", sourceCount }, "*");
+    }
+  }
+  setInterval(discover, 1000);
   let active = null;
   const emit = (token, value) => window.postMessage({ channel: "cassini-page", token, ...value }, "*");
   window.addEventListener("message", async event => {
     if (event.source !== window || event.data?.channel !== "cassini-control") return;
     const message = event.data;
+    if (message.type === "discover") { discover(true); return; }
     if (message.type === "ack" && active?.token === message.token) {
       const pending = active.pending.get(message.request);
       if (pending) { clearTimeout(pending.timer); active.pending.delete(message.request); message.error ? pending.reject(new Error(message.error)) : pending.resolve(); }
@@ -76,6 +104,8 @@
               }
               for (const sender of pc.getSenders()) if (sender.track) {
                 knownLocalTracks.add(sender.track);
+                knownLocalTracks.add(sourceRoot(sender.track));
+                if (message.captureLocal === false) continue;
                 const metadata = { kind: "local", sender, pc };
                 sources.set(sender.track, metadata);
                 state.localMetadata.set(sender.track, metadata);
@@ -86,12 +116,14 @@
               if (track.readyState === "ended" || metadata.pc.signalingState === "closed" || (metadata.sender.track && metadata.sender.track !== track)) state.localMetadata.delete(track);
               else if (!sources.has(track)) sources.set(track, metadata);
             }
+            const roots = new Set([...sources.keys()].map(sourceRoot));
             for (const media of document.querySelectorAll("audio,video")) {
               if (media.srcObject instanceof MediaStream) {
                 for (const track of media.srcObject.getAudioTracks()) {
                   // A removed sender must not reappear as the page's raw microphone preview.
-                  if (!sources.has(track) && !knownLocalTracks.has(track)) {
+                  if (!roots.has(sourceRoot(track)) && !knownLocalTracks.has(sourceRoot(track))) {
                     sources.set(track, { kind: "media" });
+                    roots.add(sourceRoot(track));
                   }
                 }
               }
