@@ -63,8 +63,9 @@ test('discovery polling publishes transitions and explicit snapshots do not samp
   await f.tick();const before=f.messages.length;
   await f.tick();assert.equal(f.messages.length,before);
   f.discover();assert.equal(f.messages.length,before+1);assert.equal(pc.receivers[0].calls,2);
-  pc.receivers[0].reports=[report(1)];await f.tick();assert.equal(f.state().heard,true);
-  const calls=pc.receivers[0].calls;await f.tick();assert.equal(pc.receivers[0].calls,calls,'latched evidence needs no more polling');
+  pc.receivers[0].reports=[report(10)];await f.tick();assert.equal(f.state().heard,false);
+  pc.receivers[0].reports=[report(20)];await f.tick();assert.equal(f.state().heard,true);
+  const calls=pc.receivers[0].calls;f.discover();assert.equal(pc.receivers[0].calls,calls,'forced snapshots do not poll');
 });
 
 test('only valid inbound audio counters vote; failures and outbound reports do not',async()=>{
@@ -74,7 +75,8 @@ test('only valid inbound audio counters vote; failures and outbound reports do n
   slot.reports=[{...report(10),type:'outbound-rtp'},{...report(10),kind:'video'},report(-1),report(1.5),report('1')];
   await f.tick();await f.tick();assert.equal(f.state().heard,false);
   slot.reports=[report(10)];await f.tick();slot.reports=[report(9)];await f.tick();assert.equal(f.state().heard,false);
-  slot.reports=[report(11)];await f.tick();assert.equal(f.state().heard,true);
+  slot.reports=[report(19)];await f.tick();assert.equal(f.state().heard,false);
+  slot.reports=[report(29)];await f.tick();assert.equal(f.state().heard,true);
 });
 
 test('hung or stale stats cannot stall discovery or latch late evidence',async()=>{
@@ -94,4 +96,38 @@ test('closed peers cannot contribute stats that resolve after a handoff',async()
   const pending=f.tick();await Promise.resolve();await Promise.resolve();pc.close();f.peer();
   release(new Map([['inbound',report(1)]]));await pending;
   await f.tick();assert.equal(f.state().heard,false);
+});
+
+
+test('a second tick while stats are pending cannot reuse a late vote',async()=>{
+  const f=fixture(),pc=f.peer();pc.receivers[0].reports=[report(0)];await f.tick();
+  let release;pc.receivers[0].receiver.getStats=()=>new Promise(resolve=>release=resolve);
+  const pending=f.tick();await Promise.resolve();await Promise.resolve();
+  await f.tick();release(new Map([['inbound',report(100)]]));await pending;
+  assert.equal(f.state().heard,false);
+  pc.receivers[0].receiver.getStats=async()=>new Map([['inbound',report(100)]]);
+  await f.tick();assert.equal(f.state().heard,false,'late stats did not advance the baseline');
+  pc.receivers[0].reports=[report(110)];
+  pc.receivers[0].receiver.getStats=async()=>new Map(pc.receivers[0].reports.map(r=>[r.id,r]));
+  await f.tick();assert.equal(f.state().heard,true);
+});
+
+test('an unproved peer cannot borrow the latch from a still-connected owner that disconnects',async()=>{
+  const f=fixture(),old=f.peer();old.receivers[0].reports=[report(0)];await f.tick();
+  old.receivers[0].reports=[report(10)];await f.tick();old.receivers[0].reports=[report(20)];await f.tick();
+  const next=f.peer();next.receivers[0].reports=[report(0)];await f.tick();assert.equal(f.state().heard,true);
+  old.connectionState='disconnected';old.iceConnectionState='disconnected';f.discover();assert.equal(f.state().heard,false);
+  next.receivers[0].reports=[report(10)];await f.tick();assert.equal(f.state().heard,true);
+});
+
+test('a disconnected owner cannot reclaim a latch after five seconds without fresh evidence',async()=>{
+  const f=fixture(),pc=f.peer();pc.receivers[0].reports=[report(0)];await f.tick();
+  pc.receivers[0].reports=[report(10)];await f.tick();pc.receivers[0].reports=[report(20)];await f.tick();
+  pc.connectionState='disconnected';f.discover();assert.equal(f.state().heard,false);
+  f.advance(4999);pc.connectionState='connected';f.discover();assert.equal(f.state().heard,true);
+  pc.connectionState='disconnected';f.discover();f.advance(5000);f.discover();
+  pc.connectionState='connected';f.discover();assert.equal(f.state().heard,false);
+  pc.receivers[0].reports=[report(1000)];await f.tick();assert.equal(f.state().heard,false);
+  pc.receivers[0].reports=[report(1010)];await f.tick();assert.equal(f.state().heard,false);
+  pc.receivers[0].reports=[report(1020)];await f.tick();assert.equal(f.state().heard,true);
 });
