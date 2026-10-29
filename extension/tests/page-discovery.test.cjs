@@ -39,6 +39,8 @@ for(const vector of cases)test('call evidence: '+vector.name,async()=>{
   for(const step of vector.steps){
     if(step.handoff){pc.close();pc=f.peer(vector.receivers);}
     if(step.close)pc.close();
+    if(step.endReceivers)for(const slot of pc.receivers)slot.receiver.track.readyState="ended";
+    if(step.restoreReceivers)pc.receivers=Array.from({length:vector.receivers},()=>receiver());
     if(step.packets!==undefined)pc.receivers[0].reports=step.packets===null?[]:[report(step.packets)];
     for(let i=0;i<(step.ticks||0);i++)await f.tick();
     for(let i=0;i<(step.snapshots||0);i++)f.discover();

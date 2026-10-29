@@ -299,7 +299,7 @@
     ]
   },
   {
-    "name": "ten-second-zero-count-reset-clears-sampling-history",
+    "name": "ten-second-zero-reset-even-when-owning-peer-stays-connected",
     "receivers": 1,
     "steps": [
       {
@@ -321,13 +321,26 @@
         "heard": true
       },
       {
-        "close": true,
+        "endReceivers": true,
+        "ticks": 8,
+        "sourceCount": 0,
+        "heard": false
+      },
+      {
+        "restoreReceivers": true,
+        "packets": 100,
+        "ticks": 1,
+        "sourceCount": 1,
+        "heard": true
+      },
+      {
+        "endReceivers": true,
         "ticks": 11,
         "sourceCount": 0,
         "heard": false
       },
       {
-        "handoff": true,
+        "restoreReceivers": true,
         "packets": 100,
         "ticks": 1,
         "sourceCount": 1,
