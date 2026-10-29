@@ -169,3 +169,49 @@ test('legacy commands remain global barriers between independent tab commands', 
     await app.command(command('stop-after', 'stop', 3));
   } finally { release?.(); app.close(); }
 });
+
+for (const stage of ['relay', 'storage']) test('unexpected '+stage+' startup failure preserves an independent native owner', async () => {
+  const app = await twoMeetings();
+  try {
+    await app.command(command('healthy','start',3));
+    if (stage === 'relay') {
+      const frame = app.pages[0], post = frame.postMessage;
+      frame.postMessage = function (message) {
+        if (message.type === 'start') throw Error('Generated relay disconnection');
+        return post.call(this,message);
+      };
+    } else {
+      const set = app.chrome.storage.session.set;
+      app.chrome.storage.session.set = async value => {
+        if (value.cassiniSessions?.some(session => session.tabId === 2)) throw Error('Generated storage failure');
+        return set(value);
+      };
+    }
+    const result = await app.command(command('failed','start',2));
+    assert.equal(result.ok,false);
+    const failedHost = app.audio[1];
+    assert.equal(failedHost.sent[0].type,'start');
+    assert.equal(failedHost.sent.find(packet => packet.type === 'stop')?.failureReason,'lost');
+    assert.equal(failedHost.closed,true);
+    assert.equal(app.audio[0].closed,false);
+    assert.deepEqual(Array.from(app.api.controlStatus().sessions,session => session.tabId),[3]);
+    await app.command(command('stop-healthy','stop',3));
+  } finally { app.close(); }
+});
+test('explicit Stop during startup finalizes instead of requesting native fallback',async () => {
+  const app = await setup(); let release;
+  try {
+    const set = app.chrome.storage.session.set; let entered = false;
+    const gate = new Promise(resolve => release = resolve);
+    app.chrome.storage.session.set = async value => { entered = true; await gate; return set(value); };
+    const starting = app.api.start('tracks',2,{independent:true});
+    await until(() => entered);
+    const stopping = app.api.stop();
+    release();
+    await assert.rejects(starting,/could not start/);
+    await stopping;
+    assert.equal(app.audio.length,1);
+    assert.equal(app.audio[0].sent.find(packet => packet.type === 'stop')?.failureReason,undefined);
+    assert.equal(app.audio[0].closed,true);
+  } finally { release?.(); app.close(); }
+});
