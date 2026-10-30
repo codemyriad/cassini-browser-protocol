@@ -78,25 +78,45 @@ class SessionEventsTests(unittest.TestCase):
         spec.loader.exec_module(module)
         with redirect_stdout(io.StringIO()): module.check()
 
+    def test_terminal_boundary_cannot_precede_accepted_pcm(self):
+        session = json.loads((annotations.FIXTURES / 'call-return.session.json').read_text())
+        session['events'][-1]['atMs'] = 3000  # Ordered, but finalized PCM runs to 5000.
+        with self.assertRaisesRegex(ValueError, 'track end'):
+            annotations.validate(session)
+        for end in [5000, 5000.125, 6000]:
+            session['events'][-1]['atMs'] = end
+            annotations.validate(session)
+        # An absent event or an unknown/null end is never an inferred boundary.
+        session['events'].pop()
+        annotations.validate(session)
+        for track in session['tracks']:
+            track.pop('endOffsetMs', None)
+        session['events'].append(dict(type='end', atMs=3000, reason='user'))
+        annotations.validate(session)
+        for track in session['tracks']:
+            track['endOffsetMs'] = None
+        annotations.validate(session)
+
     def test_d33_terminal_end_reasons_and_single_checkpoint_boundary(self):
         self.session['state'] = 'completed'
+        end = max(track.get('endOffsetMs') or 0 for track in self.session['tracks'])
         for reason in ['user', 'callEnded', 'tabClosed', 'pageGone', 'disk', 'error', 'appQuit']:
             with self.subTest(reason=reason):
-                self.session['events'] = [dict(type='end', atMs=100, reason=reason)]
+                self.session['events'] = [dict(type='end', atMs=end, reason=reason)]
                 annotations.validate(self.session)
-        for event in [dict(type='end', atMs=100), dict(type='end', atMs=100, reason='unknown'),
+        for event in [dict(type='end', atMs=end), dict(type='end', atMs=end, reason='unknown'),
                       dict(type='end', atMs=-1, reason='user')]:
             self.session['events'] = [event]
             with self.assertRaises((ValueError, ValidationError)): annotations.validate(self.session)
-        self.session['events'] = [dict(type='end', atMs=100, reason='user')] * 2
+        self.session['events'] = [dict(type='end', atMs=end, reason='user')] * 2
         with self.assertRaises(ValidationError): annotations.validate(self.session)
-        self.session['events'] = [dict(type='end', atMs=100, reason='user'), dict(type='future', atMs=100)]
+        self.session['events'] = [dict(type='end', atMs=end, reason='user'), dict(type='future', atMs=end)]
         with self.assertRaises(ValueError): annotations.validate(self.session)
         self.session['state'] = 'recording'
-        self.session['events'] = [dict(type='end', atMs=100, reason='user')]
+        self.session['events'] = [dict(type='end', atMs=end, reason='user')]
         with self.assertRaises(ValueError): annotations.validate(self.session)
         self.session['state'] = 'completed'
-        self.session['events'] = [dict(type='future', atMs=0)] * 999 + [dict(type='end', atMs=100, reason='user')]
+        self.session['events'] = [dict(type='future', atMs=0)] * 999 + [dict(type='end', atMs=end, reason='user')]
         annotations.validate(self.session)
         self.session['events'].insert(0, dict(type='future', atMs=0))
         with self.assertRaises(ValidationError): annotations.validate(self.session)

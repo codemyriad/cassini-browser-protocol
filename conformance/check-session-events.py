@@ -40,6 +40,10 @@ def validate(document):
             ended = True
             if document['state'] == 'recording':
                 raise ValueError('end must be checkpointed with saved state')
+            for track in document['tracks']:
+                end = track.get('endOffsetMs')
+                if end is not None and (not math.isfinite(end) or at < end):
+                    raise ValueError('end must not precede a finalized known track end')
         previous = at
     for track in document['tracks']:
         source = track.get('sourceTrackId')
