@@ -70,6 +70,48 @@ class SessionEventsTests(unittest.TestCase):
         fixture = json.loads((ROOT / 'conformance/native-session/session.json').read_text())
         annotations.validate(fixture)
 
+    def test_shared_call_lifecycle_vector_oracle(self):
+        from contextlib import redirect_stdout
+        import io
+        spec = importlib.util.spec_from_file_location('call_lifecycle', ROOT/'conformance/check-call-lifecycle.py')
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with redirect_stdout(io.StringIO()): module.check()
+
+    def test_d33_terminal_end_reasons_and_single_checkpoint_boundary(self):
+        self.session['state'] = 'completed'
+        for reason in ['user', 'callEnded', 'tabClosed', 'pageGone', 'disk', 'error', 'appQuit']:
+            with self.subTest(reason=reason):
+                self.session['events'] = [dict(type='end', atMs=100, reason=reason)]
+                annotations.validate(self.session)
+        for event in [dict(type='end', atMs=100), dict(type='end', atMs=100, reason='unknown'),
+                      dict(type='end', atMs=-1, reason='user')]:
+            self.session['events'] = [event]
+            with self.assertRaises((ValueError, ValidationError)): annotations.validate(self.session)
+        self.session['events'] = [dict(type='end', atMs=100, reason='user')] * 2
+        with self.assertRaises(ValidationError): annotations.validate(self.session)
+        self.session['events'] = [dict(type='end', atMs=100, reason='user'), dict(type='future', atMs=100)]
+        with self.assertRaises(ValueError): annotations.validate(self.session)
+        self.session['state'] = 'recording'
+        self.session['events'] = [dict(type='end', atMs=100, reason='user')]
+        with self.assertRaises(ValueError): annotations.validate(self.session)
+        self.session['state'] = 'completed'
+        self.session['events'] = [dict(type='future', atMs=0)] * 999 + [dict(type='end', atMs=100, reason='user')]
+        annotations.validate(self.session)
+        self.session['events'].insert(0, dict(type='future', atMs=0))
+        with self.assertRaises(ValidationError): annotations.validate(self.session)
+
+    def test_d33_restore_is_only_browser_after_fallback_with_others_selected(self):
+        restore = dict(type='othersSource', atMs=2, source='browser', reason='restored')
+        fallback = dict(type='othersSource', atMs=0, source='system', reason='lost')
+        self.session['events'] = [fallback, restore]
+        annotations.validate(self.session)
+        for events in [[restore], [dict(fallback, reason='user'), restore],
+                       [fallback, dict(restore, source='system')],
+                       [fallback, dict(type='selection',atMs=1,me=True,others=False,reason='user'),restore]]:
+            self.session['events'] = events
+            with self.assertRaises((ValueError,ValidationError)): annotations.validate(self.session)
+
 
 if __name__ == '__main__':
     unittest.main()
