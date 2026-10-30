@@ -34,7 +34,7 @@ class Policy:
                     self.source = 'browser'
                     return ['restore']
                 return []
-            if page != 'present' or self.missing is not None or self.source == 'system':
+            if page != 'present' or self.missing is not None:
                 self.ended = None
                 if self.missing is None:
                     self.missing = now

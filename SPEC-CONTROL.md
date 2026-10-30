@@ -303,6 +303,9 @@ The app owns these monotonic per-session timers (seconds):
 - Navigating/absent page starts computer-sound fallback after2s in the same folder.
   `BROWSER_RETURN_GRACE = 120`, measured from first loss, bounds its lifetime.
   Present with zero sources during that pending return does not become callEnded.
+  Once the same tab has returned with audio, a later hang-up uses the normal2s
+  callEnded grace even if restoring the selected browser source failed; keeping
+  the working system source is not itself evidence of a new navigation.
 - Check a stored120s deadline **before** accepting a returned page, including a
   return after expiry before the next policy tick. Expiry stops as pageGone.
 - Same browser instance and tab returning with positive sourceCount and a live

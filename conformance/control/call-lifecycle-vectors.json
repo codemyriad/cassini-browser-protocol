@@ -408,6 +408,52 @@
           ]
         }
       ]
+    },
+    {
+      "name": "hangup-after-return-with-failed-source-restore",
+      "steps": [
+        {
+          "atMs": 0,
+          "pageState": "navigating",
+          "sourceCount": 0,
+          "expect": []
+        },
+        {
+          "atMs": 2000,
+          "pageState": "navigating",
+          "sourceCount": 0,
+          "expect": [
+            "fallback"
+          ]
+        },
+        {
+          "atMs": 60000,
+          "pageState": "present",
+          "sourceCount": 2,
+          "restoreReady": false,
+          "expect": []
+        },
+        {
+          "atMs": 61000,
+          "pageState": "present",
+          "sourceCount": 0,
+          "expect": []
+        },
+        {
+          "atMs": 62999,
+          "pageState": "present",
+          "sourceCount": 0,
+          "expect": []
+        },
+        {
+          "atMs": 63000,
+          "pageState": "present",
+          "sourceCount": 0,
+          "expect": [
+            "stop:callEnded"
+          ]
+        }
+      ]
     }
   ]
 }
