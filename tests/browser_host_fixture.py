@@ -54,7 +54,7 @@ def finish(problem=None, reason=None):
     if not any(event.get('type') == 'end' for event in events):
         at = max([0, (time.monotonic() - started_at) * 1000] +
                  [t.get('endOffsetMs', 0) for t in manifest['tracks']] + [e['atMs'] for e in events])
-        events.append(dict(type='end', atMs=math.ceil(at), reason='error' if problem else reason or 'user'))
+        events.append(dict(type='end', atMs=math.ceil(at), reason=reason or ('error' if problem else 'user')))
     checkpoint()
 
 def terminate(_signum, _frame):

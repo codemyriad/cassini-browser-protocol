@@ -94,3 +94,15 @@ test('invalid lifecycle command options have no native side effects',async()=>{
   await app.command(stop());
  } finally {app.close();}
 });
+
+
+test('a previous gap warning does not rewrite the explicit terminal Stop reason',async()=>{
+ const app=await setup();
+ try {
+  await app.command(start());
+  app.pages[0].onMessage.emit({type:'warning'});
+  assert.equal((await app.command(stop())).ok,true);
+  const packet=app.audio[0].sent.find(p=>p.type==='stop');
+  assert.ok(packet.problem);assert.equal(packet.reason,'user');
+ } finally {app.close();}
+});

@@ -122,7 +122,7 @@ async function stop(session = firstSession(), reason = "user") {
         if (response?.error) session.problem ??= response.error;
       }
       const packet = { type: "stop", problem: session.problem };
-      if (session.keepOnNavigation && !session.loss) packet.reason = session.problem ? "error" : reason;
+      if (session.keepOnNavigation && !session.loss) packet.reason = reason;
       if (session.independent && session.loss) packet.failureReason = "lost";
       const result = session.host ? await session.host.send(packet) : {};
       lastStatus = { recording: false, tabId: session.tabId, pageState: pageState(session.tabId), path: result.path, message: session.problem || result.problem || "Saved on this computer." };
