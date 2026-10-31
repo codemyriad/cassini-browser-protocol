@@ -57,7 +57,7 @@ def ownership(case):
 
 class MaterializedCorpusTests(unittest.TestCase):
     def test_actual_wavs_preserve_seams_gaps_overlap_and_bleed(self):
-        data, _ = corpus.load()
+        data, speech = corpus.load()
         ownership(data['sessions'][0])
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -90,7 +90,15 @@ class MaterializedCorpusTests(unittest.TestCase):
             remote = struct.unpack('<48000h', read(first, 'b', 0, 48000))
             ratio = sum(x*x for x in mic) / sum(x*x for x in remote)
             self.assertAlmostEqual(10 * math.log10(ratio), -35, delta=0.1)
-            self.assertNotEqual(read(first, 'mic', 60 * 48000, 48000), read(first, 'b-return', 0, 48000))
+            # Independently remove the pinned A carrier from the overlap. The
+            # residue must be B's actual resumed WAV at the same meeting time.
+            mixed = struct.unpack('<48000h', read(first, 'mic', 60 * 48000, 48000))
+            returned = struct.unpack('<48000h', read(first, 'b-return', 0, 48000))
+            gain = 10 ** (-35 / 20)
+            reference_a = speech['A']
+            errors = [abs(value - reference_a[(60 * 16000 + i // 3) % len(reference_a)] / 2 - returned[i] * gain)
+                      for i, value in enumerate(mixed)]
+            self.assertLessEqual(max(errors), 1, 'overlapping B bleed is not aligned with its resumed source')
 
     def test_source_overlap_mutations_are_rejected(self):
         data, _ = corpus.load()

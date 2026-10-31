@@ -32,7 +32,7 @@ def active(windows, at):return any(a<=at<b for a,b in windows)
 def sample(track,at,speech):
     if not active(track.get('presenceWindows',[(track['startMs'],track['endMs'])]),at):return 0
     source=speech[track['speech']]
-    position=int((at-track['startMs'])*16)
+    position=int((at-track.get('speechStartMs', track['startMs']))*16)
     value=source[position%len(source)]/2 if active(track['speechWindows'],at) else 0
     bleed=track.get('bleed')
     if bleed and active(bleed['windows'],at):

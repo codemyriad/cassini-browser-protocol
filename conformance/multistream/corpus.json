@@ -231,7 +231,8 @@
               "durationMs": 2000,
               "kind": "dropped"
             }
-          ]
+          ],
+          "speechStartMs": 20000
         }
       ]
     },

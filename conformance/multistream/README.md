@@ -17,7 +17,10 @@
 The materialized-WAV regression checks exact half-open browser/system ownership,
 actual lengths, zero-filled gaps, independent files, overlapping voices and the
 -35 dB bleed against stored PCM. The initial overlapping fallback spans were
-corrected; browser and system sources never own the same interval.
+corrected; browser and system sources never own the same interval. Fixture-only
+`speechStartMs` retains B's carrier phase through its resumed span, so the mic's
+bleed follows the actual remote waveform at both single-voice and overlapping
+turns. The latter check independently subtracts the pinned A carrier.
 
 Pending before this PR is ready: remaining
 production-shaped shared assertions and a real-browser pass; final generation/
