@@ -289,9 +289,12 @@ control port, before waiting for an asynchronous meeting inventory. Until that
 initial snapshot is sent, transitions are represented by its current state,
 not by an early standalone `status` that would break connection ordering.
 A rapid `navigating` → `present` transition must not be coalesced away by a
-pending tabs lookup. The following inventory reads source count, heard evidence
-and page state from the current document together after that lookup; a count
-from an unloaded document must not be combined with the returned page's state.
+pending tabs lookup. The publisher first awaits **all** metadata lookups in the
+batch, then synchronously collects source count, heard evidence and page state
+for **every** row from the current documents, with no intervening await. Reading
+A's evidence when A's lookup resolves is insufficient: A can reload while B's
+lookup is pending. An unloaded document's count must never publish after its
+navigation/return statuses. Missing tabs and invalid metadata remain omitted.
 A disconnected control port still uses the ordinary replacement snapshot on
 reconnect; historical transitions are not replayed as new events.
 
@@ -306,6 +309,17 @@ source evidence; other tabs' counts remain intact. In particular, the wire order
 short call-ended timer. `conformance/control/call-lifecycle-wire-vectors.json`
 contains literal packet/tick interleavings, effective cached evidence and actions
 for both apps to run, alongside the existing normalized lifecycle vectors.
+
+The corpus also records the faulty-publisher trace `status(navigating)` →
+`status(present)` → `meetings(present, 3)` → `meetings(present, 0)`. Without a wire
+freshness marker, a reader cannot distinguish that stale positive snapshot from
+real returned audio followed by hang-up: the positive count clears the return
+deadline and zero sources then start the two-second call-ended timer. Its literal
+expected actions document why the publisher must avoid this trace when no new
+sources appeared. Readers must not mask it by ignoring valid positive snapshots.
+The two-tab blocked-lookup extension regression checks the actual publisher:
+after navigation/return, both its pending inventory and dirty refresh report A's
+current zero count even while B's metadata lookup had held the batch open.
 
 An app that implements this policy opts in for an independent start with
 `keepOnNavigation:true`. The extension retains that recording's native connection,

@@ -533,6 +533,183 @@
           ]
         }
       ]
+    },
+    {
+      "name": "stale-positive-after-navigation-is-indistinguishable-from-return-and-hangup",
+      "tabId": 2,
+      "note": "Reproduced faulty-publisher trace: A had no new sources, but its frozen pre-reload row publishes after both lifecycle statuses while B lookup is pending. Readers cannot identify stale evidence from these packets and correctly apply callEnded. The publisher regression must prevent this trace for that source history; the existing zero-count case preserves the navigation deadline.",
+      "steps": [
+        {
+          "atMs": 0,
+          "packet": {
+            "type": "meetings",
+            "meetings": [
+              {
+                "tabId": 2,
+                "title": "Reload fixture",
+                "url": "https://meet.example/call",
+                "pageState": "present",
+                "sourceCount": 3,
+                "heard": true
+              }
+            ]
+          },
+          "expectEvidence": {
+            "pageState": "present",
+            "sourceCount": 3,
+            "heard": true
+          },
+          "expectTimers": {
+            "missingAtMs": null,
+            "endedAtMs": null
+          },
+          "expect": []
+        },
+        {
+          "atMs": 1000,
+          "packet": {
+            "type": "status",
+            "recording": true,
+            "tabId": 2,
+            "path": "/test/Recording-reload",
+            "message": "",
+            "pageState": "navigating",
+            "sessions": [
+              {
+                "recording": true,
+                "tabId": 2,
+                "path": "/test/Recording-reload",
+                "message": "",
+                "pageState": "navigating",
+                "captureId": "reload-capture"
+              }
+            ]
+          },
+          "expectEvidence": {
+            "pageState": "navigating",
+            "sourceCount": 0,
+            "heard": false
+          },
+          "expectTimers": {
+            "missingAtMs": 1000,
+            "endedAtMs": null
+          },
+          "expect": []
+        },
+        {
+          "atMs": 1001,
+          "packet": {
+            "type": "status",
+            "recording": true,
+            "tabId": 2,
+            "path": "/test/Recording-reload",
+            "message": "",
+            "pageState": "present",
+            "sessions": [
+              {
+                "recording": true,
+                "tabId": 2,
+                "path": "/test/Recording-reload",
+                "message": "",
+                "pageState": "present",
+                "captureId": "reload-capture"
+              }
+            ]
+          },
+          "expectEvidence": {
+            "pageState": "present",
+            "sourceCount": 0,
+            "heard": false
+          },
+          "expectTimers": {
+            "missingAtMs": 1000,
+            "endedAtMs": null
+          },
+          "expect": []
+        },
+        {
+          "atMs": 1002,
+          "packet": {
+            "type": "meetings",
+            "meetings": [
+              {
+                "tabId": 2,
+                "title": "Reload fixture",
+                "url": "https://meet.example/call",
+                "pageState": "present",
+                "sourceCount": 3,
+                "heard": true
+              }
+            ]
+          },
+          "expectEvidence": {
+            "pageState": "present",
+            "sourceCount": 3,
+            "heard": true
+          },
+          "expectTimers": {
+            "missingAtMs": null,
+            "endedAtMs": null
+          },
+          "expect": []
+        },
+        {
+          "atMs": 1003,
+          "packet": {
+            "type": "meetings",
+            "meetings": [
+              {
+                "tabId": 2,
+                "title": "Reload fixture",
+                "url": "https://meet.example/call",
+                "pageState": "present",
+                "sourceCount": 0,
+                "heard": false
+              }
+            ]
+          },
+          "expectEvidence": {
+            "pageState": "present",
+            "sourceCount": 0,
+            "heard": false
+          },
+          "expectTimers": {
+            "missingAtMs": null,
+            "endedAtMs": 1003
+          },
+          "expect": []
+        },
+        {
+          "atMs": 3002,
+          "packet": null,
+          "expectEvidence": {
+            "pageState": "present",
+            "sourceCount": 0,
+            "heard": false
+          },
+          "expectTimers": {
+            "missingAtMs": null,
+            "endedAtMs": 1003
+          },
+          "expect": []
+        },
+        {
+          "atMs": 3003,
+          "packet": null,
+          "expectEvidence": {
+            "pageState": "present",
+            "sourceCount": 0,
+            "heard": false
+          },
+          "expectTimers": {
+            "missingAtMs": null,
+            "endedAtMs": 1003
+          },
+          "expect": [
+            "stop:callEnded"
+          ]
+        }
+      ]
     }
   ]
 }
