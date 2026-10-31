@@ -405,19 +405,19 @@
             "sessions": [
               {
                 "recording": true,
-                "tabId": 2,
-                "path": "/test/Recording-reload",
-                "message": "",
-                "pageState": "present",
-                "captureId": "reload-capture"
-              },
-              {
-                "recording": true,
                 "tabId": 7,
                 "path": "/test/Recording-reload",
                 "message": "",
                 "pageState": "navigating",
                 "captureId": "other-capture"
+              },
+              {
+                "recording": true,
+                "tabId": 2,
+                "path": "/test/Recording-reload",
+                "message": "",
+                "pageState": "present",
+                "captureId": "reload-capture"
               }
             ]
           },
@@ -444,19 +444,19 @@
             "sessions": [
               {
                 "recording": true,
-                "tabId": 2,
-                "path": "/test/Recording-reload",
-                "message": "",
-                "pageState": "present",
-                "captureId": "reload-capture"
-              },
-              {
-                "recording": true,
                 "tabId": 7,
                 "path": "/test/Recording-reload",
                 "message": "",
                 "pageState": "present",
                 "captureId": "other-capture"
+              },
+              {
+                "recording": true,
+                "tabId": 2,
+                "path": "/test/Recording-reload",
+                "message": "",
+                "pageState": "present",
+                "captureId": "reload-capture"
               }
             ]
           },
