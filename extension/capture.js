@@ -27,16 +27,24 @@ function resumeSuspended(context) {
   return task;
 }
 
-async function captureOnce({ stream, id, label, kind, origin, workletURL, send, fail, audible = false, enabled = () => true, channels = 1, sharedContext, warn = () => {} }) {
+async function captureOnce({ stream, id, label, kind, origin, workletURL, send, fail, audible = false, enabled = () => true, channels = 1, sharedContext, warn = () => {}, sourceTrackId, reportOutcomes = false, onAudio = () => {} }) {
   const context = sharedContext || new AudioContext({ sampleRate: 48000 });
   let source, node, silent, remotePlayback, ending = false, failure = null;
   let pendingFrames = 0, sequence = 0, flushed, droppedFrames = 0;
   const waiting = [], inFlight = new Set();
-  let stateChanged;
+  let stateChanged, announced = false, ended = false, endOffsetMs = null;
+  const end = async reason => {
+    if (!reportOutcomes || !announced || ended) return;
+    ended = true;
+    await send({ type: "trackEnd", id, reason, droppedFrames, endOffsetMs });
+  };
   function pump() {
     while (waiting.length && inFlight.size < 4 && !failure) {
       const { message, frames } = waiting.shift();
-      const task = Promise.resolve().then(() => send(message)).catch(abort).finally(() => {
+      const task = Promise.resolve().then(() => send(message)).then(() => {
+        endOffsetMs = Math.max(endOffsetMs ?? 0, message.offsetMs + frames * 1000 / context.sampleRate);
+        onAudio();
+      }).catch(abort).finally(() => {
         pendingFrames -= frames; inFlight.delete(task); pump();
       });
       inFlight.add(task);
@@ -46,7 +54,7 @@ async function captureOnce({ stream, id, label, kind, origin, workletURL, send, 
     if (failure) return;
     failure = error;
     waiting.length = 0;
-    fail(error.message);
+    fail(error);
   }
   try {
     await bounded(context.audioWorklet.addModule(workletURL), "This meeting page blocks separate-track recording. Record the whole tab instead.");
@@ -70,7 +78,9 @@ async function captureOnce({ stream, id, label, kind, origin, workletURL, send, 
     await bounded(context.resume(), "Click somewhere in the meeting page so the browser allows audio, then try again. Or record the whole tab.");
     if (context.state !== "running") throw new Error("Audio capture is suspended. Interact with the meeting page, then try again or use Tab audio.");
     let clockOffset = clocks.get(context);
-    await send({ type: "track", id, label, kind, sampleRate: context.sampleRate, channels });
+    await send({ type: "track", id, label, kind, sampleRate: context.sampleRate, channels,
+      ...(sourceTrackId ? { sourceTrackId } : {}) });
+    announced = true;
     node.onprocessorerror = () => abort(new Error("Audio capture stopped unexpectedly."));
     stateChanged = () => {
       if (ending || context.state === "running") return;
@@ -110,7 +120,7 @@ async function captureOnce({ stream, id, label, kind, origin, workletURL, send, 
     return {
       get failed() { return !!failure; },
       get droppedFrames() { return droppedFrames; },
-      async stop() {
+      async stop(reason = "stopped") {
         if (ending) return;
         ending = true;
         if (context.state === "running") {
@@ -125,6 +135,7 @@ async function captureOnce({ stream, id, label, kind, origin, workletURL, send, 
         while (inFlight.size) await Promise.allSettled([...inFlight]);
         context.removeEventListener?.("statechange", stateChanged);
         if (!sharedContext) await context.close();
+        await end(failure ? "failed" : reason);
         if (failure) throw failure;
       }
     };
@@ -134,48 +145,87 @@ async function captureOnce({ stream, id, label, kind, origin, workletURL, send, 
     if (remotePlayback) { remotePlayback.pause(); remotePlayback.srcObject = null; }
     context.removeEventListener?.("statechange", stateChanged);
     if (!sharedContext) await context.close();
+    await end("failed").catch(() => {});
     throw error;
   }
 }
 
 
-// Keep retry ownership beside capture so page-hook's terminal failed-track suppression can
-// remain terminal. This also serves tab capture; no second discovery pass is performed.
+// The same policy is exercised with a fake monotonic clock in both capture and
+// discovery tests. Quiet PCM is healthy; only transport/source failures retry.
+export function retryDelay(attempts) {
+  return [1000, 5000, 15000][Math.max(0, attempts)] ?? 30000;
+}
+
+export function reconcile(state, attempts, lastHealthyAt, now) {
+  if (state.stopping || state.live === false) return "giveUpAndReport";
+  if (state.status === "recording") return "none";
+  if (state.failedAt === null || state.failedAt === undefined) return "reattach";
+  const recovered = lastHealthyAt !== null && lastHealthyAt !== undefined && state.failedAt - lastHealthyAt >= 60000;
+  return now >= state.failedAt + retryDelay(recovered ? 0 : attempts) ? "reattach" : "none";
+}
+
 export async function capture(options) {
-  let current, ending = false, terminal = null, retryTimer, retries = 0, recovering = false, retiredDrops = 0;
+  let current = null, ending = false, terminal = null, retryTimer = null, retries = 0;
+  let recovering = false, retiredDrops = 0, healthySince = null;
   let restarting = Promise.resolve();
   const warn = options.warn || (() => {});
-  const schedule = message => {
-    if (ending || terminal || retryTimer) return;
+  const now = options.clock || (() => performance.now());
+  const later = options.schedule || ((fn, ms) => setTimeout(fn, ms));
+  const cancel = options.cancel || (timer => clearTimeout(timer));
+  const live = options.live || (() => {
+    const tracks = options.stream.getAudioTracks?.();
+    return !tracks || tracks.some(track => track.readyState === "live");
+  });
+  const healthy = () => {
+    healthySince ??= now();
+    if (now() - healthySince >= 60000) retries = 0;
+    options.onAudio?.();
+  };
+  const schedule = value => {
+    if (ending || terminal || retryTimer !== null) return;
+    const error = value instanceof Error ? value : new Error(String(value));
+    const at = now();
+    if (reconcile({ live: live(), failedAt: at }, retries, healthySince, at) === "giveUpAndReport") {
+      terminal = error; options.fail?.(error.message); return;
+    }
+    if (healthySince !== null && at - healthySince >= 60000) retries = 0;
+    healthySince = null;
     recovering = true;
     warn("A track was interrupted; trying to resume it.");
-    if (retries >= 3) { terminal = new Error(message); options.fail(message); return; }
-    retryTimer = setTimeout(() => {
+    const delay = options.retryDelayMs ?? retryDelay(retries);
+    retryTimer = later(async () => {
       retryTimer = null;
       restarting = (async () => {
         const previous = current; current = null;
         retiredDrops += previous?.droppedFrames || 0;
-        await previous?.stop().catch(() => {});
+        await previous?.stop("retry").catch(() => {});
         if (ending) return;
+        if (!live()) { terminal = error; options.fail?.(error.message); return; }
         retries++;
         try {
-          current = await captureOnce({ ...options, id: crypto.randomUUID(),
-            label: [...options.label].slice(0, 189).join("") + " (resumed)", fail: schedule });
+          const id = options.nextSpanId ? options.nextSpanId() : crypto.randomUUID();
+          if (!id) throw new Error("This recording has reached its track limit.");
+          current = await captureOnce({ ...options, id, fail: schedule, onAudio: healthy });
           recovering = false;
-        } catch (error) { schedule(error.message); }
+        } catch (next) { schedule(next); }
       })();
-    }, options.retryDelayMs ?? 5000);
+      await restarting;
+    }, delay);
   };
-  current = await captureOnce({ ...options, fail: schedule });
+  try { current = await captureOnce({ ...options, fail: schedule, onAudio: healthy }); }
+  catch (error) { schedule(error); }
   return {
     get failed() { return !!terminal; },
     get state() { return ending ? "stopped" : terminal ? "failed" : recovering ? "retrying" : "recording"; },
     get droppedFrames() { return retiredDrops + (current?.droppedFrames || 0); },
-    async stop() {
+    async stop(reason = "stopped") {
       if (ending) return;
-      ending = true; clearTimeout(retryTimer);
+      ending = true;
+      if (retryTimer !== null) cancel(retryTimer);
+      retryTimer = null;
       await restarting;
-      try { await current?.stop(); } catch (error) { if (terminal) throw error; warn(error.message); }
+      try { await current?.stop(reason); } catch (error) { if (terminal) throw error; warn(error.message); }
       if (terminal) throw terminal;
     }
   };
