@@ -12,7 +12,10 @@ function setPageState(tabId, value) {
   if (pageState(tabId) === "closed" && value !== "closed") return;
   if (pageStates.get(tabId) === value) return;
   pageStates.set(tabId, value);
-  if (sessions.has(tabId)) void persistSessions().catch(() => {});
+  if (sessions.has(tabId)) {
+    void persistSessions().catch(() => {});
+    appControl.publishStatus(controlStatus());
+  }
   // Idle pages do not retain unbounded tombstones; active sessions are <=100.
   if (pageStates.size > 100) for (const key of pageStates.keys()) {
     if (!sessions.has(key)) pageStates.delete(key);
@@ -356,11 +359,16 @@ async function meetings() {
   const counts = new Map();
   for (const frame of frames) if (frame.sourceCount > 0) counts.set(frame.tabId, Math.min(4096, (counts.get(frame.tabId) || 0) + frame.sourceCount));
   for (const session of sessions.values()) if (!counts.has(session.tabId)) counts.set(session.tabId, 0);
-  const found = await Promise.all([...counts].sort(([a], [b]) => Number(sessions.has(b)) - Number(sessions.has(a)) || a - b).slice(0, 100).map(async ([tabId, sourceCount]) => {
+  const found = await Promise.all([...counts].sort(([a], [b]) => Number(sessions.has(b)) - Number(sessions.has(a)) || a - b).slice(0, 100).map(async ([tabId]) => {
     try {
       const tab = await chrome.tabs.get(tabId);
       if (!/^https?:/.test(tab.url || "")) return null;
-      const heard = [...frames].some(frame => frame.tabId === tabId && frame.sourceCount > 0 && frame.heard);
+      // The document can change while tabs.get is pending. Read its evidence
+      // together after the lookup, rather than publishing a previous count.
+      const current = [...frames].filter(frame => frame.tabId === tabId && frame.sourceCount > 0);
+      const sourceCount = Math.min(4096, current.reduce((total, frame) => total + frame.sourceCount, 0));
+      if (!sourceCount && !sessions.has(tabId)) return null;
+      const heard = current.some(frame => frame.heard);
       return { tabId, title: [...(tab.title || "Meeting")].slice(0, 200).join(""), url: new URL(tab.url).href.slice(0, 2048), sourceCount, heard, pageState: pageState(tabId) };
     } catch { return null; }
   }));

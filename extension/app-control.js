@@ -67,6 +67,11 @@ export class AppControl {
       this.publish();
     }).catch(() => this.publish());
   }
+  publishStatus(message) {
+    // Lifecycle edges must not wait behind an asynchronous inventory refresh.
+    const port = this.port;
+    if (port) this.send(port, message);
+  }
   publish() {
     this.dirty = true;
     if (!this.port || this.publishing) return;

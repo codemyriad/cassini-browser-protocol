@@ -106,3 +106,39 @@ test('a previous gap warning does not rewrite the explicit terminal Stop reason'
   assert.ok(packet.problem);assert.equal(packet.reason,'user');
  } finally {app.close();}
 });
+
+test('fast reload publishes navigation before a blocked asynchronous inventory can coalesce it away',async()=>{
+ const app=await setup();let release;
+ try {
+  await app.command(start());await app.api.appControl.publishing;
+  const port=app.ports.at(-1),before=port.sent.length;
+  const lookup=app.chrome.tabs.get;
+  let entered=false;const gate=new Promise(resolve=>{release=resolve;});
+  app.chrome.tabs.get=async id=>{entered=true;await gate;return lookup(id);};
+  app.api.appControl.publish();await until(()=>entered);
+  app.chrome.tabs.onUpdated.emit(2,{status:'loading'});
+  app.pages[0].onDisconnect.emit();app.frame(2,0);
+  const states=port.sent.slice(before).filter(p=>p.type==='status').map(p=>p.sessions.find(s=>s.tabId===2)?.pageState);
+  assert.ok(states.includes('navigating'),'active navigation evidence must not wait for chrome.tabs.get');
+  assert.ok(states.indexOf('navigating')<states.lastIndexOf('present'),'return follows the published navigation');
+  release();await app.api.appControl.publishing;
+  await app.command(stop());
+ } finally {release?.();app.close();}
+});
+
+test('inventory recomputes source evidence after tab lookup instead of mixing old counts with the returned document',async()=>{
+ const app=await setup();let release;
+ try {
+  await app.command(start());await app.api.appControl.publishing;
+  const lookup=app.chrome.tabs.get;let entered=false;
+  const gate=new Promise(resolve=>{release=resolve;});
+  app.chrome.tabs.get=async id=>{entered=true;await gate;return lookup(id);};
+  const pending=app.api.meetings();await until(()=>entered);
+  app.chrome.tabs.onUpdated.emit(2,{status:'loading'});
+  app.pages[0].onDisconnect.emit();app.frame(2,0);
+  release();const snapshot=await pending;
+  const current=snapshot.meetings.find(m=>m.tabId===2);
+  assert.equal(current.sourceCount,0);assert.equal(current.heard,false);assert.equal(current.pageState,'present');
+  await app.api.appControl.publishing;await app.command(stop());
+ } finally {release?.();app.close();}
+});

@@ -278,6 +278,15 @@ closed, and a subframe cannot assert top-level lifecycle. A missing control peer
 or native port is unknown loss, never an inferred closed tab. Title/URL still
 come from the tabs API, never page-supplied lifecycle data.
 
+For an active recording, publish each lifecycle transition immediately on the
+connected control port, before waiting for an asynchronous meeting inventory.
+A rapid `navigating` → `present` transition must not be coalesced away by a
+pending tabs lookup. The following inventory reads source count, heard evidence
+and page state from the current document together after that lookup; a count
+from an unloaded document must not be combined with the returned page's state.
+A disconnected control port still uses the ordinary replacement snapshot on
+reconnect; historical transitions are not replayed as new events.
+
 An app that implements this policy opts in for an independent start with
 `keepOnNavigation:true`. The extension retains that recording's native connection,
 capture ID, origin and folder when frames unload, and starts returning frames
