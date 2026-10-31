@@ -97,16 +97,12 @@
           "id": "system",
           "kind": "system",
           "startMs": 0,
-          "endMs": 65000,
+          "endMs": 20000,
           "speech": "B",
           "speechWindows": [
             [
               0,
               8000
-            ],
-            [
-              50000,
-              58000
             ]
           ]
         },
@@ -178,13 +174,42 @@
           "kind": "application",
           "sourceTrackId": "source-b",
           "startMs": 20000,
-          "endMs": 90000,
+          "endMs": 50000,
           "speech": "B",
           "speechWindows": [
             [
               20000,
               28000
-            ],
+            ]
+          ],
+          "presenceWindows": [
+            [
+              20000,
+              50000
+            ]
+          ]
+        },
+        {
+          "id": "system-fallback",
+          "kind": "system",
+          "startMs": 50000,
+          "endMs": 60000,
+          "speech": "B",
+          "speechWindows": [
+            [
+              50000,
+              58000
+            ]
+          ]
+        },
+        {
+          "id": "b-return",
+          "kind": "application",
+          "sourceTrackId": "source-b",
+          "startMs": 60000,
+          "endMs": 90000,
+          "speech": "B",
+          "speechWindows": [
             [
               60000,
               68000
@@ -192,7 +217,7 @@
           ],
           "presenceWindows": [
             [
-              20000,
+              60000,
               70000
             ],
             [

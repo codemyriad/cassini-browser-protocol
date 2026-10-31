@@ -1,5 +1,9 @@
 """D52 shape guard: real speech, sparse spans, seams, overlap and two calls."""
 import copy
+import math
+import struct
+import tempfile
+import wave
 import importlib.util
 from pathlib import Path
 import unittest
@@ -39,3 +43,62 @@ class CorpusTests(unittest.TestCase):
     def test_removing_a_gap_range_fails_the_guard(self):
         data,_=corpus.load();case=copy.deepcopy(data['sessions'][0]);case['tracks'][3]['gaps']=[]
         with self.assertRaises(AssertionError):shape(case)
+
+
+def ownership(case):
+    # Literal expected half-open ownership from the fixture's agreed S-6 seams.
+    system = sorted((t['startMs'], t['endMs']) for t in case['tracks'] if t['kind'] == 'system')
+    assert system == [(0, 20000), (50000, 60000)], 'system audio crosses a browser seam'
+    for track in case['tracks']:
+        if track['kind'] in ('microphone', 'system'):
+            continue
+        assert any(a <= track['startMs'] < track['endMs'] <= b for a, b in [(20000, 50000), (60000, 90000)]), 'browser audio crosses a system seam'
+
+
+class MaterializedCorpusTests(unittest.TestCase):
+    def test_actual_wavs_preserve_seams_gaps_overlap_and_bleed(self):
+        data, _ = corpus.load()
+        ownership(data['sessions'][0])
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            corpus.make(root)
+            first = root / ('Recording-' + data['sessions'][0]['id'])
+            second = root / ('Recording-' + data['sessions'][1]['id'])
+            expected = {'mic':4320000, 'system':960000, 'system-fallback':480000,
+                        'a-short':96000, 'a-long':480000, 'a-return':96000,
+                        'b':1440000, 'b-return':1440000}
+            for identifier, count in expected.items():
+                with wave.open(str(first / ('track-' + identifier + '.wav'))) as reader:
+                    self.assertEqual((reader.getframerate(), reader.getnchannels(), reader.getsampwidth(), reader.getnframes()), (48000, 1, 2, count))
+
+            def read(folder, identifier, first_frame, count):
+                with wave.open(str(folder / ('track-' + identifier + '.wav'))) as reader:
+                    reader.setpos(first_frame)
+                    result = reader.readframes(count)
+                self.assertEqual(len(result), count * 2)
+                return result
+
+            self.assertEqual(read(first, 'a-long', 48000, 7 * 48000), bytes(7 * 96000))
+            self.assertEqual(read(first, 'b-return', 10 * 48000, 2 * 48000), bytes(2 * 96000))
+            # One voice in two genuinely independent files, at the same meeting time.
+            mic = read(first, 'mic', 12 * 48000, 48000)
+            self.assertEqual(mic, read(second, 'independent', 12 * 48000, 48000))
+            self.assertTrue(any(mic))
+            # The first B turn is alone in the mic, so its injected bleed can be
+            # checked against the actual stored B waveform, not the generator.
+            mic = struct.unpack('<48000h', read(first, 'mic', 20 * 48000, 48000))
+            remote = struct.unpack('<48000h', read(first, 'b', 0, 48000))
+            ratio = sum(x*x for x in mic) / sum(x*x for x in remote)
+            self.assertAlmostEqual(10 * math.log10(ratio), -35, delta=0.1)
+            self.assertNotEqual(read(first, 'mic', 60 * 48000, 48000), read(first, 'b-return', 0, 48000))
+
+    def test_source_overlap_mutations_are_rejected(self):
+        data, _ = corpus.load()
+        case = copy.deepcopy(data['sessions'][0])
+        case['tracks'][1]['endMs'] = 65000
+        with self.assertRaises(AssertionError):
+            ownership(case)
+        case = copy.deepcopy(data['sessions'][0])
+        next(t for t in case['tracks'] if t['id'] == 'b')['endMs'] = 90000
+        with self.assertRaises(AssertionError):
+            ownership(case)
