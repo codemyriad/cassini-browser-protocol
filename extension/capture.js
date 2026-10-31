@@ -108,12 +108,18 @@ async function captureOnce({ stream, id, label, kind, origin, workletURL, send, 
         warn("One track fell more than ten seconds behind and has a gap. The other tracks continue.");
         return;
       }
+      const offsetMs = Math.max(0, clockOffset + data.frame / context.sampleRate * 1000);
+      if (endOffsetMs !== null && offsetMs - endOffsetMs > 60000) {
+        droppedFrames += frames;
+        abort(new Error("A suspended source needs a new audio span."));
+        return;
+      }
       pendingFrames += frames;
       clocks.set(context, clockOffset);
       // For sender tracks, respect track enabled/muted state and sender suspension.
       if (!enabled()) new Uint8Array(data.pcm).fill(0);
       const message = { type: "audio", id, sequence: sequence++,
-        offsetMs: Math.max(0, clockOffset + data.frame / context.sampleRate * 1000), pcm: base64(data.pcm) };
+        offsetMs, pcm: base64(data.pcm) };
       waiting.push({ message, frames });
       pump();
     };

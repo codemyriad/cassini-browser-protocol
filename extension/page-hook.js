@@ -3,6 +3,28 @@
   const peers = new Set();
   const knownLocalTracks = new WeakSet();
   const sourceRoots = new WeakMap();
+  const sourceKeys = new WeakMap();
+  const receiverGenerations = new WeakMap(), trackGenerations = new WeakMap();
+  const documentGeneration = globalThis.crypto?.randomUUID?.() || "doc-" + Math.random().toString(36).slice(2);
+  let nextSource = 0, callGeneration = 0, lastCallGeneration = -1;
+  let callAddress = window.location?.href?.split("#", 1)[0];
+  function refreshCall() {
+    const next = window.location?.href?.split("#", 1)[0];
+    if (next !== callAddress) { callAddress = next; callGeneration++; resetEvidence(); }
+  }
+  function receiverGeneration(receiver) {
+    let value = receiverGenerations.get(receiver);
+    if (!value || value.track !== receiver.track) {
+      value = { track: receiver.track, generation: callGeneration };
+      receiverGenerations.set(receiver, value);
+      trackGenerations.set(sourceRoot(receiver.track), callGeneration);
+    }
+    return value.generation;
+  }
+  function sourceKey(root) {
+    if (!sourceKeys.has(root)) sourceKeys.set(root, documentGeneration + ":source:" + (++nextSource));
+    return sourceKeys.get(root);
+  }
   const sourceRoot = track => sourceRoots.get(track) || track;
   // Remember microphone origins before they become senders, including local previews.
   const devices = navigator.mediaDevices;
@@ -51,7 +73,7 @@
   // Discovery is independent of capture: no AudioContext, cloned stream or PCM
   // is created until an explicit recording command arrives.
   let lastSourceCount = -1, lastHeard = null, latched = false, zeroSince = null, orphanedSince = null;
-  let previousStats = new WeakMap(), sampling = false;
+  let previousStats = new WeakMap(), packetProof = new WeakMap(), sampling = false;
   const evidenceTicks = [], owners = new Set();
   const connected = pc => pc.signalingState !== "closed" &&
     (pc.connectionState === "connected" || ["connected", "completed"].includes(pc.iceConnectionState));
@@ -63,6 +85,7 @@
       for (const transceiver of pc.getTransceivers()) {
         const track = transceiver.receiver?.track;
         if (["recvonly", "sendrecv"].includes(transceiver.currentDirection) && track?.kind === "audio" && track.readyState === "live") {
+          if (receiverGeneration(transceiver.receiver) !== callGeneration) continue;
           sources.add(track);
           receivers.set(transceiver.receiver, pc);
         }
@@ -76,8 +99,10 @@
     owners.clear();
     evidenceTicks.length = 0;
     previousStats = new WeakMap();
+    packetProof = new WeakMap();
   }
   function discover(force = false) {
+    refreshCall();
     const { sourceCount, receivers } = discoverySources();
     const now = performance.now();
     if (sourceCount > 0) zeroSince = null;
@@ -92,10 +117,11 @@
     // Retain a short handoff opportunity, but never lend an old peer's latch
     // to new pre-join receivers that have not supplied their own packet vote.
     const heard = latched && [...receivers.values()].some(pc => owners.has(pc));
-    if (force || sourceCount !== lastSourceCount || heard !== lastHeard) {
+    if (force || sourceCount !== lastSourceCount || heard !== lastHeard || callGeneration !== lastCallGeneration) {
       lastSourceCount = sourceCount;
       lastHeard = heard;
-      window.postMessage({ channel: "cassini-page", type: "discovery", sourceCount, heard }, "*");
+      lastCallGeneration = callGeneration;
+      window.postMessage({ channel: "cassini-page", type: "discovery", sourceCount, heard, documentGeneration, callGeneration: String(callGeneration) }, "*");
     }
     return sourceCount;
   }
@@ -129,7 +155,10 @@
           if (report?.type !== "inbound-rtp" || (report.kind ?? report.mediaType) !== "audio" ||
               typeof report.id !== "string" || !Number.isSafeInteger(report.packetsReceived) || report.packetsReceived < 0) return;
           const count = report.packetsReceived;
-          if (previous.has(report.id) && count - previous.get(report.id) >= 10) tick.voters.add(pc);
+          if (previous.has(report.id) && count > previous.get(report.id)) {
+            packetProof.set(receiver, { pc, track: receiver.track });
+            if (count - previous.get(report.id) >= 10) tick.voters.add(pc);
+          }
           previous.set(report.id, count);
         });
         // Missing reports keep their last baseline; first appearance never votes.
@@ -158,16 +187,21 @@
       return;
     }
     if (message.type === "start" && !active) {
-      const state = { token: message.token, pending: new Map(), tracks: new Map(), failedTracks: new WeakSet(), localMetadata: new Map(), next: 0, stopping: false, scanning: false };
+      const state = { token: message.token, callGeneration, sourceOutcomes: message.sourceOutcomes === true, pending: new Map(), tracks: new Map(), sources: new Map(), spanCount: 0, localMetadata: new Map(), next: 0, stopping: false, scanning: false };
       active = state;
       const send = packet => new Promise((resolve, reject) => {
+        refreshCall();
+        if (state.callGeneration !== callGeneration && packet.type !== "trackEnd") {
+          discover(true); reject(new Error("This audio belongs to a different call.")); return;
+        }
         const request = ++state.next;
         const timer = setTimeout(() => { state.pending.delete(request); reject(new Error("Cassini did not confirm receiving audio.")); }, 10000);
         state.pending.set(request, { resolve, reject, timer });
         emit(state.token, { type: "packet", request, packet });
       });
       const fail = message => emit(state.token, { type: "error", message });
-      const warn = () => emit(state.token, { type: "warning" });
+      const warn = () => emit(state.token, { type: "warning", ...(message.sourceOutcomes ? {
+        discoveredSources: [...state.sources.values()], failedSources: [...state.sources.values()].filter(s => s.failed).map(s => s.sourceTrackId) } : {}) });
       try {
         const { capture } = await import(message.moduleURL);
         if (state.stopping) return;
@@ -175,19 +209,27 @@
           if (state.stopping || state.scanning) return;
           state.scanning = true;
           try {
+            refreshCall();
+            if (state.callGeneration !== callGeneration) {
+              await Promise.allSettled([...state.tracks.values()].map(recorder => recorder.stop("callChanged")));
+              state.tracks.clear(); discover(true); return;
+            }
             const sources = new Map();
             for (const pc of peers) {
               if (pc.signalingState === "closed") { peers.delete(pc); continue; }
               for (const transceiver of pc.getTransceivers()) {
-                if (["recvonly", "sendrecv"].includes(transceiver.currentDirection) && transceiver.receiver.track) {
-                  sources.set(transceiver.receiver.track, { kind: "remote" });
+                const receiver = transceiver.receiver;
+                const proof = receiver && packetProof.get(receiver);
+                if (connected(pc) && ["recvonly", "sendrecv"].includes(transceiver.currentDirection) && receiver?.track &&
+                    proof?.pc === pc && proof.track === receiver.track && receiverGeneration(receiver) === callGeneration) {
+                  sources.set(receiver.track, { kind: "remote", root: receiver });
                 }
               }
               for (const sender of pc.getSenders()) if (sender.track) {
                 knownLocalTracks.add(sender.track);
                 knownLocalTracks.add(sourceRoot(sender.track));
                 if (message.captureLocal === false) continue;
-                const metadata = { kind: "local", sender, pc };
+                const metadata = { kind: "local", sender, pc, root: sender };
                 sources.set(sender.track, metadata);
                 state.localMetadata.set(sender.track, metadata);
               }
@@ -202,19 +244,21 @@
               if (media.srcObject instanceof MediaStream) {
                 for (const track of media.srcObject.getAudioTracks()) {
                   // A removed sender must not reappear as the page's raw microphone preview.
-                  if (!roots.has(sourceRoot(track)) && !knownLocalTracks.has(sourceRoot(track))) {
-                    sources.set(track, { kind: "media" });
+                  if (!roots.has(sourceRoot(track)) && !knownLocalTracks.has(sourceRoot(track)) &&
+                      (!trackGenerations.has(sourceRoot(track)) || trackGenerations.get(sourceRoot(track)) === callGeneration)) {
+                    trackGenerations.set(sourceRoot(track), callGeneration);
+                    sources.set(track, { kind: "media", root: sourceRoot(track) });
                     roots.add(sourceRoot(track));
                   }
                 }
               }
             }
             for (const [track, recorder] of state.tracks) {
-              if (track.readyState === "ended" || !sources.has(track) || recorder.failed) { await recorder.stop().catch(warn); state.tracks.delete(track); }
+              if (track.readyState === "ended" || !sources.has(track) || recorder.failed) { await recorder.stop(track.readyState === "ended" ? "ended" : "replaced").catch(warn); state.tracks.delete(track); }
             }
             for (const [track, metadata] of sources) {
               if (state.stopping) break;
-              if (track.kind !== "audio" || track.readyState !== "live" || state.tracks.has(track) || state.failedTracks.has(track)) continue;
+              if (track.kind !== "audio" || track.readyState !== "live" || state.tracks.has(track)) continue;
               const enabled = () => {
                 if (!track.enabled || track.muted) return false;
                 if (!metadata.sender) return true;
@@ -225,32 +269,43 @@
                 return !encodings?.length || encodings.some(e => e.active !== false);
               };
               state.context ??= new AudioContext({ sampleRate: 48000 });
+              const sourceTrackId = sourceKey(metadata.root || sourceRoot(track));
+              const record = state.sources.get(sourceTrackId) || { sourceTrackId, kind: metadata.kind,
+                label: `${metadata.kind}: ${track.label || track.id}`, failed: false };
+              state.sources.set(sourceTrackId, record);
+              const nextSpanId = () => state.spanCount < 64 ? (state.spanCount++, crypto.randomUUID()) : null;
               try {
-              const recorder = await capture({ stream: new MediaStream([track]), id: crypto.randomUUID(),
+              const id = nextSpanId();
+              if (!id) { record.failed = true; warn(); continue; }
+              const recorder = await capture({ stream: new MediaStream([track]), id, sourceTrackId,
+                reportOutcomes: message.sourceOutcomes === true, nextSpanId, live: () => track.readyState === "live",
                 label: `${metadata.kind}: ${track.label || track.id}`, kind: metadata.kind, enabled,
-                origin: message.origin, workletURL: message.workletURL, send, sharedContext: state.context, warn,
-                fail: () => { state.failedTracks.add(track); warn(); } });
+                origin: message.origin, workletURL: message.workletURL, send, sharedContext: state.context, warn: () => { record.failed = true; warn(); },
+                fail: () => { record.failed = true; warn(); } });
               state.tracks.set(track, recorder);
-              } catch { state.failedTracks.add(track); warn(); }
+              } catch { record.failed = true; warn(); }
             }
           } catch (error) { fail(error.message); }
           finally { state.scanning = false; }
         };
-        state.scan = scan;
-        state.timer = setInterval(scan, 500);
-        await scan();
+        state.scan = () => {
+          if (state.scanning || state.stopping) return state.scanPromise || Promise.resolve();
+          state.scanPromise = scan(); return state.scanPromise;
+        };
+        state.timer = setInterval(state.scan, 500);
+        await state.scan();
         emit(state.token, { type: "ready" });
       } catch (error) { fail(error.message); }
     } else if (message.type === "stop" && active?.token === message.token) {
       const state = active;
       state.stopping = true;
       clearInterval(state.timer);
-      while (state.scanning) await new Promise(resolve => setTimeout(resolve, 20));
+      await state.scanPromise;
       const results = await Promise.allSettled([...state.tracks.values()].map(recorder => recorder.stop()));
       const error = results.find(result => result.status === "rejected");
       if (error) emit(state.token, { type: "error", message: error.reason.message });
       await state.context?.close();
-      emit(state.token, { type: "stopped" });
+      emit(state.token, { type: "stopped", ...(state.sourceOutcomes ? { discoveredSources: [...state.sources.values()] } : {}) });
       active = null;
     }
   });

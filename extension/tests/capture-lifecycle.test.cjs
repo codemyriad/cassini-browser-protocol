@@ -42,6 +42,7 @@ test('live source retries beyond three attempts, preserving identity and closing
  const packets=[],failures=[],time=clock();const context=new Context();
  const recorder=await capture({stream:{},id:'original',sourceTrackId:'receiver-root',reportOutcomes:true,label:'Guest',kind:'local',origin:100000,workletURL:'',sharedContext:context,
   clock:time.now,schedule:time.schedule,cancel:time.cancel,send:async p=>packets.push(p),fail:m=>failures.push(m)});
+ await time.advance(179000); // Worklet failure at minute three, without a wall-clock wait.
  for(let index=0;index<5;index++){
   nodes[index].onprocessorerror();
   assert.equal(recorder.state,'retrying');
@@ -90,4 +91,18 @@ test('source retry policy is pure and uses monotonic deadlines',async()=>mocked(
   [{live:false,failedAt:0},0,null,90000,'giveUpAndReport'],
   [{live:true,stopping:true},0,null,0,'giveUpAndReport'],
  ]) {const original=JSON.stringify(state);assert.equal(reconcile(state,attempts,last,now),expected);assert.equal(JSON.stringify(state),original)}
+}));
+
+test('a ninety-second suspension rotates the source before sending an oversized gap',async()=>mocked(async({capture,nodes,Context})=>{
+ const time=clock(),packets=[],context=new Context();
+ const recorder=await capture({stream:{},id:'before',sourceTrackId:'stable',label:'Audio',kind:'local',origin:100000,workletURL:'',sharedContext:context,
+  clock:time.now,schedule:time.schedule,cancel:time.cancel,send:async p=>packets.push(p)});
+ nodes[0].port.onmessage({data:{pcm:new ArrayBuffer(8192*2),frame:0}});await tick();
+ nodes[0].port.onmessage({data:{pcm:new ArrayBuffer(8192*2),frame:48000*90}});await tick();
+ assert.equal(recorder.state,'retrying');assert.equal(packets.filter(p=>p.type==='audio').length,1);
+ await time.advance(1000);assert.equal(nodes.length,2);
+ nodes[1].port.onmessage({data:{pcm:new ArrayBuffer(8192*2),frame:48000*90+8192}});await tick();
+ const chunks=packets.filter(p=>p.type==='audio');assert.equal(chunks.length,2);assert.notEqual(chunks[0].id,chunks[1].id);
+ assert.equal(new Set(packets.filter(p=>p.type==='track').map(p=>p.sourceTrackId)).size,1);
+ assert.equal(recorder.droppedFrames,8192);await recorder.stop();
 }));

@@ -25,6 +25,28 @@ function setPageState(tabId, value) {
 }
 const sessions = new Map();
 const pendingStarts = new Map();
+const callGenerations = new Map();
+const callAddress = value => typeof value === "string" ? value.split("#", 1)[0] : null;
+function callInfo(tabId) {
+  if (!callGenerations.has(tabId)) callGenerations.set(tabId, { generation: crypto.randomUUID(), url: null });
+  if (callGenerations.size > 200) for (const key of callGenerations.keys()) {
+    if (key !== tabId && !sessions.has(key)) callGenerations.delete(key);
+    if (callGenerations.size <= 200) break;
+  }
+  return callGenerations.get(tabId);
+}
+function documentFor(tabId) {
+  return [...frames].find(f => f.tabId === tabId && !f.obsolete && f.frameId === 0)?.documentGeneration;
+}
+function callChanged(tabId) {
+  const current = sessions.get(tabId);
+  if (current?.callChanged) return;
+  callInfo(tabId).generation = crypto.randomUUID();
+  for (const frame of frames) if (frame.tabId === tabId) { frame.sourceCount = 0; frame.heard = false; }
+  if (current) { current.callChanged = true; void stop(current, "callEnded"); }
+  notifyControl();
+}
+
 const saved = new Map();
 const interrupted = [];
 const firstSession = () => sessions.values().next().value;
@@ -68,9 +90,9 @@ class NativeHost {
       const request = this.pending.shift();
       if (request) {
         clearTimeout(request.timer);
-        message.type === "error" ? request.reject(new Error(message.message)) : request.resolve(message);
+        message.type === "error" ? request.reject(Object.assign(new Error(message.message), { code: message.code, scope: message.scope, id: message.id })) : request.resolve(message);
       }
-      if (message.type === "error") onFailure(message.message);
+      if (message.type === "error" && !["source", "command"].includes(message.scope)) onFailure(message.message);
     });
     this.port.onDisconnect.addListener(() => {
       const message = chrome.runtime.lastError?.message || "Lost the connection to Cassini. Audio recorded so far was saved.";
@@ -99,8 +121,8 @@ class NativeHost {
 }
 
 function status(session = firstSession()) {
-  return session ? { recording: true, stopping: session.stopping, tracks: session.tracks, tabId: session.tabId, mode: session.mode,
-    pageState: pageState(session.tabId), message: session.warning || (!session.tracks ? "Waiting for audio. Join the call, or record the whole tab instead." : `${session.stopping ? "Saving" : "Recording"} ${session.mode === "tracks" ? "separate tracks" : "the whole tab"} · ${session.tracks} ${session.tracks === 1 ? "recorded track" : "recorded tracks"}`), path: session.path } : lastStatus;
+  return session ? { recording: true, captureId: session.token, documentGeneration: documentFor(session.tabId), callGeneration: session.callGeneration, stopping: session.stopping, tracks: session.tracks, tabId: session.tabId, mode: session.mode,
+    pageState: pageState(session.tabId), failedSources: [...session.discoveredSources].filter(([,s])=>s.failed).map(([id])=>id), message: session.warning || (!session.tracks ? "Waiting for audio. Join the call, or record the whole tab instead." : `${session.stopping ? "Saving" : "Recording"} ${session.mode === "tracks" ? "separate tracks" : "the whole tab"} · ${session.tracks} ${session.tracks === 1 ? "recorded track" : "recorded tracks"}`), path: session.path } : lastStatus;
 }
 function failure(message, session = firstSession()) {
   if (session) { session.problem ??= message; session.loss = true; notifyControl(); void stop(session); }
@@ -125,7 +147,9 @@ async function stop(session = firstSession(), reason = "user") {
         if (response?.error) session.problem ??= response.error;
       }
       const packet = { type: "stop", problem: session.problem };
-      if (session.keepOnNavigation && !session.loss) packet.reason = reason;
+      if (session.independent) packet.captureId = session.token;
+      if (session.sourceOutcomes) packet.discoveredSources = [...session.discoveredSources.values()];
+      if ((session.keepOnNavigation || session.sourceOutcomes) && !session.loss) packet.reason = reason;
       if (session.independent && session.loss) packet.failureReason = "lost";
       const result = session.host ? await session.host.send(packet) : {};
       lastStatus = { recording: false, tabId: session.tabId, pageState: pageState(session.tabId), path: result.path, message: session.problem || result.problem || "Saved on this computer." };
@@ -163,8 +187,12 @@ async function start(mode, tabId = null, options = {}) {
     if (request.cancelled) throw new Error("Recording could not start.");
     if (!Number.isSafeInteger(tab?.id) || tab.id < 0 || !/^https?:/.test(tab.url || "")) throw new Error("Open the meeting tab first. Recording works on web pages only.");
     if (sessions.has(tab.id)) throw new Error("A recording is already running. Stop it before starting another.");
-    const session = { mode, tabId: tab.id, independent: options.independent === true, captureLocal: options.captureLocal !== false, keepOnNavigation: options.keepOnNavigation === true, token: crypto.randomUUID(), origin: Date.now(),
-      frames: new Set(), tracks: 0, stopping: false, problem: null };
+    const identity = callInfo(tab.id);
+    if (options.expectedCallGeneration !== undefined && options.expectedCallGeneration !== identity.generation)
+      throw new Error("That call is no longer active.");
+    identity.url = callAddress(tab.url);
+    const session = { callGeneration: identity.generation, mode, tabId: tab.id, independent: options.independent === true, captureLocal: options.captureLocal !== false, keepOnNavigation: options.keepOnNavigation === true, token: crypto.randomUUID(), origin: Date.now(),
+      frames: new Set(), tracks: 0, trackIds: new Set(), trackSources: new Map(), discoveredSources: new Map(), lastTab: tab, lastSourceCount: 0, stopping: false, problem: null };
     sessions.set(tab.id, session);
     notifyControl();
     const checkStarting = () => {
@@ -185,10 +213,12 @@ async function start(mode, tabId = null, options = {}) {
       // No output folder exists until discovery or the invocation grant has succeeded.
       checkStarting();
       session.host = new NativeHost(message => failure(message, session));
-      const start = { type: "start", version: 1, title: tab.title || "Browser meeting" };
+      const start = { type: "start", version: 1, title: tab.title || "Browser meeting", features: ["source-outcomes-v1"],
+        callGeneration: session.callGeneration, documentGeneration: documentFor(tab.id) };
       if (session.independent) Object.assign(start, { independent: true, microphone: options.microphone !== false, captureId: session.token, timelineOriginMs: session.origin });
       const result = await session.host.send(start);
       session.path = result.path;
+      session.sourceOutcomes = Array.isArray(result.features) && result.features.includes("source-outcomes-v1");
       notifyControl();
       checkStarting();
       await persistSessions();
@@ -198,7 +228,7 @@ async function start(mode, tabId = null, options = {}) {
         for (const frame of frames) {
           if (frame.tabId !== tab.id || session.frames.has(frame)) continue;
           session.frames.add(frame);
-          frame.port.postMessage({ type: "start", token: session.token, origin: session.origin, captureLocal: session.captureLocal });
+          frame.port.postMessage({ type: "start", token: session.token, origin: session.origin, captureLocal: session.captureLocal, sourceOutcomes: session.sourceOutcomes });
         }
       } else {
         if (await hasOffscreenDocument()) await chrome.offscreen.closeDocument();
@@ -236,7 +266,7 @@ chrome.runtime.onConnect.addListener(port => {
   const current = sessions.get(frame.tabId);
   if (current?.ready && current.mode === "tracks" && !current.stopping) {
     current.frames.add(frame);
-    port.postMessage({ type: "start", token: current.token, origin: current.origin, captureLocal: current.captureLocal });
+    port.postMessage({ type: "start", token: current.token, origin: current.origin, captureLocal: current.captureLocal, sourceOutcomes: current.sourceOutcomes });
   }
   port.onMessage.addListener(async message => {
     if (!frames.has(frame)) return;
@@ -248,6 +278,14 @@ chrome.runtime.onConnect.addListener(port => {
       return;
     }
     if (message.type === "discovery") {
+      if (frame.obsolete || pageState(frame.tabId) === "closed") return;
+      const document = message.documentGeneration, generation = message.callGeneration;
+      if (typeof document === "string" && document.length > 0 && document.length <= 200 &&
+          typeof generation === "string" && generation.length > 0 && generation.length <= 200) {
+        const changed = frame.documentGeneration === document && frame.callGeneration !== undefined && frame.callGeneration !== generation;
+        frame.documentGeneration = document; frame.callGeneration = generation;
+        if (changed) callChanged(frame.tabId);
+      }
       if (frame.obsolete || pageState(frame.tabId) === "closed") return;
       if (Number.isInteger(message.sourceCount) && message.sourceCount >= 0 && message.sourceCount <= 64 &&
           (frame.sourceCount !== message.sourceCount || frame.heard !== (message.heard === true))) {
@@ -265,6 +303,15 @@ chrome.runtime.onConnect.addListener(port => {
       frame.sourceCount = 0; frame.heard = false;
       frame.finished?.(); notifyControl(); return;
     }
+    if (session.sourceOutcomes && Array.isArray(message.discoveredSources)) {
+      for (const source of message.discoveredSources.slice(0, 64)) {
+        if (source && typeof source.sourceTrackId === "string" && source.sourceTrackId.length <= 200 &&
+            ["local", "remote", "media", "tab"].includes(source.kind) && session.discoveredSources.size < 256)
+          session.discoveredSources.set(source.sourceTrackId, { sourceTrackId: source.sourceTrackId, kind: source.kind,
+            label: typeof source.label === "string" ? [...source.label].slice(0, 200).join("") : source.kind,
+            failed: source.failed === true || session.discoveredSources.get(source.sourceTrackId)?.failed === true });
+      }
+    }
     if (message.type === "stopped") {
       if (!session.stopping) failure("The meeting page stopped sending audio. The recording so far was saved.", session);
       frame.finished?.(); return;
@@ -274,15 +321,27 @@ chrome.runtime.onConnect.addListener(port => {
       session.problem ??= session.warning; notifyControl(); return;
     }
     if (message.type === "error") { failure("The meeting page could not record separate tracks. Record the whole tab instead. Audio recorded so far was saved.", session); return; }
-    if (message.type !== "packet" || !["track", "audio"].includes(message.packet?.type)) return;
+    if (message.type !== "packet" || !["track", "audio", ...(session.sourceOutcomes ? ["trackEnd"] : [])].includes(message.packet?.type)) return;
     try {
+      if (session.callChanged && message.packet.type !== "trackEnd")
+        throw Object.assign(new Error("This audio belongs to a different call."), { scope: "source", code: "source" });
       if (JSON.stringify(message.packet).length > 400000) throw new Error("The meeting page sent an oversized audio chunk.");
+      if (message.packet.type === "track" && !session.trackIds.has(message.packet.id) && session.trackIds.size >= 64)
+        throw Object.assign(new Error("This recording has reached its track limit."), { code: "limit", scope: "source" });
       await session.host.send(message.packet);
-      if (message.packet.type === "track") { session.tracks++; session.warning = null; notifyControl(); }
+      if (message.packet.type === "track" && !session.trackIds.has(message.packet.id)) {
+        session.trackIds.add(message.packet.id);
+        session.trackSources.set(message.packet.id, message.packet.sourceTrackId || message.packet.id); session.tracks++; session.warning = null; notifyControl();
+      }
       port.postMessage({ type: "ack", token: session.token, request: message.request });
     } catch (error) {
-      try { port.postMessage({ type: "ack", token: session.token, request: message.request, error: error.message }); } catch {}
-      failure(error.message, session);
+      try { port.postMessage({ type: "ack", token: session.token, request: message.request, error: error.message, code: error.code, scope: error.scope }); } catch {}
+      if (error.scope === "source") {
+        const key = message.packet.sourceTrackId || session.trackSources.get(message.packet.id);
+        if (typeof key === "string" && key.length <= 200 && session.discoveredSources.size < 256)
+          session.discoveredSources.set(key, {sourceTrackId:key,kind:message.packet.kind || "remote",label:message.packet.label || "Audio",failed:true});
+        session.warning = "One track was interrupted and has a gap. The other tracks continue."; session.problem ??= session.warning; notifyControl(); }
+      else failure(error.message, session);
     }
   });
   port.onDisconnect.addListener(() => {
@@ -336,6 +395,11 @@ chrome.tabs.onRemoved.addListener(id => {
   notifyControl();
 });
 chrome.tabs.onUpdated.addListener((id, change) => {
+  if (typeof change.url === "string" && callGenerations.has(id)) {
+    const info = callInfo(id);
+    if (info.url !== null && info.url !== callAddress(change.url)) callChanged(id);
+    info.url = callAddress(change.url);
+  }
   if (change.status === "loading") {
     if (sessions.has(id) || [...frames].some(f => f.tabId === id)) setPageState(id, "navigating");
     for (const frame of frames) if (frame.tabId === id) { frame.sourceCount = 0; frame.heard = false; frame.obsolete = true; }
@@ -346,12 +410,14 @@ chrome.tabs.onUpdated.addListener((id, change) => {
 function controlStatus(tabId = null) {
   const value = tabId === null ? status() : sessions.has(tabId) ? status(sessions.get(tabId)) : saved.get(tabId) || { recording: false, tabId, path: null, message: lastStatus.message };
   const packet = { type: "status", recording: value.recording, tabId: value.tabId ?? null,
-    path: value.path ?? null, message: value.message, pageState: value.tabId == null ? undefined : value.pageState || pageState(value.tabId), tracks: value.tracks ?? 0, stopping: !!value.stopping };
+    path: value.path ?? null, message: value.message, captureId: value.captureId, documentGeneration: value.documentGeneration,
+    callGeneration: value.callGeneration, pageState: value.tabId == null ? undefined : value.pageState || pageState(value.tabId), tracks: value.tracks ?? 0, stopping: !!value.stopping };
   if (interrupted.length) packet.interrupted = interrupted;
   packet.sessions = [...sessions.values()].map(session => {
     const value = status(session);
     return { recording: true, tabId: session.tabId, path: session.path ?? null, captureId: session.token, tracks: session.tracks,
-      stopping: session.stopping, message: value.message, pageState: pageState(session.tabId) };
+      stopping: session.stopping, message: value.message, pageState: pageState(session.tabId), failedSources: value.failedSources,
+      documentGeneration: value.documentGeneration, callGeneration: session.callGeneration };
   });
   return packet;
 }
@@ -365,14 +431,20 @@ async function meetings() {
   }));
   const found = tabs.map(([tabId, tab]) => {
     try {
+      const session = sessions.get(tabId);
+      const known = !!tab && /^https?:/.test(tab.url || "");
+      if (!known) tab = session?.lastTab;
       if (!tab || !/^https?:/.test(tab.url || "")) return null;
+      if (session && known) session.lastTab = { ...tab };
+      if (known && callInfo(tabId).url === null) callInfo(tabId).url = callAddress(tab.url);
       // A can reload after its lookup finishes while B's is still pending.
       // Collect every row's current evidence synchronously after ALL lookups.
       const current = [...frames].filter(frame => frame.tabId === tabId && frame.sourceCount > 0);
-      const sourceCount = Math.min(4096, current.reduce((total, frame) => total + frame.sourceCount, 0));
+      const sourceCount = known ? Math.min(4096, current.reduce((total, frame) => total + frame.sourceCount, 0)) : session.lastSourceCount;
+      if (session && known) session.lastSourceCount = sourceCount;
       if (!sourceCount && !sessions.has(tabId)) return null;
       const heard = current.some(frame => frame.heard);
-      return { tabId, title: [...(tab.title || "Meeting")].slice(0, 200).join(""), url: new URL(tab.url).href.slice(0, 2048), sourceCount, heard, pageState: pageState(tabId) };
+      return { tabId, title: [...(tab.title || "Meeting")].slice(0, 200).join(""), url: new URL(tab.url).href.slice(0, 2048), sourceCount, heard, sourceCountKnown: known, documentGeneration: documentFor(tabId), callGeneration: callInfo(tabId).generation, pageState: pageState(tabId) };
     } catch { return null; }
   });
   return { type: "meetings", meetings: found.filter(Boolean) };
@@ -384,16 +456,19 @@ async function controlCommand(command) {
     if (![...frames].some(frame => frame.tabId === command.tabId && frame.sourceCount > 0))
       throw new Error("No audio is available from that meeting yet.");
     await start("tracks", command.tabId, { independent: command.independent === true,
-      captureLocal: command.captureLocal, microphone: command.microphone, keepOnNavigation: command.keepOnNavigation });
+      captureLocal: command.captureLocal, microphone: command.microphone, keepOnNavigation: command.keepOnNavigation, expectedCallGeneration: command.callGeneration });
   } else {
     if (!command.independent && firstSession() && firstSession().tabId !== command.tabId) throw new Error("A recording is already running. Stop it before starting another.");
     const session = sessions.get(command.tabId);
+    if (command.captureId !== undefined && session?.token !== command.captureId)
+      throw new Error("That recording is no longer active.");
     if (session) await stop(session, command.reason);
     else if (pendingStarts.has(command.tabId)) pendingStarts.get(command.tabId).cancelled = true;
   }
   return controlStatus(command.independent ? command.tabId : null);
 }
 function cancelPendingStart(command) {
+  if (command.captureId !== undefined && sessions.get(command.tabId)?.token !== command.captureId) return;
   const request = pendingStarts.get(command.tabId);
   if (request) request.cancelled = true;
   const session = sessions.get(command.tabId);
@@ -401,7 +476,7 @@ function cancelPendingStart(command) {
 }
 function notifyControl() { appControl.publish(); }
 const appControl = new AppControl({
-  runtime: chrome.runtime, alarms: chrome.alarms, capabilities: ["independent-sessions-v1", "call-evidence-v1", "page-state-v1"], cancelPending: cancelPendingStart,
+  runtime: chrome.runtime, alarms: chrome.alarms, capabilities: ["independent-sessions-v1", "call-evidence-v1", "page-state-v1", "multi-stream-v1"], cancelPending: cancelPendingStart,
   connected: async () => {
     await recovery;
     const tabs = await chrome.tabs.query({});

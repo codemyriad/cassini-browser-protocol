@@ -66,6 +66,19 @@
                   "closed",
                   "navigating"
                 ]
+              },
+              "sourceCountKnown": {
+                "type": "boolean"
+              },
+              "documentGeneration": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "callGeneration": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
               }
             },
             "required": [
@@ -171,6 +184,26 @@
                   "closed",
                   "navigating"
                 ]
+              },
+              "failedSources": {
+                "type": "array",
+                "maxItems": 256,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 200
+                }
+              },
+              "documentGeneration": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "callGeneration": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
               }
             },
             "required": [
@@ -188,6 +221,26 @@
             "closed",
             "navigating"
           ]
+        },
+        "failedSources": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "documentGeneration": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "callGeneration": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
         }
       },
       "required": [
@@ -313,6 +366,26 @@
             "closed",
             "navigating"
           ]
+        },
+        "failedSources": {
+          "type": "array",
+          "maxItems": 256,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        },
+        "documentGeneration": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "callGeneration": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
         }
       },
       "required": [

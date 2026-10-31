@@ -11,7 +11,7 @@ async function until(check) {
   const deadline = Date.now() + 3000;
   while (!check()) { assert.ok(Date.now() < deadline, 'control fixture timed out'); await new Promise(resolve => setImmediate(resolve)); }
 }
-async function setup(sourceCount = 3, previous = {}) {
+async function setup(sourceCount = 3, previous = {}, hostFeatures = []) {
   const ports = [], audio = [], alarms = new Map(), timers = new Map(), pages = [];
   const stored = { ...previous }; let timerID = 0, uuid = 0;
   const tabs = new Map([[2, { id: 2, title: 'Meeting B', url: 'https://meet.example/call' }], [99, { id: 99, title: 'Active unrelated page', url: 'https://other.example/' }]]);
@@ -22,7 +22,7 @@ async function setup(sourceCount = 3, previous = {}) {
         const port = { name, sent: [], closed: false, onMessage: event(), onDisconnect: event(),
           postMessage(packet) {
             this.sent.push(JSON.parse(JSON.stringify(packet)));
-            if (name === 'io.codemyriad.cassini') queueMicrotask(() => this.onMessage.emit(packet.type === 'start' ? { type: 'started', path: '/test/Recording-example' } : packet.type === 'stop' ? { type: 'stopped', path: '/test/Recording-example' } : { type: 'ack' }));
+            if (name === 'io.codemyriad.cassini') queueMicrotask(() => this.onMessage.emit(packet.type === 'start' ? { type: 'started', path: '/test/Recording-example', features: hostFeatures.filter(x=>packet.features?.includes(x)) } : packet.type === 'stop' ? { type: 'stopped', path: '/test/Recording-example' } : { type: 'ack' }));
           }, disconnect() { if (!this.closed) { this.closed = true; this.onDisconnect.emit(); } }
         };
         (name === 'io.codemyriad.cassini.control' ? ports : audio).push(port); return port;

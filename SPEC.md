@@ -283,3 +283,39 @@ writer-queue overflow. Report only-gap loss with session problemKind=`gap`; writ
 problemKind=`io` if both occurred. Both preserve available audio and explicit silence.
 The complete `conformance/native-session-gap/` fixture contains continuous mic audio and a
 one-second system gap, with both macos/gnome manifest variants.
+
+## Multi-stream capture (D52, extension 0.2.4; draft PR)
+
+This additive mode keeps version 1 and every legacy conversation. Start requests
+`features:["source-outcomes-v1"]`; `started.features` acknowledges support. Only
+then may the extension send `trackEnd` and `stop.discoveredSources`. An older
+host continues to receive its original packet types.
+
+`track.sourceTrackId` is an optional opaque ID, bounded to 200 UTF-8 bytes. It
+comes from a document's receiver/transceiver root (sender root for local browser
+tracks), never from a label. Replacement/resume spans use fresh `id` values and
+the same source key and label. Native microphone/system tracks omit it. Live or
+stored overlapping spans with one key must be refused rather than summed.
+
+A negotiated `trackEnd` carries id, reason (ended/replaced/retry/stopped/failed/
+callChanged), droppedFrames and endOffsetMs (nullable before an audio anchor).
+The host derives the authoritative stored end from admitted samples. An error
+with `scope:source` and id refuses only that source request: other tracks and
+this native connection remain usable. Framing/version/connection failures stay
+session failures. Repeated identical track declarations are idempotent.
+
+Stop carries its captureId; a mismatched negotiated stop is refused without
+ending the current capture. The discoveredSources summary retains sources that
+failed before opening a WAV. Each source has sourceTrackId, kind, label and a
+sticky failed flag. Recorded samples, including zeros/DC, count as received;
+inserted gap padding does not. The draft's hand-written outcome vectors propose
+neverAudio for zero received frames, lowAudio below 1000 ms, captured otherwise,
+and failed for a sticky source error. R63 requests coordinator review of that
+cutoff/shape. Per-track captureOutcome/receivedFrames and the top-level
+captureOutcome.sources reconcile the result; io takes precedence over capture.
+
+Source ownership is half-open at each othersSource.atMs. Outgoing source audio
+is masked at the boundary before recognition, mixing and export. This is not a
+transcript display rule. `callConnected` moves an enabled others side from the
+initial system/missing stand-in to browser tracks (D49). Existing lost/restored
+semantics stay intact. See conformance/multistream/ownership.json.

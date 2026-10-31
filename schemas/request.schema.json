@@ -26,6 +26,15 @@
             "string",
             "null"
           ]
+        },
+        "features": {
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 64
+          }
         }
       },
       "additionalProperties": true
@@ -77,6 +86,12 @@
             "string",
             "null"
           ]
+        },
+        "sourceTrackId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "$comment": "At most 200 UTF-8 bytes, independently of this character bound."
         }
       },
       "additionalProperties": true
@@ -144,9 +159,101 @@
             "error",
             "appQuit"
           ]
+        },
+        "captureId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "$comment": "At most 200 UTF-8 bytes, independently of this character bound."
+        },
+        "discoveredSources": {
+          "type": "array",
+          "maxItems": 256,
+          "items": {
+            "$ref": "#/$defs/discoveredSource"
+          }
+        }
+      },
+      "additionalProperties": true
+    },
+    {
+      "type": "object",
+      "required": [
+        "type",
+        "id",
+        "reason",
+        "droppedFrames",
+        "endOffsetMs"
+      ],
+      "properties": {
+        "type": {
+          "const": "trackEnd"
+        },
+        "id": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "$comment": "At most 200 UTF-8 bytes, independently of this character bound."
+        },
+        "reason": {
+          "enum": [
+            "ended",
+            "replaced",
+            "retry",
+            "stopped",
+            "failed",
+            "callChanged"
+          ]
+        },
+        "droppedFrames": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 2147483629
+        },
+        "endOffsetMs": {
+          "type": [
+            "number",
+            "null"
+          ],
+          "minimum": 0,
+          "maximum": 86460000
         }
       },
       "additionalProperties": true
     }
-  ]
+  ],
+  "$defs": {
+    "discoveredSource": {
+      "type": "object",
+      "required": [
+        "sourceTrackId",
+        "kind"
+      ],
+      "properties": {
+        "sourceTrackId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "$comment": "At most 200 UTF-8 bytes, independently of this character bound."
+        },
+        "kind": {
+          "enum": [
+            "local",
+            "remote",
+            "media",
+            "tab",
+            "application"
+          ]
+        },
+        "label": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "failed": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": true
+    }
+  }
 }
