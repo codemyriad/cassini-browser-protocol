@@ -5,7 +5,10 @@
   real framed browser fixture, per-source IO/limit/chunk refusals, duplicate
   declarations, overlap rejection, stale Stop and seventy source cycles.
 - `lifecycle.json`: literal long-grace/rejoin/unknown-row/healthy-PCM/D49 cases,
-  plus D52.4 control-loss and `transportAlive` (audio transport closed) cases.
+  plus D52.4 control-loss and `transportAlive` (audio transport closed) cases,
+  and D52.5 ask-once resume cases: case fields `resumeCapture`/`callGeneration`,
+  row fields `callGeneration`, `controlConnection` (changes only with a new
+  hello) and `resumeRefused`, and the action `askResume` (see the vector note).
   The Python policy is an independent oracle, not production code for either app.
 - `ownership.json`: literal half-open D49 and lost/restored seams. Desktop
   adoption must exercise its actual mix/recognition/export path against them.

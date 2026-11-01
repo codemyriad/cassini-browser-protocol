@@ -483,7 +483,9 @@ relay that keeps the transport open but silent. Times are monotonic.
   transport has an open remote span (declared, not yet ended by trackEnd or
   stop) that has already delivered PCM. It is re-evaluated, not sticky: before
   the first remote PCM, and after the last such span ends, nothing can go stale.
-  Closing uses the app's existing EOF path, so the recording keeps running and
+  Every frame received on that audio transport counts toward this deadline:
+  PCM (`audio`), `track`, `sources` and `trackEnd` alike (D52.5); frames on
+  the control connection do not. Closing uses the app's existing EOF path, so the recording keeps running and
   falls back to computer sound with `othersSource` reason lost (SPEC-CONTROL.md,
   D52.4 Q3). Rationale: the extension's source retry backs off 1, 5, 15 and 30
   seconds and the app cannot see that retry state; 40 = 30 + the extension's

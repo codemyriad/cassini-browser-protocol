@@ -20,6 +20,19 @@ check the existing no-audio guard. A false/missing heard value never prevents
 manual Record of a positive-source candidate. Unrelated capabilities do not
 activate the heard requirement.
 
+D52.5 cases add optional `recordings`: recordings of this browser instance the
+app already holds (captureId, tabId, callGeneration and current othersSource,
+always `{"source":"system","reason":"lost"}`), and optional `expect.resume`
+(absent means false). A recording on system/lost for the meeting's tab and
+callGeneration blocks the automatic Start (`automatic:false`); with heard and a
+positive count the app instead asks once to resume that recording through
+resume-capture-v1 (`resume:true`). A lost recording of another callGeneration
+or another tab blocks nothing. `manual` is unchanged. Desktop adapters seed
+these recordings into their real recording registry before delivering the
+hello and meetings packets, then check that no Start is sent and that exactly
+one resume for that captureId is (or is not) sent. `auto_start.py` is the
+independent protocol-side oracle for these expectations, not a desktop runner.
+
 The protocol tests validate the wire inputs and exercise every manual expectation
 through the real extension control handler. Desktop adapters must test their own
 automatic policy as well; recomputing an expected boolean in a fixture runner is
