@@ -13,6 +13,7 @@ async function fixture(run) {
   addEventListener(){}getTransceivers(){return this.slots}getSenders(){return this.senders}close(){this.signalingState='closed'}
  }
  for(const name of ['getStats','createOffer','createAnswer','setLocalDescription','setRemoteDescription','addTrack','addTransceiver'])Peer.prototype[name]=()=>{};
+ Peer.prototype.setRemoteDescription=function(){return this.descriptionTask || Promise.resolve()};
  class Stream {constructor(tracks){this.tracks=tracks}getAudioTracks(){return this.tracks}}
  class Context {sampleRate=48000;state='running';async close(){this.state='closed'}}
  const control=async data=>{for(const fn of listeners)await fn({source:window,data:{channel:'cassini-control',...data}})};
@@ -37,7 +38,7 @@ async function fixture(run) {
   target.slots.push(slot);return slot;
  }
  const tick=async()=>{now+=1000;await timers[0]();};
- const scan=async()=>{assert.ok(timers[1],'capture scan exists');await timers[1]();};
+ const scan=async()=>{assert.ok(timers[1],'capture scan exists');await timers.at(-1)();};
  let activeToken='recording';
  try {await run({peer,window,remote,tick,scan,captures,messages,async stop(){await control({type:'stop',token:activeToken})},async start(token='recording'){activeToken=token;await control({type:'start',token,origin:0,moduleURL,workletURL:''})}})}
  finally {await control({type:'stop',token:activeToken});delete globalThis.__cassiniPageCapture;}
@@ -77,4 +78,41 @@ test('an in-page call switch retires A and never opens a B source under A token'
  assert.notEqual(f.captures[1].sourceTrackId,first.sourceTrackId);
  assert.deepEqual(f.messages.filter(m=>m.type==='packet'&&m.packet.type==='track').map(m=>m.token),['A','B']);
  assert.equal(f.peer.signalingState,'stable','old A peer deliberately closes late');
+}));
+
+
+test('a reused peer needs a fresh applied remote description and fresh RTP in the new call',()=>fixture(async f=>{
+ const a=f.remote();await f.tick();a.packets=10;await f.tick();await f.start('A');
+ const first=f.captures[0];f.window.location.href='https://meet.test/call-B';
+ await f.tick();await f.scan();assert.equal(first.stopped,true);
+ await f.stop();await f.start('B');a.packets=20;await f.tick();await f.scan();
+ assert.equal(f.captures.length,1,'old connected peer stays fenced without new negotiation');
+ await f.peer.setRemoteDescription({type:'answer',sdp:'B'});await f.tick();await f.scan();
+ assert.equal(f.captures.length,1,'a fresh stats baseline alone is not audio evidence');
+ a.packets=30;await f.tick();await f.scan();
+ assert.equal(f.captures.length,2,'a reused receiver can record the new call');
+ assert.equal(f.captures[1].sourceTrackId,first.sourceTrackId);
+ assert.notEqual(f.captures[1].id,first.id);
+ assert.deepEqual(f.messages.filter(m=>m.type==='packet'&&m.packet.type==='track').map(m=>m.token),['A','B']);
+}));
+
+test('an old remote-description completion cannot rebind an old peer to the new call',()=>fixture(async f=>{
+ const a=f.remote();await f.tick();a.packets=10;await f.tick();await f.start('A');
+ let release;f.peer.descriptionTask=new Promise(resolve=>release=resolve);
+ const pending=f.peer.setRemoteDescription({type:'answer',sdp:'old-A'});
+ f.window.location.href='https://meet.test/call-B';await f.tick();release();await pending;
+ await f.scan();await f.stop();await f.start('B');a.packets=20;await f.tick();await f.scan();
+ assert.equal(f.captures.length,1,'delayed old negotiation remains fenced');
+ f.peer.descriptionTask=Promise.reject(new Error('new negotiation failed'));
+ await assert.rejects(f.peer.setRemoteDescription({type:'answer',sdp:'failed-B'}));
+ a.packets=30;await f.tick();await f.scan();
+ assert.equal(f.captures.length,1,'failed new negotiation cannot rebind the peer either');
+}));
+
+test('a late old peer sender is not recorded by the new call',()=>fixture(async f=>{
+ f.peer.senders=[{track:{id:'old-mic',kind:'audio',readyState:'live',enabled:true,muted:false},getParameters:()=>({encodings:[]})}];
+ await f.start('A');assert.equal(f.captures.length,1);
+ f.window.location.href='https://meet.test/call-B';await f.tick();await f.scan();
+ await f.stop();await f.start('B');
+ assert.equal(f.captures.length,1,'old call sender cannot leak into B');
 }));

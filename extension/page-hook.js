@@ -1,6 +1,7 @@
 (() => {
   if (!window.RTCPeerConnection) return;
   const peers = new Set();
+  const peerGenerations = new WeakMap();
   const knownLocalTracks = new WeakSet();
   const sourceRoots = new WeakMap();
   const sourceKeys = new WeakMap();
@@ -12,12 +13,13 @@
     const next = window.location?.href?.split("#", 1)[0];
     if (next !== callAddress) { callAddress = next; callGeneration++; resetEvidence(); }
   }
-  function receiverGeneration(receiver) {
+  function receiverGeneration(receiver, pc) {
     let value = receiverGenerations.get(receiver);
     if (!value || value.track !== receiver.track) {
-      value = { track: receiver.track, generation: callGeneration };
+      const generation = peerGenerations.get(pc);
+      value = { track: receiver.track, generation };
       receiverGenerations.set(receiver, value);
-      trackGenerations.set(sourceRoot(receiver.track), callGeneration);
+      trackGenerations.set(sourceRoot(receiver.track), generation);
     }
     return value.generation;
   }
@@ -46,8 +48,10 @@
   }
   const original = window.RTCPeerConnection;
   const remember = pc => {
+    refreshCall();
     if (peers.has(pc)) return;
     peers.add(pc);
+    peerGenerations.set(pc, callGeneration);
     pc.addEventListener("connectionstatechange", () => {
       if (pc.connectionState === "closed") peers.delete(pc);
       discover();
@@ -68,7 +72,27 @@
   // Recovery for connections created by a cached constructor or before the extension loaded.
   for (const name of ["getStats", "createOffer", "createAnswer", "setLocalDescription", "setRemoteDescription", "addTrack", "addTransceiver"]) {
     const method = original.prototype[name];
-    original.prototype[name] = function (...args) { remember(this); return Reflect.apply(method, this, args); };
+    original.prototype[name] = function (...args) {
+      remember(this);
+      const generation = callGeneration;
+      const value = Reflect.apply(method, this, args);
+      if (name === "setRemoteDescription" && typeof value?.then === "function") {
+        value.then(() => {
+          refreshCall();
+          // A new call may reuse the same peer/receiver, but an old delayed
+          // negotiation and read-only stats cannot carry A's sources into B.
+          if (generation !== callGeneration || peerGenerations.get(this) === generation) return;
+          peerGenerations.set(this, generation);
+          for (const { receiver } of this.getTransceivers()) {
+            receiverGenerations.delete(receiver);
+            previousStats.delete(receiver);
+            packetProof.delete(receiver);
+          }
+          discover();
+        }, () => {}).catch(() => {});
+      }
+      return value;
+    };
   }
   // Discovery is independent of capture: no AudioContext, cloned stream or PCM
   // is created until an explicit recording command arrives.
@@ -85,7 +109,7 @@
       for (const transceiver of pc.getTransceivers()) {
         const track = transceiver.receiver?.track;
         if (["recvonly", "sendrecv"].includes(transceiver.currentDirection) && track?.kind === "audio" && track.readyState === "live") {
-          if (receiverGeneration(transceiver.receiver) !== callGeneration) continue;
+          if (receiverGeneration(transceiver.receiver, pc) !== callGeneration) continue;
           sources.add(track);
           receivers.set(transceiver.receiver, pc);
         }
@@ -221,14 +245,14 @@
                 const receiver = transceiver.receiver;
                 const proof = receiver && packetProof.get(receiver);
                 if (connected(pc) && ["recvonly", "sendrecv"].includes(transceiver.currentDirection) && receiver?.track &&
-                    proof?.pc === pc && proof.track === receiver.track && receiverGeneration(receiver) === callGeneration) {
+                    proof?.pc === pc && proof.track === receiver.track && receiverGeneration(receiver, pc) === callGeneration) {
                   sources.set(receiver.track, { kind: "remote", root: receiver });
                 }
               }
               for (const sender of pc.getSenders()) if (sender.track) {
                 knownLocalTracks.add(sender.track);
                 knownLocalTracks.add(sourceRoot(sender.track));
-                if (message.captureLocal === false) continue;
+                if (message.captureLocal === false || peerGenerations.get(pc) !== callGeneration) continue;
                 const metadata = { kind: "local", sender, pc, root: sender };
                 sources.set(sender.track, metadata);
                 state.localMetadata.set(sender.track, metadata);

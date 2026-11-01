@@ -387,6 +387,11 @@ A changed call address retires the old token before admitting new-call audio;
 fragment-only navigation preserves the existing call. Document-local generation
 changes likewise fence old spans. Reloading the same address retains the
 browser-owned call generation. Old peers closing late cannot open B under A.
+Peer roots retain their call binding across stats reads and local sender changes.
+A reused peer is rebound only after a successful remote description whose API
+call began in the new generation; a negotiation begun in A and completed in B
+cannot rebind it. Fresh RTP baseline/progress is required before reopening its
+remote spans. Sender/media aliases belonging to a fenced peer stay excluded.
 
 Live sources retry indefinitely with monotonic deadlines: 1, 5, 15, then 30-second
 backoff, resetting after 60 seconds of healthy acknowledged audio (zero samples
