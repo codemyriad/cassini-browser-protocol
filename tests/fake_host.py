@@ -2,7 +2,8 @@
 """Deliberately corruptible host fixture. Implements only the happy-path test conversation."""
 import base64, datetime, json, os, pathlib, struct, sys, uuid, wave
 mode=os.environ.get('CASSINI_BAD_HOST','')
-root=pathlib.Path(os.environ['CASSINI_FAKE_ROOT']);directory=None;manifest=None;audio={}
+# Honours the test-only Library override; 'ignore-library' models a host that does not.
+root=pathlib.Path(os.environ['CASSINI_FAKE_ROOT'] if mode=='ignore-library' else os.environ['CASSINI_LIBRARY_DIR']);directory=None;manifest=None;audio={}
 def reply(value):
  data=json.dumps(value).encode();sys.stdout.buffer.write(struct.pack('=I',len(data))+data);sys.stdout.buffer.flush()
 def checkpoint():

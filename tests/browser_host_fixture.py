@@ -18,7 +18,8 @@ import unicodedata
 import uuid
 import wave
 
-root = pathlib.Path(sys.argv[1])
+# An explicit root wins; otherwise the test-only Library override. Never a user Library.
+root = pathlib.Path(sys.argv[1] if len(sys.argv) > 1 else os.environ['CASSINI_LIBRARY_DIR'])
 manifest = None
 directory = None
 audio = {}
