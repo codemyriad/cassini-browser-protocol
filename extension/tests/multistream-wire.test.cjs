@@ -15,6 +15,7 @@ test('outcome packet types are enabled only by native host negotiation',async()=
    assert.deepEqual(Array.from(app.audio[0].sent[0].features),['source-outcomes-v1']);
    assert.equal(app.pages[0].sent.find(m=>m.type==='start').sourceOutcomes,enabled);
    if(enabled){assert.equal((await packet(app,{type:'trackEnd',id:'span',reason:'ended',endOffsetMs:1000,droppedFrames:0},1)).error,undefined)}
+   else {app.pages[0].onMessage.emit({type:'packet',request:'legacy-source',packet:{type:'sources',discoveredSources:[{sourceTrackId:'ignored',kind:'remote'}]}});assert.equal(app.audio[0].sent.some(p=>p.type==='sources'),false)}
    await app.command(command('stop','stop'));
    const stopped=app.audio[0].sent.find(m=>m.type==='stop');assert.equal(stopped.captureId,app.audio[0].sent[0].captureId);
    assert.equal(Array.isArray(stopped.discoveredSources),enabled);
@@ -68,6 +69,8 @@ test('call address change retires A, publishes a new generation, and rejects lat
   await until(()=>release);assert.equal(app.api.controlStatus().sessions[0].stopping,true);
   const refused=await packet(app,{type:'audio',id:'old-span',sequence:0,offsetMs:0,pcm:'AAA='},1);
   assert.equal(refused.scope,'source');assert.ok(!port.sent.some(p=>p.type==='audio'));
+  const lateSource=await packet(app,{type:'sources',discoveredSources:[{sourceTrackId:'late-A',kind:'remote',failed:true}]},2);
+  assert.equal(lateSource.code,'callChanged');assert.deepEqual(Array.from(app.api.controlStatus().sessions[0].failedSources),[]);
   release();await until(()=>port.closed);
   const stop=port.sent.find(p=>p.type==='stop');assert.equal(stop.reason,'callEnded');assert.equal(stop.captureId,old.captureId);
   app.tabs.get(2).url='https://meet.example/call-B';app.pages[0].onMessage.emit({type:'discovery',sourceCount:1,heard:true});
@@ -107,5 +110,33 @@ test('a legacy full discovery update is streamed without the old 64/256 truncati
   assert.ok(packets.length>1,'multibyte source labels require more than one native frame');
   assert.ok(packets.every(p=>Buffer.byteLength(JSON.stringify(p))<=400000));
   await app.command(command('stop','stop'));
+ }finally{app.close()}
+});
+
+test('whole-tab discovery is durable before offscreen setup and setup failure marks that source',async()=>{
+ const app=await setup(3,{},['source-outcomes-v1']);
+ try{
+  app.chrome.tabCapture.getMediaStreamId=async()=>'granted-stream';
+  app.chrome.offscreen.createDocument=async()=>{
+   assert.equal(app.audio[0].sent.filter(p=>p.type==='sources').length,1,'the tab source is announced before any offscreen work');
+   throw Error('generated offscreen setup failure');
+  };
+  await assert.rejects(app.api.start('tab',2),/generated offscreen setup failure/);
+  const updates=app.audio[0].sent.filter(p=>p.type==='sources').flatMap(p=>p.discoveredSources);
+  assert.equal(updates.length,2);assert.equal(updates[0].kind,'tab');assert.equal(updates[0].failed,false);assert.equal(updates[1].failed,true);
+  assert.equal(updates[0].sourceTrackId,updates[1].sourceTrackId);
+  assert.equal(app.audio[0].sent.filter(p=>p.type==='track').length,0);
+ }finally{app.close()}
+});
+
+test('source batches validate UTF-8 bounds atomically without closing other audio',async()=>{
+ const app=await setup(3,{},['source-outcomes-v1']);
+ try{
+  await app.command(command('start','start'));
+  const invalid=await packet(app,{type:'sources',discoveredSources:[{sourceTrackId:'would-be-accepted',kind:'remote'},{sourceTrackId:'é'.repeat(101),kind:'remote'}]},1);
+  assert.equal(invalid.scope,'command');assert.equal(app.audio[0].sent.some(p=>p.type==='sources'),false);
+  assert.equal((await packet(app,{type:'sources',discoveredSources:[{sourceTrackId:'é'.repeat(100),kind:'remote',failed:false}]},2)).error,undefined);
+  assert.equal((await packet(app,{type:'audio',id:'unrelated',sequence:0,offsetMs:0,pcm:'AAA='},3)).error,undefined);
+  assert.equal(app.audio[0].closed,false);await app.command(command('stop','stop'));
  }finally{app.close()}
 });

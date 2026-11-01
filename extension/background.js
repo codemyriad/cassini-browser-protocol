@@ -269,11 +269,17 @@ async function start(mode, tabId = null, options = {}) {
           frame.port.postMessage({ type: "start", token: session.token, origin: session.origin, captureLocal: session.captureLocal, sourceOutcomes: session.sourceOutcomes });
         }
       } else {
+        if (session.sourceOutcomes) {
+          session.tabSourceId = crypto.randomUUID();
+          await recordSources(session, [{sourceTrackId:session.tabSourceId,kind:"tab",label:"Tab audio",failed:false}]);
+          checkStarting();
+        }
         if (await hasOffscreenDocument()) await chrome.offscreen.closeDocument();
         checkStarting();
         await chrome.offscreen.createDocument({ url: "offscreen.html", reasons: ["USER_MEDIA"], justification: "Record the selected tab audio locally while the popup is closed." });
         checkStarting();
-        const response = await chrome.runtime.sendMessage({ target: "offscreen", type: "start", streamId, origin: session.origin });
+        const response = await chrome.runtime.sendMessage({ target: "offscreen", type: "start", streamId, origin: session.origin,
+          sourceTrackId: session.tabSourceId, sourceOutcomes: session.sourceOutcomes });
         if (response?.error) throw new Error(response.error);
       }
       checkStarting();
@@ -283,6 +289,9 @@ async function start(mode, tabId = null, options = {}) {
     })();
     try { await session.starting; } catch (error) {
       session.problem ??= error.message;
+      if (session.sourceOutcomes && session.tabSourceId && !session.stopping && !session.host?.closed) {
+        await recordSources(session, [{sourceTrackId:session.tabSourceId,kind:"tab",label:"Tab audio",failed:true}]).catch(() => {});
+      }
       // Once the app owns a folder, an unexpected startup failure is browser
       // loss too. Preserve its native inputs/fallback just like a later relay
       // failure. An explicit Stop during startup must still finalize normally.
@@ -361,7 +370,11 @@ chrome.runtime.onConnect.addListener(port => {
       if (JSON.stringify(message.packet).length > 400000) throw new Error("The meeting page sent an oversized audio chunk.");
       if (message.packet.type === "track" && !session.trackIds.has(message.packet.id) && session.trackIds.size >= 64)
         throw Object.assign(new Error("This recording has reached its track limit."), { code: "limit", scope: "source" });
-      if (message.packet.type === "sources") await recordSources(session, message.packet.discoveredSources);
+      if (message.packet.type === "sources") {
+        if (!Array.isArray(message.packet.discoveredSources) || !message.packet.discoveredSources.length)
+          throw Object.assign(new Error("Empty audio source update."), {scope:"command",code:"source"});
+        await recordSources(session, message.packet.discoveredSources);
+      }
       else await session.host.send(message.packet);
       if (message.packet.type === "track" && !session.trackIds.has(message.packet.id)) {
         session.trackIds.add(message.packet.id);
@@ -403,9 +416,14 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     await recovery;
     if (offscreen) {
       const active = [...sessions.values()].find(s => s.mode === "tab");
+      if (["warning", "error"].includes(message.type) && active?.sourceOutcomes && active.tabSourceId) {
+        await recordSources(active, [{sourceTrackId:active.tabSourceId,kind:"tab",label:"Tab audio",failed:true}]);
+      }
       if (message.type === "warning" && active) { active.problem ??= "Tab audio lost samples during a recording stall."; active.warning = active.problem; return {}; }
       if (message.type === "error") { failure(message.message, active); return {}; }
-      if (message.type === "packet" && active?.mode === "tab" && ["track", "audio"].includes(message.packet?.type)) {
+      if (message.type === "packet" && active?.mode === "tab" && ["track", "audio", ...(active.sourceOutcomes ? ["trackEnd"] : [])].includes(message.packet?.type)) {
+        if (active.callChanged && message.packet.type !== "trackEnd")
+          throw Object.assign(new Error("This audio belongs to a different call."), {code:"callChanged",scope:"source"});
         await active.host.send(message.packet);
         if (message.packet.type === "track" && active) { active.tracks++; notifyControl(); }
         return {};
@@ -417,7 +435,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     else if (message.type === "stop") await stop();
     else if (message.type !== "status") throw new Error("Unknown control message.");
     return status();
-  })().then(respond, error => respond({ error: error.message }));
+  })().then(respond, error => respond({ error: error.message, code: error.code, scope: error.scope }));
   return true;
 });
 chrome.tabs.onRemoved.addListener(id => {
