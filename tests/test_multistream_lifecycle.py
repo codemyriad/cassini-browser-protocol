@@ -50,11 +50,17 @@ class LifecycleTests(unittest.TestCase):
             if [mutant.step(visible_only(s)) for s in case['steps']]!=[s['expect'] for s in case['steps']]: failing.add(case['name'])
         self.assertEqual(failing,{'transport-lost-with-unknown-count-falls-back-at-once',
             'transport-lost-during-zero-count-grace-keeps-the-call-end-deadline','transport-lost-while-navigating-falls-back-at-once',
-            'D52.5-ask-waits-for-control-present-row-and-known-positive-count'})
+            'D52.5-ask-waits-for-control-present-page-row-known-positive-count-and-same-call'})
 
 D52_5={'D52.5-transport-lost-asks-resume-once-then-restores','D52.5-refused-resume-is-not-retried-on-a-timer-only-on-a-new-hello',
-    'D52.5-frozen-companion-asks-once-per-new-control-connection','D52.5-ask-waits-for-control-present-row-and-known-positive-count',
-    'D52.5-ask-needs-heard-in-the-same-call-generation','D52.5-a-new-loss-after-restore-asks-again'}
+    'D52.5-frozen-companion-asks-once-per-new-control-connection','D52.5-ask-waits-for-control-present-page-row-known-positive-count-and-same-call',
+    'D52.5-ask-needs-heard-in-the-same-call-generation','D52.5-a-new-loss-after-restore-asks-again',
+    'D52.5-other-call-heard-does-not-arm-grace-or-restore'}
+def mutated(old,new):
+    source=(ROOT/'conformance/multistream/lifecycle.py').read_text()
+    assert source.count(old)==1,old
+    namespace={};exec(compile(source.replace(old,new),'lifecycle-mutant','exec'),namespace)
+    return namespace['Policy']
 def failing_cases(cls,rewrite=lambda s:s):
     failing=set()
     for case in json.loads((ROOT/'conformance/multistream/lifecycle.json').read_text())['cases']:
@@ -104,10 +110,16 @@ class ResumeOnceTests(unittest.TestCase):
         self.assertTrue(failing_cases(AfterRefusalNextTick)&D52_5)
     def test_never_reasking_on_a_new_hello_or_ignoring_the_generation_fails(self):
         self.assertTrue(failing_cases(None,lambda s:{k:v for k,v in s.items() if k!='controlConnection'})&D52_5)
-        class AnyHeard(policy.Policy):
-            def step(self,row):
-                return super().step(dict(row,callGeneration=self.generation))
-        self.assertIn('D52.5-ask-needs-heard-in-the-same-call-generation',failing_cases(AnyHeard))
+        # Review #32: heard scoped to the recording's generation, but the ask
+        # ignores the current row's callGeneration.
+        ask_any_row=mutated("and generation == self.generation and self.heard","and self.heard")
+        self.assertIn('D52.5-ask-waits-for-control-present-page-row-known-positive-count-and-same-call',failing_cases(ask_any_row))
+        # Review #32 (agy): heard latched from any generation pollutes restore and the grace timer.
+        unscoped=mutated("row.get('heard') is True and self.generation in (None, generation)","row.get('heard') is True")
+        self.assertIn('D52.5-other-call-heard-does-not-arm-grace-or-restore',failing_cases(unscoped))
+        # A navigating page with a positive count is not a present page.
+        navigating_is_present=lambda s:dict(s,pageState='present') if s.get('pageState')=='navigating' and s.get('sourceCount',0)>0 else s
+        self.assertIn('D52.5-ask-waits-for-control-present-page-row-known-positive-count-and-same-call',failing_cases(None,navigating_is_present))
         class OncePerRecording(policy.Policy):  # never asks twice on one connection, even after a new loss
             def step(self,row):
                 self.ever=getattr(self,'ever',set());connection=row.get('controlConnection',0)

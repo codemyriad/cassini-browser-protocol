@@ -145,9 +145,9 @@ The version-1 control envelope is unchanged; heard is optional for legacy reader
 [`auto-start-vectors.json`](conformance/control/auto-start-vectors.json) inputs and
 hand-written expectations must run against each desktop's production auto/manual
 start policy; see [adapter assumptions](conformance/control/AUTO-START.md).
-D52.5 adds one exclusion: a call (same tab and callGeneration) whose recording
-of this browser instance is on a `system/lost` fallback MUST NOT be started
-automatically; it may only be resumed, asked once (see "Control heartbeat").
+D52.5 adds one exclusion: a call (tabId, callGeneration) with a recording on a
+`system/lost` fallback, under any control peer past or present, MUST NOT be
+started automatically; it may only be resumed, asked once (see "Control heartbeat").
 
 ## Product behavior shared by both apps
 
@@ -580,35 +580,50 @@ missing/BROWSER_RETURN_GRACE rules apply from the moment of control loss.
 These are app-side rules; the extension and the wire are unchanged.
 
 - *Ask once.* For a recording on a `system/lost` fallback whose browser's
-  hello lists `resume-capture-v1`, the app MUST send at most one
-  resume-capture-v1 Start (`resumeCapture` naming that recording) per loss and
-  per control connection. It asks at the first policy tick where control is
-  alive, the recording's tab row is present with a known positive
-  sourceCount, the row's callGeneration equals the recording's callGeneration,
-  and heard:true has been seen for that same callGeneration. After that resume
-  is refused or fails (error result, refused native resume, missing or
+  hello lists `resume-capture-v1`, the app MUST send one resume-capture-v1
+  Start (`resumeCapture` naming that recording) at the first policy tick where
+  all of these hold: the recording's audio transport is closed; control is
+  alive; the page is present (pageState `present`, not navigating or closed);
+  the call's row is present with a known positive sourceCount; the row's
+  callGeneration equals the recording's callGeneration; and heard:true has
+  been seen at any time during this recording on a row of that same
+  callGeneration (another call's heard never counts, and it never arms this
+  recording's restore or OTHERS_GONE_GRACE either). After that resume is
+  refused or fails (error result, refused native resume, missing or
   mismatched proof), and while it is still pending, the app MUST NOT ask
   again on the same control connection: there is no retry on later ticks and
-  no retry timer. It MAY ask once more only on a new control connection (a new
-  hello), whose predecessor's in-flight commands were discarded. A successful
+  no retry timer. On each new control connection (a new hello), whose
+  predecessor's in-flight commands were discarded, the app MUST ask once
+  more, at the first tick where the conditions above hold. A successful
   attach (`restored`) ends the loss; a later fallback to `system/lost` is a
   new loss. This mirrors D49's "ask once" for the initial system/missing
   stand-in, and a failed resume is still never retried as a fresh Start
   (R67, above).
-- *No second recording.* While a recording of this browser instance is on
-  `system/lost` for a call (same tabId and callGeneration), the app MUST NOT
+- *Call identity.* callGeneration is a browser-generated, unguessable
+  identifier (the extension uses a random UUID per tab call; see "Call
+  identity across service-worker restart"), so it cannot collide between
+  browsers or calls. Apps MUST match a lost recording to a call by
+  (tabId, callGeneration) across all control peers, past and present, never
+  by the control peer, connection or hello the recording was started under.
+  A frozen companion that returns as a new control peer with a fresh hello
+  therefore still finds its lost recording.
+- *No second recording.* While a recording of (tabId, callGeneration) is on
+  `system/lost`, that call is recording: its row shows Stop (the live
+  indicator, not Record), and Record all skips it. The app MUST NOT
   automatically Start that call, even when the `call-evidence-v1` auto-start
   rule would otherwise start it, including after a frozen companion returns
-  as a new control peer with a fresh hello. It MAY only resume that recording
-  under the ask-once rule, so no second folder is created for the call. A
-  different callGeneration in that tab, or a different tab, follows the
-  ordinary auto-start rules. Explicit manual Record is not changed by this
-  rule.
+  as a new control peer. It MAY only resume that recording under the
+  ask-once rule, so no second folder is created for the call. After the user
+  stops that recording, a manual Record is an ordinary independent Start
+  with a new identity (R67). A different callGeneration in that tab, or a
+  different tab, follows the ordinary auto-start rules.
 
 Literal cases: the `resumeCapture` cases (action `askResume`) in
 `conformance/multistream/lifecycle.json` and the `recordings` cases in
-`conformance/control/auto-start-vectors.json` (field `expect.resume`), each
-with an independent oracle (`lifecycle.py`, `auto_start.py`).
+`conformance/control/auto-start-vectors.json` (fields `heardSeen`,
+`controlPeer`, `expect.resume`), each with an independent oracle
+(`lifecycle.py`, `auto_start.py`). The `PCM_STALE_AFTER` watchdog that closes
+the transport has its own cases in `conformance/multistream/stale-watchdog.json`.
 
 Shared literal cases: `conformance/control/heartbeat-vectors.json` (ping/loss
 timing and the exact wire replies, independent oracle `heartbeat.py`) and the

@@ -27,9 +27,10 @@ real retained microphone/system capture (private generated audio):
   audio transport closed) is eligible like the D49 system/missing stand-in; its
   seam writes browser/restored instead of browser/callConnected. Run `lostSeam`
   through the same placement path as `seam`.
-- D52.5: the app asks to resume a system/lost recording at most once per loss
-  and control connection, and never auto-starts a second recording of that
-  call. Timing cases are the `resumeCapture` cases in
+- D52.5: the app asks to resume a system/lost recording (its audio transport
+  closed) once per loss and control connection, once more on each new hello,
+  and never auto-starts a second recording of that call, matched by
+  (tabId, callGeneration) across all control peers. Timing cases are the `resumeCapture` cases in
   `../multistream/lifecycle.json` (`askResume`); the auto-start exclusion is
   in `auto-start-vectors.json` (`recordings`, `expect.resume`).
 

@@ -52,7 +52,10 @@ class ControlTests(unittest.TestCase):
                 self.assertIs(type(case['expect'].get('resume',False)),bool)
                 self.assertLessEqual(set(case['expect']),{'automatic','manual','resume'})
                 for recording in case.get('recordings',[]):
-                    self.assertEqual(set(recording),{'captureId','tabId','callGeneration','othersSource'})
+                    self.assertLessEqual({'captureId','tabId','callGeneration','othersSource'},set(recording))
+                    self.assertLessEqual(set(recording),{'captureId','tabId','callGeneration','othersSource','heardSeen','controlPeer'})
+                    self.assertIs(type(recording.get('heardSeen',False)),bool)
+                    self.assertIn(recording.get('controlPeer','current'),['current','earlier'])
                     self.assertTrue(validator.is_valid(dict(type='meetings',meetings=[dict(case['meeting'],tabId=recording['tabId'],callGeneration=recording['callGeneration'])])))
                     self.assertEqual(recording['othersSource'],dict(source='system',reason='lost'))
                 if case.get('recordings'): self.assertIn('callGeneration',case['meeting'])

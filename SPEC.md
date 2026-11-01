@@ -485,7 +485,14 @@ relay that keeps the transport open but silent. Times are monotonic.
   the first remote PCM, and after the last such span ends, nothing can go stale.
   Every frame received on that audio transport counts toward this deadline:
   PCM (`audio`), `track`, `sources` and `trackEnd` alike (D52.5); frames on
-  the control connection do not. Closing uses the app's existing EOF path, so
+  the control connection do not. The comparison is normative: an app that
+  runs this watchdog MUST treat the transport as stale exactly when it is
+  armed and `now - lastAudioTransportFrame >= 45 s` (so 44.999 s after the
+  last frame it is still open and at 45.000 s it is closed), never earlier,
+  and SHOULD close it within one policy tick. A frame arriving at or after
+  that deadline is too late. Literal cases with an independent oracle:
+  `conformance/multistream/stale-watchdog.json` (`stale_watchdog.py`).
+  Closing uses the app's existing EOF path, so
   the recording keeps running and falls back to computer sound with
   `othersSource` reason lost (SPEC-CONTROL.md, D52.4 Q3). Rationale (D52.5
   amendment): the extension's source retry backs off 1, 5, 15 and 30 seconds

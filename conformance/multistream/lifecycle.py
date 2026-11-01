@@ -5,9 +5,9 @@ class Policy:
         self.heard = self.stopped = False
         self.ended = self.closed = self.missing = None
         # D52.5: resume-capture-v1 negotiated, and the recording's callGeneration.
+        # heard latches only on rows of that generation (any generation when None).
         self.resume, self.generation = resume, generation
-        self.heard_call = False  # heard on a row of the recording's own callGeneration
-        self.asked_on = None     # controlConnection of this loss's resume ask
+        self.asked_on = None  # controlConnection of this loss's resume ask
 
     def lose(self):
         self.source, self.reason, self.asked_on = 'system', 'lost', None
@@ -18,10 +18,10 @@ class Policy:
         now, page = row['atMs'], row.get('pageState', 'present')
         count = row.get('sourceCount')
         known = row.get('rowPresent', True) and row.get('sourceCountKnown', count is not None)
-        self.heard |= row.get('heard') is True
         generation = row.get('callGeneration')
-        if self.generation is not None and generation == self.generation and row.get('heard') is True:
-            self.heard_call = True
+        # D52.5: another call's heard evidence never arms this recording's
+        # restore, OTHERS_GONE grace or resume ask.
+        self.heard |= row.get('heard') is True and self.generation in (None, generation)
         # resumeRefused (a refused or failed resume) deliberately changes nothing:
         # no retry on a timer or on later ticks, only on a new controlConnection.
         if page == 'closed':
@@ -49,7 +49,7 @@ class Policy:
                 return [action]
             connection = row.get('controlConnection', 0)
             if (self.resume and not transport and self.source == 'system' and self.reason == 'lost'
-                    and generation == self.generation and self.heard_call and self.asked_on != connection):
+                    and generation == self.generation and self.heard and self.asked_on != connection):
                 # D52.5: ask once per loss and control connection; never on a timer.
                 self.asked_on = connection
                 return actions + ['askResume']
