@@ -9,6 +9,9 @@ def pong_for(message):
     if not isinstance(message, dict) or message.get('type') != 'ping':
         return None
     seq = message.get('seq')
+    # An integer JSON number, as JavaScript and JSON Schema see it: 3.0 is 3.
+    if type(seq) is float and seq.is_integer():
+        seq = int(seq)
     if type(seq) is not int or not 0 <= seq <= MAX_SAFE_INTEGER:
         return None
     return {'type': 'pong', 'seq': seq}

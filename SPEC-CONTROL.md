@@ -355,7 +355,9 @@ The app owns these monotonic per-session timers (seconds):
 - Check a stored120s deadline **before** accepting a returned page, including a
   return after expiry before the next policy tick. Expiry stops as pageGone.
 - Same browser instance and tab returning with positive sourceCount and a live
-  original PCM transport before expiry can restore the browser path. Do not use
+  original PCM transport before expiry can restore the browser path. Under
+  D52.4 this means a live PCM transport, original or resumed through
+  resume-capture-v1 after the original closed. Do not use
   a different tab, title or URL as identity. Respect the current per-session mic
   and The others choices; The others off stays off. Keep the computer source if
   a staged restoration fails; do not checkpoint a restored event without its track.
@@ -467,7 +469,9 @@ including resume-capture-v1. It otherwise uses the same transport as Start.
 Older hosts must reject this unknown type before creating any folder. This is
 safer than adding an ignored optional field to Start. The app atomically verifies
 that the target is active, not stopping/stopped, the exact origin/generation
-matches and the current others source is an eligible system-sound stand-in. It
+matches and the current others source is an eligible system-sound stand-in:
+either the initial system/missing stand-in (D49) or a system/lost fallback
+after the recording's audio transport closed (D52.4). It
 attaches the new transport to that recording. It never creates another folder,
 resets its clock or replaces its microphone/selection. Title/microphone defaults
 from a fresh Start do not modify the target. A refused resume has no side effect.
@@ -490,8 +494,11 @@ including when Start/Stop cross between the independent control/audio pipes.
 This cancellation does not prohibit a subsequent fresh manual Record for the
 same call. Changed-call signals from A must not bind or stop B.
 
-On successful attachment, transition othersSource from system to browser with
-reason callConnected at the committed seam, retaining microphone and selection.
+On successful attachment, transition othersSource from system to browser at the
+committed seam, retaining microphone and selection. The seam reason is
+callConnected when resuming the initial system/missing stand-in (D49), and
+restored when resuming a system/lost fallback (D52.4). Literal seams for both
+are in resume-capture-vectors.json (`seam`, `lostSeam`).
 S-6 ownership is half-open: system audio before the seam and browser audio from
 the seam, with no overlap or dropped sample. Stored audio is not filtered.
 
@@ -513,8 +520,10 @@ fixed: **the app pings, the extension only answers.**
 
 - The app sends `ping` only when the connection's hello lists `heartbeat-v1`,
   and only after it has received that connection's first `status` (this keeps
-  the hello → meetings → status order). `seq` is a nonnegative safe integer,
-  starting at 0 on each connection and increasing by one per ping.
+  the hello → meetings → status order). `seq` is an integer JSON number in
+  0..9007199254740991 (an integral value such as `3.0` is the integer 3, as in
+  JavaScript and JSON Schema), starting at 0 on each connection and increasing
+  by one per ping. The pong echoes its numeric value.
 - The extension answers `{"type":"pong","seq":N}` immediately, echoing seq
   exactly, from its control receive handler: never through the command queues,
   which may legitimately hold a command for longer than the loss deadline
@@ -556,7 +565,10 @@ page is present with a known positive sourceCount and control alive, the app
 stays on that fallback until the call ends: it arms no missing timer and no
 `pageGone` deadline. A later known zero count after heard still stops as
 callEnded after OTHERS_GONE_GRACE. Restoring the browser source needs a live
-audio transport (resume-capture-v1). If control is lost too, the ordinary
+audio transport: a system/lost fallback is an eligible resume-capture-v1
+target, and that seam writes othersSource browser with reason `restored`
+(`callConnected` is only for resuming the initial system/missing stand-in,
+D49). If control is lost too, the ordinary
 missing/BROWSER_RETURN_GRACE rules apply from the moment of control loss.
 
 Shared literal cases: `conformance/control/heartbeat-vectors.json` (ping/loss

@@ -390,7 +390,8 @@ Source ownership is half-open at each othersSource.atMs. Outgoing source audio
 is masked at the boundary before recognition, mixing and export. This is not a
 transcript display rule. `callConnected` moves an enabled others side from the
 initial system/missing stand-in to browser tracks (D49). Existing lost/restored
-semantics stay intact. See conformance/multistream/ownership.json.
+semantics stay intact: a resume-capture-v1 attach onto a system/lost fallback
+(its audio transport closed, D52.4) writes browser/restored. See conformance/multistream/ownership.json.
 
 The 64-span limit counts accepted declarations plus declarations currently in
 flight across every frame. The worker reserves a slot synchronously before
