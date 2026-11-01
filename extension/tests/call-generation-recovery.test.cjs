@@ -50,3 +50,31 @@ test('call identities are persisted after Stop and malformed saved identities ar
  try{discover(fresh.pages[0]);assert.equal((await fresh.api.meetings()).meetings[0].callGeneration,row.callGeneration);assert.equal(typeof fresh.api.callInfo(3).generation,'string')}
  finally{fresh.close()}
 }));
+
+test('browser-first boundary fences the persisted baseline before the first returning hook snapshot',async()=>savedCall(async({row,stored})=>{
+ const fresh=await setup(0,stored,[],null,'new-worker-');
+ try{
+  fresh.tabs.get(2).url='https://meet.example/B';fresh.chrome.tabs.onUpdated.emit(2,{url:'https://meet.example/B'});
+  const once=fresh.api.callInfo(2).generation;assert.notEqual(once,row.callGeneration);
+  discover(fresh.pages[0],'0');assert.equal(fresh.api.callInfo(2).generation,once);
+  assert.equal((await fresh.api.meetings()).meetings.length,0,'queued old evidence cannot vote or permit Record');
+  const refused=await fresh.command({type:'command',requestId:'old-snapshot',action:'start',tabId:2,mode:'tracks',independent:true,callGeneration:once});
+  assert.equal(refused.ok,false);assert.equal(fresh.audio.length,0);
+  discover(fresh.pages[0],'1');const current=(await fresh.api.meetings()).meetings[0];
+  assert.equal(current.callGeneration,once);assert.equal(current.heard,true);assert.equal(current.sourceCount,1);
+ }finally{fresh.close()}
+}));
+
+test('a long address is fingerprinted consistently and retains its identity after restart',async()=>{
+ const url='https://meet.example/call?synthetic='+ 'a'.repeat(2132);
+ const old=await setup(1,{},['source-outcomes-v1'],null,'old-worker-');let fresh;
+ try{
+  old.tabs.get(2).url=url;discover(old.pages[0]);
+  await old.command({type:'command',requestId:'start',action:'start',tabId:2,mode:'tracks',independent:true});
+  const generation=old.api.callInfo(2).generation,stored=JSON.parse(JSON.stringify(await old.chrome.storage.session.get()));
+  const record=stored.cassiniCallGenerations.find(r=>r.tabId===2);assert.match(record.addressHash,/^[0-9a-f]{64}$/);
+  assert.equal('url' in record,false);assert.ok(JSON.stringify(record).length<1000);
+  fresh=await setup(1,stored,[],null,'new-worker-',({tabs})=>tabs.get(2).url=url);
+  discover(fresh.pages[0]);assert.equal((await fresh.api.meetings()).meetings[0].callGeneration,generation);
+ }finally{await old.api.stop();old.close();fresh?.close()}
+});
