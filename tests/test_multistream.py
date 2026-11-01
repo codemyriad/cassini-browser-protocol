@@ -77,6 +77,32 @@ class MultistreamTests(unittest.TestCase):
             self.assertEqual((refused['type'],refused['scope'],refused['code']),('error','command','state'))
             self.assertEqual((folder / 'session.json').read_bytes(), before)
 
+    def test_retired_spans_and_finalized_capture_refuse_packets_without_rewriting_files(self):
+        with host() as (send, folder, _):
+            track(send, 'old', 'root'); audio(send, 'old'); end(send, 'old')
+            def snapshot():
+                return {p.name: p.read_bytes() for p in folder.iterdir() if p.is_file()}
+            before = snapshot()
+            for request in (dict(type='track', id='old', sourceTrackId='root', kind='remote', sampleRate=8000, channels=1),
+                            dict(type='trackEnd', id='old', reason='failed', droppedFrames=99, endOffsetMs=999999)):
+                reply = send(request)
+                self.assertEqual((reply['type'], reply['code'], reply['scope']), ('error', 'state', 'source'))
+                self.assertEqual(snapshot(), before)
+            self.assertEqual(audio(send, 'old')['type'], 'error')
+            self.assertEqual(snapshot(), before)
+            track(send, 'new', 'root'); audio(send, 'new', offset=1000)
+            send(dict(type='stop', captureId='capture-current'))
+            before = snapshot()
+            requests = [dict(type='track', id='late', sourceTrackId='other', kind='remote', sampleRate=8000, channels=1),
+                        dict(type='trackEnd', id='new', reason='failed', droppedFrames=99, endOffsetMs=999999),
+                        dict(type='audio', id='new', sequence=99, offsetMs=1000, pcm='AAA=')]
+            for request in requests:
+                reply = send(request)
+                self.assertEqual((reply['type'], reply['code'], reply['scope']), ('error', 'state', 'command'))
+                self.assertEqual(snapshot(), before)
+            metadata = json.loads((folder / 'session.json').read_text())
+            self.assertEqual(metadata['captureOutcome']['sources'][0]['captureOutcome'], 'captured')
+
     def test_hand_written_capture_outcomes(self):
         vectors = json.loads((ROOT / 'conformance/multistream/outcomes.json').read_text())
         for case in vectors['cases']:
@@ -152,6 +178,7 @@ class MultistreamTests(unittest.TestCase):
             send(dict(type='stop', captureId='capture-current'))
             metadata = json.loads((folder / 'session.json').read_text())
             self.assertEqual([t['frames'] for t in metadata['tracks']], [8000, 8000])
+            self.assertEqual(metadata['captureOutcome']['sources'][0]['captureOutcome'], 'captured')
 
     def test_ninety_second_gap_is_refused_per_source_and_a_new_span_can_resume(self):
         with host() as (send, folder, _):

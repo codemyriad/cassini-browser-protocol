@@ -14,7 +14,7 @@ test('outcome packet types are enabled only by native host negotiation',async()=
    await app.command(command('start','start'));
    assert.deepEqual(Array.from(app.audio[0].sent[0].features),['source-outcomes-v1']);
    assert.equal(app.pages[0].sent.find(m=>m.type==='start').sourceOutcomes,enabled);
-   if(enabled){assert.equal((await packet(app,{type:'trackEnd',id:'span',reason:'ended',endOffsetMs:1000,droppedFrames:0},1)).error,undefined)}
+   if(enabled){await packet(app,{type:'track',id:'span',kind:'remote',sampleRate:48000,channels:1},0);assert.equal((await packet(app,{type:'trackEnd',id:'span',reason:'ended',endOffsetMs:1000,droppedFrames:0},1)).error,undefined)}
    else {app.pages[0].onMessage.emit({type:'packet',request:'legacy-source',packet:{type:'sources',discoveredSources:[{sourceTrackId:'ignored',kind:'remote'}]}});assert.equal(app.audio[0].sent.some(p=>p.type==='sources'),false)}
    await app.command(command('stop','stop'));
    const stopped=app.audio[0].sent.find(m=>m.type==='stop');assert.equal(stopped.captureId,app.audio[0].sent[0].captureId);
@@ -29,6 +29,7 @@ test('a per-source native refusal is acknowledged without closing the recording'
   port.postMessage=function(value){if(value.id==='refused'){this.sent.push(value);queueMicrotask(()=>this.onMessage.emit({type:'error',code:'source',scope:'source',id:value.id,message:'Generated refusal'}))}else post.call(this,value)};
   const refused=await packet(app,{type:'track',id:'refused',sourceTrackId:'missing-voice',kind:'remote',sampleRate:48000,channels:1},1);
   assert.equal(refused.scope,'source');assert.equal(port.closed,false);
+  await packet(app,{type:'track',id:'healthy',kind:'remote',sampleRate:48000,channels:1},0);
   assert.equal((await packet(app,{type:'audio',id:'healthy',sequence:0,offsetMs:0,pcm:'AAA='},2)).error,undefined);
   assert.equal(app.api.controlStatus().sessions.length,1);
   assert.deepEqual(Array.from(app.api.controlStatus().sessions[0].failedSources),['missing-voice']);
@@ -137,6 +138,7 @@ test('source batches validate UTF-8 bounds atomically without closing other audi
   const invalid=await packet(app,{type:'sources',discoveredSources:[{sourceTrackId:'would-be-accepted',kind:'remote'},{sourceTrackId:'é'.repeat(101),kind:'remote'}]},1);
   assert.equal(invalid.scope,'command');assert.equal(app.audio[0].sent.some(p=>p.type==='sources'),false);
   assert.equal((await packet(app,{type:'sources',discoveredSources:[{sourceTrackId:'é'.repeat(100),kind:'remote',failed:false}]},2)).error,undefined);
+  await packet(app,{type:'track',id:'unrelated',kind:'remote',sampleRate:48000,channels:1},0);
   assert.equal((await packet(app,{type:'audio',id:'unrelated',sequence:0,offsetMs:0,pcm:'AAA='},3)).error,undefined);
   assert.equal(app.audio[0].closed,false);await app.command(command('stop','stop'));
  }finally{app.close()}
@@ -181,9 +183,11 @@ for(const order of ['browser-first','hook-first'])test(`SPA generation changes e
   app.tabs.get(2).url='https://meet.example/B';
   if(order==='browser-first'){
    app.chrome.tabs.onUpdated.emit(2,{url:'https://meet.example/B'});
-   discover(page,'A');assert.equal((await app.api.meetings()).meetings[0].heard,false,'in-flight A cannot vote under B');
-   discover(page,'B');
-  }else{discover(page,'B');app.chrome.tabs.onUpdated.emit(2,{url:'https://meet.example/B'})}
+   const once=app.api.callInfo(2).generation;
+   discover(page,'A');assert.equal([...app.api.frames].find(f=>f.tabId===2&&f.frameId===0).heard,false,'in-flight A cannot vote under B');
+   discover(page,'B');assert.equal((await app.api.meetings()).meetings[0].callGeneration,once);
+  }else{discover(page,'B');const once=(await app.api.meetings()).meetings[0].callGeneration;app.chrome.tabs.onUpdated.emit(2,{url:'https://meet.example/B'});assert.equal((await app.api.meetings()).meetings[0].callGeneration,once)}
+  const observed=(await app.api.meetings()).meetings[0];assert.equal(observed.heard,true);assert.equal(observed.sourceCount,1);
   await until(()=>app.audio[0].closed);
   discover(page,'B');const generation=(await app.api.meetings()).meetings[0].callGeneration;assert.notEqual(generation,before);
   await app.command(command('start-B','start',{callGeneration:generation}));
@@ -204,4 +208,87 @@ test('a recovered transient retry does not send a false interrupted problem at S
   await app.command(command('stop','stop'));
   assert.equal(app.audio[0].sent.find(p=>p.type==='stop').problem,null);
  }finally{app.close()}
+});
+
+test('whole-tab native-first Stop retires session, offscreen document and badge',async()=>{
+ const app=await setup(3,{},['source-outcomes-v1']);let opened=false;const badges=[];
+ const offscreen=packet=>new Promise(resolve=>app.chrome.runtime.onMessage.emit({target:'background',type:'packet',packet},{id:'extension',url:'chrome-extension://extension/offscreen.html'},resolve));
+ try{
+  app.chrome.tabCapture.getMediaStreamId=async()=>'granted';app.chrome.offscreen.createDocument=async()=>{opened=true};
+  app.chrome.offscreen.closeDocument=async()=>{opened=false};app.chrome.runtime.getContexts=async()=>opened?[{}]:[];
+  app.chrome.runtime.sendMessage=async()=>({});app.chrome.action.setBadgeText=async({text})=>badges.push(text);
+  await app.api.start('tab',2);const port=app.audio[0],post=port.postMessage;
+  assert.equal((await offscreen({type:'track',id:'tab',kind:'tab',sampleRate:48000,channels:1})).error,undefined);
+  port.postMessage=function(p){if(p.type==='audio'){this.sent.push(p);queueMicrotask(()=>this.onMessage.emit({type:'error',code:'state',scope:'command',message:'Capture already saved'}))}else post.call(this,p)};
+  assert.equal((await offscreen({type:'audio',id:'tab',sequence:0,offsetMs:0,pcm:'AAA='})).code,'state');
+  await until(()=>port.closed&&!opened&&badges.at(-1)==='');assert.equal(app.api.controlStatus().recording,false);
+  assert.equal(port.sent.some(p=>p.type==='sources'&&p.discoveredSources.some(s=>s.failed)),false);
+  await app.api.start('tab',2);assert.equal(app.audio.length,2);await app.api.stop();
+ }finally{app.close()}
+});
+
+test('retired and refused span packets never reach native or fail a healthy replacement root',async()=>{
+ for(const features of [[],['source-outcomes-v1']]){
+  const app=await setup(3,{},features);let release;
+  try{
+   await app.command(command('start','start'));const port=app.audio[0],post=port.postMessage;
+   await packet(app,{type:'track',id:'old',sourceTrackId:'root',kind:'remote',sampleRate:48000,channels:1},0);
+   if(features.length){
+    port.postMessage=function(p){if(p.type==='trackEnd'){this.sent.push(p);release=()=>this.onMessage.emit({type:'ack'})}else post.call(this,p)};
+    const retiring=packet(app,{type:'trackEnd',id:'old',reason:'ended',droppedFrames:0,endOffsetMs:null},1);await until(()=>release);
+    for(const [i,type]of ['track','audio','trackEnd'].entries()){
+     const ack=await packet(app,{type,id:'old',sourceTrackId:'root',kind:'remote',sampleRate:48000,channels:1,sequence:9,offsetMs:10,pcm:'AAA=',reason:'failed',droppedFrames:99},i+2);
+     assert.equal(ack.code,'state');
+    }
+    assert.equal(port.sent.filter(p=>p.id==='old').length,2);release();await retiring;
+    await packet(app,{type:'track',id:'new',sourceTrackId:'root',kind:'remote',sampleRate:48000,channels:1},6);
+    assert.equal((await packet(app,{type:'audio',id:'new',sequence:0,offsetMs:10,pcm:'AAA='},7)).error,undefined);
+   }
+   assert.equal((await packet(app,{type:'audio',id:'never-admitted',sequence:0,offsetMs:0,pcm:'AAA='},8)).code,'state');
+   assert.equal(port.sent.some(p=>p.id==='never-admitted'),false);assert.equal(port.closed,false);
+   assert.deepEqual(Array.from(app.api.controlStatus().sessions[0].failedSources),[]);
+   await app.command(command('stop','stop'));assert.equal(port.sent.find(p=>p.type==='stop').problem,null);
+  }finally{release?.();app.close()}
+ }
+});
+
+test('a refused in-flight source update cannot prevent the final native Stop',async()=>{
+ const app=await setup(3,{},['source-outcomes-v1']);let release;
+ try{
+  await app.command(command('start','start'));const port=app.audio[0],post=port.postMessage;
+  port.postMessage=function(p){if(p.type==='sources'){this.sent.push(p);release=()=>this.onMessage.emit({type:'error',scope:'command',code:'source',message:'Generated rejected update'})}else post.call(this,p)};
+  const updating=packet(app,{type:'sources',discoveredSources:[{sourceTrackId:'root',kind:'remote'}]},1);await until(()=>release);
+  const stopping=app.command(command('stop','stop'));await until(()=>app.pages[0].sent.some(p=>p.type==='stop'));release();await updating;await stopping;
+  assert.equal(port.sent.some(p=>p.type==='stop'),true);assert.equal(port.closed,true);
+ }finally{release?.();app.close()}
+});
+
+for(const order of ['browser-first','hook-first'])test(`idle SPA boundary and early B Start stay fenced once (${order})`,async()=>{
+ const app=await setup(3,{},['source-outcomes-v1']);
+ const discover=generation=>app.pages[0].onMessage.emit({type:'discovery',sourceCount:1,heard:true,documentGeneration:'doc',callGeneration:generation});
+ try{
+  discover('A');await app.api.meetings();app.tabs.get(2).url='https://meet.example/B';
+  if(order==='browser-first')app.chrome.tabs.onUpdated.emit(2,{url:'https://meet.example/B'});else discover('B');
+  const generation=app.api.callInfo(2).generation;
+  await app.command(command('start-B','start',{callGeneration:generation}));
+  if(order==='browser-first')discover('B');else app.chrome.tabs.onUpdated.emit(2,{url:'https://meet.example/B'});
+  assert.equal(app.api.callInfo(2).generation,generation);assert.equal(app.audio[0].closed,false);
+  const row=(await app.api.meetings()).meetings[0];assert.equal(row.heard,true);assert.equal(row.sourceCount,1);
+  await app.command(command('stop-B','stop'));
+ }finally{app.close()}
+});
+
+test('B to C rotates while A Stop is draining, without a second Stop or stale B evidence',async()=>{
+ const app=await setup(3,{},['source-outcomes-v1']);let release;
+ const page=app.pages[0],discover=generation=>page.onMessage.emit({type:'discovery',sourceCount:1,heard:true,documentGeneration:'doc',callGeneration:generation});
+ try{
+  discover('A');await app.command(command('start-A','start'));const post=page.postMessage;
+  page.postMessage=function(p){if(p.type==='stop'){this.sent.push(p);release=()=>this.onMessage.emit({type:'stopped'})}else post.call(this,p)};
+  app.tabs.get(2).url='https://meet.example/B';app.chrome.tabs.onUpdated.emit(2,{url:'https://meet.example/B'});discover('B');await until(()=>release);
+  const B=app.api.callInfo(2).generation;
+  app.tabs.get(2).url='https://meet.example/C';discover('C');const C=app.api.callInfo(2).generation;assert.notEqual(C,B);
+  app.chrome.tabs.onUpdated.emit(2,{url:'https://meet.example/C'});discover('B');assert.equal(app.api.callInfo(2).generation,C);
+  const row=(await app.api.meetings()).meetings[0];assert.equal(row.sourceCount,1);assert.equal(row.heard,true);
+  assert.equal(page.sent.filter(p=>p.type==='stop').length,1);release();await until(()=>app.audio[0].closed);
+ }finally{release?.();app.close()}
 });

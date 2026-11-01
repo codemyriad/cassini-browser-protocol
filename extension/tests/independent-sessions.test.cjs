@@ -24,9 +24,11 @@ test('independent capability starts two tabs, routes packets and stops only one'
     assert.equal(app.audio[0].sent[0].microphone,true);assert.equal(app.audio[1].sent[0].microphone,false);
     assert.ok(app.audio.every(port=>port.sent[0].independent && Number.isSafeInteger(port.sent[0].timelineOriginMs)));
     assert.ok(app.pages.every(frame=>frame.sent.find(m=>m.type==='start').captureLocal===false));
-    const packet={type:'audio',id:'opaque',pcm:'AA==',frames:1};
+    app.pages[1].onMessage.emit({type:'packet',request:0,packet:{type:'track',id:'opaque',kind:'remote',sampleRate:48000,channels:1}});
+    await until(()=>app.pages[1].sent.some(m=>m.type==='ack'&&m.request===0));
+    const packet={type:'audio',id:'opaque',pcm:'AAA=',sequence:0,offsetMs:0};
     app.pages[1].onMessage.emit({type:'packet',request:1,packet});
-    await until(()=>app.audio[1].sent.some(m=>m.id==='opaque'));
+    await until(()=>app.audio[1].sent.some(m=>m.type==='audio'&&m.id==='opaque'));
     assert.ok(!app.audio[0].sent.some(m=>m.id==='opaque'));
     const stopped=await app.command(command('stop-one','stop',2));
     assert.equal(stopped.ok,true);assert.equal(stopped.status.recording,false);

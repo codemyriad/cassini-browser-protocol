@@ -124,6 +124,8 @@ try:
         size, = struct.unpack('=I', prefix)
         request = json.loads(sys.stdin.buffer.read(size))
         kind = request['type']
+        if kind in ('track', 'audio', 'trackEnd') and (manifest is None or manifest['state'] != 'recording'):
+            refused('state', 'Capture already saved', request.get('id'), scope='command'); continue
         if kind == 'start':
             started_at = time.monotonic()
             features = set(request.get('features', [])) & {'source-outcomes-v1'}
@@ -147,6 +149,8 @@ try:
             existing = next((t for t in manifest['tracks'] if t['id'] == request['id']), None)
             if 'source-outcomes-v1' in features:
                 if existing:
+                    if existing.get('ended'):
+                        refused('state', 'Span already ended', request['id']); continue
                     if all(existing.get(k) == request.get(k) for k in ('kind', 'sampleRate', 'channels', 'sourceTrackId')):
                         reply(dict(type='ack')); continue
                     refused('source', 'Conflicting track declaration', request['id']); continue
@@ -184,7 +188,6 @@ try:
                              and t.get('startOffsetMs') is not None and t.get('endOffsetMs') is not None
                              and max(request['offsetMs'], t['startOffsetMs']) < min(finish_at, t['endOffsetMs'])]
                 if conflicts:
-                    track['problemKind'] = 'capture'; checkpoint()
                     refused('source', 'Overlapping stored source spans', request['id']); continue
             pcm = audio[track['id']]
             track.setdefault('startOffsetMs', request['offsetMs'])
@@ -198,8 +201,8 @@ try:
             reply(dict(type='ack'))
         elif kind == 'trackEnd' and 'source-outcomes-v1' in features:
             track = next((t for t in manifest['tracks'] if t['id'] == request['id']), None)
-            if track is None:
-                refused('source', 'Unknown span', request['id']); continue
+            if track is None or track.get('ended'):
+                refused('state', 'No live span', request['id']); continue
             track['ended'] = True
             track['droppedFrames'] = request['droppedFrames']
             if request['reason'] == 'failed': track.setdefault('problemKind', 'capture')

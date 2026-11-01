@@ -165,9 +165,10 @@ test('a refused live track is terminal and rescans never reattach or re-warn it'
  await fixture(async f=>{
   f.peer.senders=[{track:{id:'mic',label:'Microphone',kind:'audio',readyState:'live',enabled:true,muted:false},getParameters:()=>({encodings:[]})}];
   await f.start('refused',{sourceOutcomes:true});assert.equal(f.captures[0].recorder.failed,true);
-  const warnings=f.messages.filter(m=>m.type==='warning').length;
+  const warnings=f.messages.filter(m=>m.type==='warning').length;assert.equal(warnings,1);
   for(let i=0;i<5;i++)await f.scan();
   assert.equal(f.captures.length,1);assert.equal(f.messages.filter(m=>m.type==='warning').length,warnings);assert.equal(time.timers.size,0);
+  await f.stop();assert.equal(f.messages.filter(m=>m.type==='warning').length,1);
  },{Context,capture:options=>capture({...options,clock:time.now,schedule:time.schedule,cancel:time.cancel,send:packet=>packet.type==='track'?Promise.reject(Object.assign(new Error('Generated native quota'),{code:'limit',scope:'source'})):options.send(packet)})});
 }));
 
@@ -180,4 +181,31 @@ test('Stop retains a source still retrying before its first track was opened',as
   const records=f.messages.filter(m=>m.type==='packet'&&m.packet.type==='sources').flatMap(m=>m.packet.discoveredSources);
   assert.equal(records.at(-1).failed,true);assert.equal(time.timers.size,0);
  },{Context:Unavailable,capture:options=>capture({...options,clock:time.now,schedule:time.schedule,cancel:time.cancel})});
+}));
+
+test('stopped span ignores retained worklet callbacks and cannot pump audio after TrackEnd',async()=>mocked(async({capture,nodes,Context})=>{
+ const packets=[],context=new Context();
+ const recorder=await capture({stream:{},id:'closed',sourceTrackId:'root',kind:'local',label:'Mic',origin:100000,workletURL:'',sharedContext:context,reportOutcomes:true,send:async p=>packets.push(p)});
+ const late=nodes[0].port.onmessage;context.state='closed';await recorder.stop();
+ late({data:{pcm:new ArrayBuffer(256),frame:0}});await tick();
+ assert.equal(nodes[0].port.onmessage,null);assert.equal(packets.filter(p=>p.type==='audio').length,0);
+ assert.equal(packets.at(-1).type,'trackEnd');
+}));
+
+test('old in-flight ACK after processor failure cannot mark a retry healthy',async()=>mocked(async({capture,nodes,Context})=>{
+ const time=clock();let acknowledge,healthy=0;
+ const recorder=await capture({stream:{},id:'old',kind:'local',label:'Mic',origin:100000,workletURL:'',sharedContext:new Context(),clock:time.now,schedule:time.schedule,cancel:time.cancel,onAudio:()=>healthy++,send:p=>p.type==='audio'?new Promise(resolve=>acknowledge=resolve):Promise.resolve()});
+ nodes[0].port.onmessage({data:{pcm:new ArrayBuffer(256),frame:0}});await tick();assert.ok(acknowledge);
+ nodes[0].onprocessorerror();assert.equal(recorder.state,'retrying');acknowledge();await tick();
+ assert.equal(recorder.state,'retrying');assert.equal(healthy,0);await recorder.stop();
+}));
+
+test('Stop drains admitted PCM and worklet final flush before ending the span',async()=>mocked(async({capture,nodes,Context})=>{
+ const packets=[];let release;
+ const recorder=await capture({stream:{},id:'flush',kind:'local',label:'Mic',origin:100000,workletURL:'',sharedContext:new Context(),reportOutcomes:true,send:p=>{packets.push(p);return p.type==='audio'&&p.sequence===0?new Promise(resolve=>release=resolve):Promise.resolve()}});
+ for(let i=0;i<6;i++)nodes[0].port.onmessage({data:{pcm:new ArrayBuffer(256),frame:i*128}});
+ await tick();assert.ok(release);
+ nodes[0].port.postMessage=()=>{nodes[0].port.onmessage({data:{pcm:new ArrayBuffer(256),frame:768}});nodes[0].port.onmessage({data:{stopped:true}})};
+ const stopping=recorder.stop();release();await stopping;
+ assert.equal(packets.filter(p=>p.type==='audio').length,7);assert.equal(packets.at(-1).type,'trackEnd');assert.equal(nodes[0].port.onmessage,null);
 }));

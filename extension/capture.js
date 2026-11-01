@@ -32,7 +32,7 @@ function resumeSuspended(context) {
 async function captureOnce({ stream, id, label, kind, origin, workletURL, send, fail, audible = false, enabled = () => true, channels = 1, sharedContext, getSharedContext, warn = () => {}, sourceTrackId, reportOutcomes = false, onAudio = () => {} }) {
   sharedContext ||= getSharedContext?.();
   const context = sharedContext || new AudioContext({ sampleRate: 48000 });
-  let source, node, silent, remotePlayback, ending = false, failure = null;
+  let source, node, silent, remotePlayback, stopping = false, ending = false, failure = null;
   let pendingFrames = 0, sequence = 0, flushed, droppedFrames = 0;
   const waiting = [], inFlight = new Set();
   let stateChanged, announced = false, ended = false, endOffsetMs = null;
@@ -43,11 +43,11 @@ async function captureOnce({ stream, id, label, kind, origin, workletURL, send, 
     catch (error) { if (!retirementReason(error)) throw error; }
   };
   function pump() {
-    while (waiting.length && inFlight.size < 4 && !failure) {
+    while (waiting.length && inFlight.size < 4 && !failure && !ended) {
       const { message, frames } = waiting.shift();
       const task = Promise.resolve().then(() => send(message)).then(() => {
         endOffsetMs = Math.max(endOffsetMs ?? 0, message.offsetMs + frames * 1000 / context.sampleRate);
-        onAudio();
+        if (!failure && !stopping && !ending && !ended) onAudio();
       }).catch(abort).finally(() => {
         pendingFrames -= frames; inFlight.delete(task); pump();
       });
@@ -87,15 +87,15 @@ async function captureOnce({ stream, id, label, kind, origin, workletURL, send, 
     announced = true;
     node.onprocessorerror = () => abort(new Error("Audio capture stopped unexpectedly."));
     stateChanged = () => {
-      if (ending || context.state === "running") return;
+      if (stopping || ending || context.state === "running") return;
       if (["suspended", "interrupted"].includes(context.state)) {
         void resumeSuspended(context).catch(abort);
       } else abort(new Error("Browser audio capture closed unexpectedly."));
     };
     context.addEventListener?.("statechange", stateChanged);
     node.port.onmessage = ({ data }) => {
-      if (data.stopped) { flushed?.(); return; }
-      if (failure) return;
+      if (data.stopped) { if (stopping) ending = true; flushed?.(); return; }
+      if (failure || ending || ended) return;
       const frames = data.pcm.byteLength / (channels * 2);
       clockOffset = clocks.get(context) ?? clockOffset;
       if (clockOffset === undefined) {
@@ -131,8 +131,8 @@ async function captureOnce({ stream, id, label, kind, origin, workletURL, send, 
       get failed() { return !!failure; },
       get droppedFrames() { return droppedFrames; },
       async stop(reason = "stopped") {
-        if (ending) return;
-        ending = true;
+        if (stopping) return;
+        stopping = true;
         if (context.state === "running") {
           await new Promise((resolve, reject) => {
             const timer = setTimeout(() => reject(new Error("Audio capture did not finish in time.")), 2000);
@@ -140,9 +140,14 @@ async function captureOnce({ stream, id, label, kind, origin, workletURL, send, 
             node.port.postMessage("stop");
           }).catch(abort);
         }
+        // Accept the worklet's final flush through its stopped barrier, then
+        // fence even a retained callback before draining admitted PCM.
+        ending = true;
+        node.port.onmessage = null; node.onprocessorerror = null;
         source.disconnect(); node.disconnect(); silent.disconnect();
         if (remotePlayback) { remotePlayback.pause(); remotePlayback.srcObject = null; }
         while (inFlight.size) await Promise.allSettled([...inFlight]);
+        waiting.length = 0;
         context.removeEventListener?.("statechange", stateChanged);
         if (!sharedContext) await context.close();
         await end(retirementReason(failure) || (reason === "retry" ? "retry" : failure ? "failed" : reason));
@@ -150,7 +155,9 @@ async function captureOnce({ stream, id, label, kind, origin, workletURL, send, 
       }
     };
   } catch (error) {
-    ending = true;
+    stopping = ending = true;
+    if (node) { node.port.onmessage = null; node.onprocessorerror = null; }
+    waiting.length = 0;
     source?.disconnect(); node?.disconnect(); silent?.disconnect();
     if (remotePlayback) { remotePlayback.pause(); remotePlayback.srcObject = null; }
     context.removeEventListener?.("statechange", stateChanged);

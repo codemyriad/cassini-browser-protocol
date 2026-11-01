@@ -38,9 +38,10 @@ function callInfo(tabId) {
 function documentFor(tabId) {
   return [...frames].find(f => f.tabId === tabId && !f.obsolete && f.frameId === 0)?.documentGeneration;
 }
-function callChanged(tabId) {
+function callChanged(tabId, url = null) {
   const current = sessions.get(tabId);
-  callInfo(tabId).generation = crypto.randomUUID();
+  const info = callInfo(tabId);
+  info.generation = crypto.randomUUID(); info.url = url;
   for (const frame of frames) if (frame.tabId === tabId) {
     if (frame.callGeneration !== undefined) frame.fencedGenerations.add(JSON.stringify([frame.documentGeneration,frame.callGeneration]));
     frame.callGeneration = undefined; frame.sourceCount = 0; frame.heard = false;
@@ -186,7 +187,7 @@ async function stop(session = firstSession(), reason = "user") {
       const packet = { type: "stop", problem: session.problem };
       if (session.independent) packet.captureId = session.token;
       if (session.sourceOutcomes) {
-        await Promise.all([...session.sourceUpdates]);
+        await Promise.allSettled([...session.sourceUpdates]);
         packet.discoveredSources = []; // The acknowledged live batches are already durable.
       }
       if ((session.keepOnNavigation || session.sourceOutcomes) && !session.loss) packet.reason = reason;
@@ -232,7 +233,7 @@ async function start(mode, tabId = null, options = {}) {
       throw new Error("That call is no longer active.");
     identity.url = callAddress(tab.url);
     const session = { callGeneration: identity.generation, mode, tabId: tab.id, independent: options.independent === true, captureLocal: options.captureLocal !== false, keepOnNavigation: options.keepOnNavigation === true, token: crypto.randomUUID(), origin: Date.now(),
-      frames: new Set(), tracks: 0, trackIds: new Set(), trackReservations: new Set(), trackSources: new Map(), discoveredSources: new Map(), sourceUpdates: new Set(), lastTab: tab, lastSourceCount: 0, stopping: false, problem: null };
+      frames: new Set(), tracks: 0, trackIds: new Set(), trackReservations: new Set(), endedTrackIds: new Set(), trackSources: new Map(), discoveredSources: new Map(), sourceUpdates: new Set(), lastTab: tab, lastSourceCount: 0, stopping: false, problem: null };
     sessions.set(tab.id, session);
     notifyControl();
     const checkStarting = () => {
@@ -304,6 +305,34 @@ async function start(mode, tabId = null, options = {}) {
   } finally { if (pendingStarts.get(key) === request) pendingStarts.delete(key); }
 }
 
+// One admission path for page frames and whole-tab offscreen capture. A retired
+// span is fenced locally: its late packets are not a failure of the live root.
+async function forwardPacket(session, packet) {
+  if (session.callChanged && packet.type !== "trackEnd")
+    throw Object.assign(new Error("This audio belongs to a different call."), { scope: "source", code: "callChanged" });
+  if (["track", "audio", "trackEnd"].includes(packet.type) &&
+      (session.endedTrackIds.has(packet.id) || packet.type !== "track" && !session.trackIds.has(packet.id)))
+    throw Object.assign(new Error("This audio span is no longer active."), {code:"state",scope:"source",retired:true});
+  if (JSON.stringify(packet).length > 400000) throw new Error("The meeting page sent an oversized audio chunk.");
+  const reserve = packet.type === "track" && !session.trackIds.has(packet.id) && !session.trackReservations.has(packet.id);
+  if (reserve && session.trackIds.size + session.trackReservations.size >= 64)
+    throw Object.assign(new Error("This recording has reached its track limit."), { code: "limit", scope: "source" });
+  if (reserve) session.trackReservations.add(packet.id);
+  if (packet.type === "trackEnd") session.endedTrackIds.add(packet.id);
+  try {
+    if (packet.type === "sources") {
+      if (!Array.isArray(packet.discoveredSources) || !packet.discoveredSources.length)
+        throw Object.assign(new Error("Empty audio source update."), {scope:"command",code:"source"});
+      await recordSources(session, packet.discoveredSources);
+    }
+    else await session.host.send(packet);
+    if (packet.type === "track" && !session.trackIds.has(packet.id)) {
+      session.trackIds.add(packet.id);
+      session.trackSources.set(packet.id, packet.sourceTrackId || packet.id); session.tracks++; session.warning = null; notifyControl();
+    }
+  } finally { if (reserve) session.trackReservations.delete(packet.id); }
+}
+
 chrome.runtime.onConnect.addListener(port => {
   if (port.name !== "cassini-frame" || port.sender?.id !== chrome.runtime.id || !port.sender.tab) return;
   const frame = { port, tabId: port.sender.tab.id, frameId: port.sender.frameId ?? 0, sourceCount: 0, heard: false, fencedGenerations: new Set() };
@@ -333,7 +362,7 @@ chrome.runtime.onConnect.addListener(port => {
           typeof generation === "string" && generation.length > 0 && generation.length <= 200) {
         if (frame.fencedGenerations.has(JSON.stringify([document,generation]))) return;
         const changed = frame.frameId === 0 && frame.documentGeneration === document && frame.callGeneration !== undefined && frame.callGeneration !== generation;
-        if (changed) { callInfo(frame.tabId).url = null; callChanged(frame.tabId); }
+        if (changed) callChanged(frame.tabId);
         frame.documentGeneration = document; frame.callGeneration = generation;
       }
       if (frame.obsolete || pageState(frame.tabId) === "closed") return;
@@ -369,28 +398,11 @@ chrome.runtime.onConnect.addListener(port => {
     if (message.type === "error") { failure("The meeting page could not record separate tracks. Record the whole tab instead. Audio recorded so far was saved.", session); return; }
     if (message.type !== "packet" || !["track", "audio", ...(session.sourceOutcomes ? ["trackEnd", "sources"] : [])].includes(message.packet?.type)) return;
     try {
-      if (session.callChanged && message.packet.type !== "trackEnd")
-        throw Object.assign(new Error("This audio belongs to a different call."), { scope: "source", code: "callChanged" });
-      if (JSON.stringify(message.packet).length > 400000) throw new Error("The meeting page sent an oversized audio chunk.");
-      const reserve = message.packet.type === "track" && !session.trackIds.has(message.packet.id) && !session.trackReservations.has(message.packet.id);
-      if (reserve && session.trackIds.size + session.trackReservations.size >= 64)
-        throw Object.assign(new Error("This recording has reached its track limit."), { code: "limit", scope: "source" });
-      if (reserve) session.trackReservations.add(message.packet.id);
-      try {
-        if (message.packet.type === "sources") {
-          if (!Array.isArray(message.packet.discoveredSources) || !message.packet.discoveredSources.length)
-            throw Object.assign(new Error("Empty audio source update."), {scope:"command",code:"source"});
-          await recordSources(session, message.packet.discoveredSources);
-        }
-        else await session.host.send(message.packet);
-        if (message.packet.type === "track" && !session.trackIds.has(message.packet.id)) {
-          session.trackIds.add(message.packet.id);
-          session.trackSources.set(message.packet.id, message.packet.sourceTrackId || message.packet.id); session.tracks++; session.warning = null; notifyControl();
-        }
-      } finally { if (reserve) session.trackReservations.delete(message.packet.id); }
+      await forwardPacket(session, message.packet);
       port.postMessage({ type: "ack", token: session.token, request: message.request });
     } catch (error) {
-      if (error.code === "state" && ["source", "command"].includes(error.scope)) {
+      if (error.retired) { /* Already retired locally; keep other spans recording. */ }
+      else if (error.code === "state" && ["source", "command"].includes(error.scope)) {
         void stop(session, "user"); // Native-first Stop already saved this capture.
       }
       else if (error.scope === "source" && error.code !== "callChanged") {
@@ -433,10 +445,12 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       if (message.type === "warning" && active) { active.warning = "Tab audio lost samples during a recording stall."; if (!message.transient) active.problem ??= active.warning; return {}; }
       if (message.type === "error") { failure(message.message, active); return {}; }
       if (message.type === "packet" && active?.mode === "tab" && ["track", "audio", ...(active.sourceOutcomes ? ["trackEnd"] : [])].includes(message.packet?.type)) {
-        if (active.callChanged && message.packet.type !== "trackEnd")
-          throw Object.assign(new Error("This audio belongs to a different call."), {code:"callChanged",scope:"source"});
-        await active.host.send(message.packet);
-        if (message.packet.type === "track" && active) { active.tracks++; notifyControl(); }
+        try { await forwardPacket(active, message.packet); }
+        catch (error) {
+          if (!error.retired && error.code === "state" && ["source", "command"].includes(error.scope))
+            void stop(active, "user"); // The native app has already kept the capture.
+          throw error;
+        }
         return {};
       }
       throw new Error("No active tab recording.");
@@ -463,7 +477,7 @@ chrome.tabs.onRemoved.addListener(id => {
 chrome.tabs.onUpdated.addListener((id, change) => {
   if (typeof change.url === "string" && callGenerations.has(id)) {
     const info = callInfo(id);
-    if (info.url !== null && info.url !== callAddress(change.url)) callChanged(id);
+    if (info.url !== null && info.url !== callAddress(change.url)) callChanged(id, callAddress(change.url));
     info.url = callAddress(change.url);
   }
   if (change.status === "loading") {

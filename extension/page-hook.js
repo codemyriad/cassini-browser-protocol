@@ -115,6 +115,7 @@
   function discoverySources() {
     const sources = new Set(), receivers = new Map();
     for (const pc of peers) {
+      rememberReceivers(pc);
       if (pc.signalingState === "closed") { peers.delete(pc); continue; }
       if (!connected(pc)) continue;
       for (const transceiver of pc.getTransceivers()) {
@@ -251,8 +252,8 @@
         if (!record.failed) {
           record.failed = true;
           void announce(record).catch(error => { if (!intentional(error)) fail(error.message); });
+          warn();
         }
-        warn();
       };
       state.sourceFailed = sourceFailed;
       try {

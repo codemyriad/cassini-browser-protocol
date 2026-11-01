@@ -373,3 +373,17 @@ During a page reload, present with zero sources is not proof of return: keep the
 original 120-second return deadline, start the fallback after two seconds, and
 end with pageGone at that deadline unless a fresh positive inventory restores
 browser tracks. See the executable lifecycle vectors.
+
+A span closes at its trackEnd admission barrier. The worker remembers closed IDs
+and refuses late audio, repeated declarations and repeated endings locally,
+without failing that source's healthy replacement or forwarding to legacy hosts.
+Undeclared/refused IDs cannot send audio. A producer drains its admitted PCM and
+final worklet flush before trackEnd, then detaches and fences the worklet callback.
+Late ACKs from a failed old span do not mark a replacement attempt healthy.
+
+A scope=source/command, code=state refusal from a finalized native capture retires
+both separate-track and whole-tab sessions, including their badge and offscreen
+document. A locally fenced closed span only retires that producer; it cannot end
+unrelated sources. Source-update refusals do not skip the terminal native Stop.
+Test writers refuse track, audio and trackEnd after finalization and cannot
+reopen an ended span or rewrite published metadata with its repeated ending.
