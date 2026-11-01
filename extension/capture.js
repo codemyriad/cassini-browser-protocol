@@ -30,8 +30,7 @@ function resumeSuspended(context) {
 }
 
 async function captureOnce({ stream, id, label, kind, origin, workletURL, send, fail, audible = false, enabled = () => true, channels = 1, sharedContext, getSharedContext, warn = () => {}, sourceTrackId, reportOutcomes = false, onAudio = () => {} }) {
-  if (!sharedContext && getSharedContext)
-    sharedContext = await bounded(Promise.resolve().then(getSharedContext), "Audio capture did not finish preparing within four seconds.");
+  sharedContext ||= getSharedContext?.();
   const context = sharedContext || new AudioContext({ sampleRate: 48000 });
   let source, node, silent, remotePlayback, stopping = false, ending = false, failure = null;
   let pendingFrames = 0, sequence = 0, flushed, droppedFrames = 0;
@@ -62,7 +61,6 @@ async function captureOnce({ stream, id, label, kind, origin, workletURL, send, 
     fail(error);
   }
   try {
-    if (!sharedContext) await bounded(context.suspend(), "Audio capture did not finish preparing within four seconds.");
     await bounded(context.audioWorklet.addModule(workletURL), "This meeting page blocks separate-track recording. Record the whole tab instead.");
     // Chromium may not decode a receiver for Web Audio until a media renderer exists.
     // Keep a silent renderer alive (crbug.com/40094084), without playing remote audio twice.

@@ -20,7 +20,6 @@ async function exercise(timestamp) {
     audioWorklet = { addModule: async () => {} };
     createMediaStreamSource() { return new GraphNode(); }
     createGain() { return Object.assign(new GraphNode(), { gain: { value: 1 } }); }
-    async suspend() { this.state = "suspended"; }
     async resume() { this.state = "running"; }
     async close() { this.state = 'closed'; }
     getOutputTimestamp() { return timestamp; }
@@ -80,7 +79,6 @@ test('ten-second source budget pipelines four requests, counts drops and leaves 
     audioWorklet = { addModule: async () => {} };
     createMediaStreamSource() { return new GraphNode(); }
     createGain() { return Object.assign(new GraphNode(), { gain: { value: 1 } }); }
-    async suspend() { this.state = "suspended"; }
     async resume() { this.state = "running"; } async close() { this.state = 'closed'; }
     getOutputTimestamp() { return { contextTime: 0, performanceTime: 0 }; }
   }

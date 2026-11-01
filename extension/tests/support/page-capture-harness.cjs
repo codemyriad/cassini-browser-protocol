@@ -14,7 +14,7 @@ module.exports = async function fixture(run, settings={}) {
  for(const name of ['getStats','createOffer','createAnswer','setLocalDescription','setRemoteDescription','addTrack','addTransceiver'])Peer.prototype[name]=()=>{};
  Peer.prototype.setRemoteDescription=function(){return this.descriptionTask || Promise.resolve()};
  class Stream {constructor(tracks){this.tracks=tracks}getAudioTracks(){return this.tracks}}
- class Context {constructor(){if(contextError)throw Error('generated context attach failure')}sampleRate=48000;state='running';async suspend(){this.state='suspended'}async close(){this.state='closed'}}
+ class Context {constructor(){if(contextError)throw Error('generated context attach failure')}sampleRate=48000;state='running';async close(){this.state='closed'}}
  const control=async data=>{for(const fn of listeners)await fn({source:window,data:{channel:'cassini-control',...data}})};
  const window={location:{href:'https://meet.test/call-A'},RTCPeerConnection:Peer,addEventListener:(_n,fn)=>listeners.push(fn),postMessage(message){
   messages.push(message);
@@ -23,7 +23,7 @@ module.exports = async function fixture(run, settings={}) {
  globalThis.__cassiniPageCapture=async options=>{
   const item={...options,stopped:false};captures.push(item);
   if(settings.capture){item.recorder=await settings.capture(options);return item.recorder;}
-  await options.getSharedContext?.();
+  options.getSharedContext?.();
   await options.send({type:'track',id:options.id,label:options.label,kind:options.kind,sampleRate:48000,channels:1,sourceTrackId:options.sourceTrackId});
   return {failed:false,async stop(){item.stopped=true}};
  };
