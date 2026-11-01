@@ -13,6 +13,8 @@ async function bounded(promise, message) {
 }
 
 const clocks = new WeakMap();
+const retirementReason = error => error?.code === "callChanged" ? "callChanged" :
+  error?.code === "state" && ["source", "command"].includes(error.scope) ? "stopped" : null;
 const resuming = new WeakMap();
 function resumeSuspended(context) {
   if (resuming.has(context)) return resuming.get(context);
@@ -36,7 +38,8 @@ async function captureOnce({ stream, id, label, kind, origin, workletURL, send, 
   const end = async reason => {
     if (!reportOutcomes || !announced || ended) return;
     ended = true;
-    await send({ type: "trackEnd", id, reason, droppedFrames, endOffsetMs });
+    try { await send({ type: "trackEnd", id, reason, droppedFrames, endOffsetMs }); }
+    catch (error) { if (!retirementReason(error)) throw error; }
   };
   function pump() {
     while (waiting.length && inFlight.size < 4 && !failure) {
@@ -141,8 +144,8 @@ async function captureOnce({ stream, id, label, kind, origin, workletURL, send, 
         while (inFlight.size) await Promise.allSettled([...inFlight]);
         context.removeEventListener?.("statechange", stateChanged);
         if (!sharedContext) await context.close();
-        await end(failure?.code === "callChanged" ? "callChanged" : failure ? "failed" : reason);
-        if (failure && failure.code !== "callChanged") throw failure;
+        await end(retirementReason(failure) || (failure ? "failed" : reason));
+        if (failure && !retirementReason(failure)) throw failure;
       }
     };
   } catch (error) {
@@ -151,7 +154,7 @@ async function captureOnce({ stream, id, label, kind, origin, workletURL, send, 
     if (remotePlayback) { remotePlayback.pause(); remotePlayback.srcObject = null; }
     context.removeEventListener?.("statechange", stateChanged);
     if (!sharedContext) await context.close();
-    await end(error?.code === "callChanged" ? "callChanged" : "failed").catch(() => {});
+    await end(retirementReason(error) || "failed").catch(() => {});
     throw error;
   }
 }
@@ -191,8 +194,8 @@ export async function capture(options) {
   const schedule = value => {
     if (ending || retiring || terminal || retryTimer !== null) return;
     const error = value instanceof Error ? value : new Error(String(value));
-    if (error.code === "callChanged") {
-      // The old token is deliberately fenced; retrying would cross calls.
+    if (retirementReason(error)) {
+      // The token is deliberately fenced or already saved by the native app.
       retiring = true;
       if (retryTimer !== null) cancel(retryTimer);
       retryTimer = null;

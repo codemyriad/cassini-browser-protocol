@@ -382,7 +382,10 @@ chrome.runtime.onConnect.addListener(port => {
       }
       port.postMessage({ type: "ack", token: session.token, request: message.request });
     } catch (error) {
-      if (error.scope === "source" && error.code !== "callChanged") {
+      if (error.code === "state" && ["source", "command"].includes(error.scope)) {
+        void stop(session, "user"); // Native-first Stop already saved this capture.
+      }
+      else if (error.scope === "source" && error.code !== "callChanged") {
         const key = message.packet.sourceTrackId || session.trackSources.get(message.packet.id);
         if (session.sourceOutcomes && typeof key === "string") {
           const previous = session.discoveredSources.get(key);

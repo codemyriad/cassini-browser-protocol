@@ -7,7 +7,7 @@ const path=require('node:path');
 const moduleURL='data:text/javascript;base64,'+Buffer.from('export const capture=options=>globalThis.__cassiniPageCapture(options);').toString('base64');
 
 async function fixture(run) {
- const messages=[],listeners=[],timers=[],captures=[];let now=0,uuid=0,contextError=false;
+ const messages=[],listeners=[],timers=[],captures=[];let now=0,uuid=0,contextError=false,nativeFinished=false;
  class Peer {
   constructor(){this.connectionState='connected';this.iceConnectionState='connected';this.signalingState='stable';this.slots=[];this.senders=[]}
   addEventListener(){}getTransceivers(){return this.slots}getSenders(){return this.senders}close(){this.signalingState='closed'}
@@ -19,7 +19,7 @@ async function fixture(run) {
  const control=async data=>{for(const fn of listeners)await fn({source:window,data:{channel:'cassini-control',...data}})};
  const window={location:{href:'https://meet.test/call-A'},RTCPeerConnection:Peer,addEventListener:(_n,fn)=>listeners.push(fn),postMessage(message){
   messages.push(message);
-  if(message.type==='packet')queueMicrotask(()=>control({type:'ack',token:message.token,request:message.request}));
+  if(message.type==='packet')queueMicrotask(()=>control({type:'ack',token:message.token,request:message.request,...(nativeFinished?{error:'Native capture already saved',scope:'command',code:'state'}:{})}));
  }};
  globalThis.__cassiniPageCapture=async options=>{
   const item={...options,stopped:false};captures.push(item);
@@ -40,7 +40,7 @@ async function fixture(run) {
  const tick=async()=>{now+=1000;await timers[0]();};
  const scan=async()=>{assert.ok(timers[1],'capture scan exists');await timers.at(-1)();};
  let activeToken='recording';
- try {await run({peer,window,remote,tick,scan,captures,messages,breakContext(){contextError=true},async stop(){await control({type:'stop',token:activeToken})},async start(token='recording',options={}){activeToken=token;await control({type:'start',token,origin:0,moduleURL,workletURL:'',...options})}})}
+ try {await run({peer,window,remote,tick,scan,captures,messages,nativeStopFirst(){nativeFinished=true},breakContext(){contextError=true},async stop(){await control({type:'stop',token:activeToken})},async start(token='recording',options={}){activeToken=token;await control({type:'start',token,origin:0,moduleURL,workletURL:'',...options})}})}
  finally {await control({type:'stop',token:activeToken});delete globalThis.__cassiniPageCapture;}
 }
 
@@ -137,4 +137,13 @@ test('257 discovered sources are announced without a diagnostic cap; only 64 WAV
  assert.equal(sources.size,257);assert.equal(f.captures.length,64);
  assert.equal([...sources.values()].filter(s=>s.failed).length,193);
  assert.ok(f.messages.filter(m=>m.type==='packet'&&m.packet.type==='sources').every(m=>m.packet.discoveredSources.length===1));
+}));
+
+test('native-first Stop refuses a late discovery without creating a retry or false source failure',()=>fixture(async f=>{
+ const remote=f.remote();await f.tick();remote.packets=10;await f.tick();f.nativeStopFirst();
+ await f.start('native-finished',{sourceOutcomes:true});await f.stop();
+ const sources=f.messages.filter(m=>m.type==='packet'&&m.packet.type==='sources');
+ assert.equal(sources.length,1);assert.equal(sources[0].packet.discoveredSources[0].failed,false);
+ assert.equal(f.captures.length,0);
+ assert.deepEqual(f.messages.filter(m=>m.type==='warning'||m.type==='error'),[]);
 }));

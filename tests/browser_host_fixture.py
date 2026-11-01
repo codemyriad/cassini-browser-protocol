@@ -209,6 +209,8 @@ try:
         elif kind == 'stop':
             if 'source-outcomes-v1' in features:
                 if manifest['state'] != 'recording':
+                    if request.get('captureId') == capture_id and not request.get('discoveredSources'):
+                        reply(dict(type='stopped', path=str(directory))); continue
                     refused('state', 'Capture already saved', scope='command'); continue
                 if capture_id is not None and request.get('captureId') != capture_id:
                     refused('state', 'Capture identity does not match', scope='command'); continue

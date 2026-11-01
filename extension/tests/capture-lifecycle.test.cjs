@@ -120,3 +120,15 @@ test('intentional call fencing ends the span without retries or a false source f
  const ended=packets.find(p=>p.type==='trackEnd');assert.equal(ended.reason,'callChanged');
  assert.equal(packets.filter(p=>p.type==='audio').length,1);assert.ok(ended.endOffsetMs>0);
 }));
+
+test('native-first Stop retires pending PCM and TrackEnd without retries or false IO warnings',async()=>mocked(async({capture,nodes,Context})=>{
+ const time=clock(),warnings=[],failures=[],context=new Context();let chunks=0;
+ const ended=()=>Object.assign(new Error('Capture already saved'),{code:'state',scope:'source'});
+ const recorder=await capture({stream:{},id:'native-stopped',sourceTrackId:'receiver',reportOutcomes:true,label:'Guest',kind:'local',origin:100000,workletURL:'',sharedContext:context,
+  clock:time.now,schedule:time.schedule,cancel:time.cancel,warn:m=>warnings.push(m),fail:m=>failures.push(m),
+  send:async p=>{if(p.type==='trackEnd'||p.type==='audio'&&++chunks===2)throw ended()}});
+ nodes[0].port.onmessage({data:{pcm:new ArrayBuffer(8192*2),frame:0}});await tick();
+ nodes[0].port.onmessage({data:{pcm:new ArrayBuffer(8192*2),frame:8192}});await tick();
+ assert.equal(time.timers.size,0);await recorder.stop();
+ assert.deepEqual(warnings,[]);assert.deepEqual(failures,[]);
+}));

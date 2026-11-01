@@ -334,6 +334,9 @@ it must not wait indefinitely for that final summary or depend on it to discover
 sources that already failed. A source packet after native finalization is refused
 with scope=command and code=state; it cannot rewrite a published meeting. Announced
 sources stay in the durable capture record across EOF or a native-first Stop.
+A matching Stop with an empty summary may still ACK as stopped without changing
+the saved files. A scoped state error retires the producer without retries or a
+false failed-source update; native-first Stop is an intentional end.
 
 Source ownership is half-open at each othersSource.atMs. Outgoing source audio
 is masked at the boundary before recognition, mixing and export. This is not a

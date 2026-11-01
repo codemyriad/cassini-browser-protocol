@@ -225,6 +225,8 @@
         emit(state.token, { type: "packet", request, packet });
       });
       const fail = message => emit(state.token, { type: "error", message });
+      const intentional = error => error.code === "callChanged" ||
+        error.code === "state" && ["source", "command"].includes(error.scope);
       const announce = record => {
         if (!state.sourceOutcomes) return Promise.resolve();
         const pending = send({type: "sources", discoveredSources: [{...record, label: [...record.label].slice(0, 200).join("")}]});
@@ -236,7 +238,7 @@
       const sourceFailed = record => {
         if (!record.failed) {
           record.failed = true;
-          void announce(record).catch(error => { if (error.code !== "callChanged") fail(error.message); });
+          void announce(record).catch(error => { if (!intentional(error)) fail(error.message); });
         }
         warn();
       };
@@ -323,7 +325,7 @@
                 origin: message.origin, workletURL: message.workletURL, send, sharedContext: state.context, warn: () => sourceFailed(record),
                 fail: () => sourceFailed(record) });
               state.tracks.set(track, recorder);
-              } catch (error) { if (error.code !== "callChanged") sourceFailed(record); }
+              } catch (error) { if (!intentional(error)) sourceFailed(record); }
             }
           } catch (error) { fail(error.message); }
           finally { state.scanning = false; }

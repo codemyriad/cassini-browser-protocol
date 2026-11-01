@@ -140,3 +140,15 @@ test('source batches validate UTF-8 bounds atomically without closing other audi
   assert.equal(app.audio[0].closed,false);await app.command(command('stop','stop'));
  }finally{app.close()}
 });
+
+test('native-first Stop retires the extension without false failed-source updates',async()=>{
+ const app=await setup(3,{},['source-outcomes-v1']);
+ try{
+  await app.command(command('start','start'));const port=app.audio[0],post=port.postMessage;
+  port.postMessage=function(value){if(value.type==='sources'){this.sent.push(value);queueMicrotask(()=>this.onMessage.emit({type:'error',code:'state',scope:'command',message:'Capture already saved'}))}else post.call(this,value)};
+  const refused=await packet(app,{type:'sources',discoveredSources:[{sourceTrackId:'late',kind:'remote',failed:false}]},1);
+  assert.equal(refused.code,'state');await until(()=>port.closed);
+  assert.equal(port.sent.filter(p=>p.type==='sources').length,1);
+  assert.equal(port.sent.find(p=>p.type==='sources').discoveredSources[0].failed,false);
+ }finally{app.close()}
+});
