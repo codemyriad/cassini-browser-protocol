@@ -139,6 +139,24 @@ class MultistreamTests(unittest.TestCase):
             metadata = json.loads((folder / 'session.json').read_text())
             self.assertEqual([t['frames'] for t in metadata['tracks']], [8000, 8000])
 
+    def test_null_source_identity_is_absent_and_utf8_bounds_stay_per_source(self):
+        with host() as (send, folder, _):
+            nullable = dict(type='track', id='nullable', sourceTrackId=None, label='Guest',
+                            kind='remote', sampleRate=8000, channels=1)
+            wire.Draft202012Validator(json.loads((ROOT / 'schemas/request.schema.json').read_text())).validate(nullable)
+            self.assertEqual(send(nullable)['type'], 'ack')
+            rejected = track(send, 'too-many-bytes', '€' * 67)
+            self.assertEqual((rejected['code'], rejected['scope']), ('source', 'source'))
+            self.assertEqual(track(send, 'valid-utf8', '€' * 66)['type'], 'ack')
+            self.assertEqual(audio(send, 'nullable')['type'], 'ack')
+            self.assertEqual(audio(send, 'valid-utf8')['type'], 'ack')
+            send(dict(type='stop', captureId='capture-current'))
+            metadata = json.loads((folder / 'session.json').read_text())
+            wire.VALIDATORS['session'].validate(metadata)
+            self.assertNotIn('sourceTrackId', metadata['tracks'][0])
+            metadata['tracks'][0]['sourceTrackId'] = None
+            wire.VALIDATORS['session'].validate(metadata)
+
 
 if __name__ == '__main__':
     unittest.main()

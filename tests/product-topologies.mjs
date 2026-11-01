@@ -47,7 +47,8 @@ async function start(page, packets, errors) {
       else if (message.type === 'ready') window.fixtureReady = true;
       else if (['error', 'warning'].includes(message.type)) window.recordFailure(message.type);
     });
-    window.postMessage({ channel: 'cassini-control', type: 'start', token: 'fixture', origin: Date.now(),
+    window.fixtureOrigin = Date.now();
+    window.postMessage({ channel: 'cassini-control', type: 'start', token: 'fixture', captureLocal: false, origin: fixtureOrigin,
       moduleURL: location.origin + '/capture.js', workletURL: location.origin + '/pcm-worklet.js' }, '*');
   });
   await page.waitForFunction(() => fixtureReady);
@@ -92,6 +93,7 @@ try {
     assert.ok(before.samples.every(sample => sample.length === 0), 'pre-join receives no inbound audio RTP');
     assert.equal(before.evidence.sourceCount, 3, 'only three receivers; preview sender excluded');
     assert.equal(before.evidence.heard, false);
+    const joinedAt = await page.evaluate(() => Date.now() - fixtureOrigin);
     await switchReceiveSlot(remote, 0, [440]);
     await page.waitForFunction(() => discoveryEvidence.at(-1)?.heard === true);
     const joined = await page.evaluate(() => discoveryEvidence.at(-1));
@@ -101,8 +103,8 @@ try {
     await waitFor(() => prejoinPackets.some(packet => packet.type === 'track') &&
       prejoinPackets.filter(packet => packet.type === 'track').every(track => pcm(prejoinPackets, track.id).length >= 24000));
     assert.equal(prejoinPackets.filter(packet => packet.type === 'track').length, 1, 'only the packet-proven receiver opens');
-    assert.ok(prejoinPackets.find(packet => packet.type === 'audio').offsetMs >= 2500,
-      'first audio starts after the three observed pre-join stats samples');
+    assert.ok(prejoinPackets.find(packet => packet.type === 'audio').offsetMs >= joinedAt,
+      'first audio starts after joining');
     console.log('PASS pre-join has no heard evidence; inbound audio sets the latch');
     // Same document, new pre-join peers after leaving: old evidence must not
     // auto-record the next lobby. No navigation/reload can reset the page hook.

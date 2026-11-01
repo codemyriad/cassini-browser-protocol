@@ -88,7 +88,10 @@
           ]
         },
         "sourceTrackId": {
-          "type": "string",
+          "type": [
+            "string",
+            "null"
+          ],
           "minLength": 1,
           "maxLength": 200,
           "$comment": "At most 200 UTF-8 bytes, independently of this character bound."
