@@ -39,11 +39,22 @@ function callInfo(tabId) {
 function documentFor(tabId) {
   return [...frames].find(f => f.tabId === tabId && !f.obsolete && f.frameId === 0)?.documentGeneration;
 }
+async function addressFingerprint(url) {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(callAddress(url)));
+  return [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, "0")).join("");
+}
+function fenceBaseline(frame, info) {
+  if (typeof info.documentGeneration === "string" && typeof info.hookGeneration === "string")
+    frame.fencedGenerations.add(JSON.stringify([info.documentGeneration,info.hookGeneration]));
+  frame.identitySeeded = true;
+}
 function callChanged(tabId, url = null) {
   const current = sessions.get(tabId);
   const info = callInfo(tabId);
-  info.generation = crypto.randomUUID(); info.url = url;
+  info.generation = crypto.randomUUID(); info.url = url; info.boundaryPending = true;
+  delete info.addressHash;
   for (const frame of frames) if (frame.tabId === tabId) {
+    if (frame.frameId === 0) fenceBaseline(frame, info);
     if (frame.callGeneration !== undefined) frame.fencedGenerations.add(JSON.stringify([frame.documentGeneration,frame.callGeneration]));
     frame.callGeneration = undefined; frame.sourceCount = 0; frame.heard = false;
   }
@@ -93,8 +104,15 @@ async function recordSources(session, values) {
 let lastStatus = { recording: false, message: "Ready. Choose Separate tracks or Whole tab." };
 let storageTail = Promise.resolve();
 function persistSessions() {
+  if (!identitiesHydrated) return recovery.then(() => persistSessions());
   const write = async () => {
-    await chrome.storage.session.set({cassiniCallGenerations: [...callGenerations].map(([tabId, info]) => ({tabId, ...info}))});
+    const identities = [];
+    for (const [tabId, snapshot] of [...callGenerations].map(([tabId, info]) => [tabId, {...info}])) {
+      const {url, ...info} = snapshot;
+      info.addressHash = url === null ? info.addressHash ?? null : await addressFingerprint(url);
+      identities.push({tabId, ...info});
+    }
+    await chrome.storage.session.set({cassiniCallGenerations: identities});
     const values = [...sessions.values()].filter(s => s.path).map(s =>
       ({ recording: true, mode: s.mode, path: s.path, tabId: s.tabId, startedAt: s.origin, captureId: s.token, pageState: pageState(s.tabId) }));
     if (values.length) await chrome.storage.session.set({ cassiniActive: values[0], cassiniSessions: values });
@@ -109,11 +127,20 @@ const recovery = (async () => {
   const identities = stored.cassiniCallGenerations;
   if (Array.isArray(identities) && identities.length <= 200) for (const value of identities) {
     if (!value || !Number.isSafeInteger(value.tabId) || value.tabId < 0 || !opaque(value.generation) ||
-        !(value.url === null || typeof value.url === "string" && value.url.length <= 2048 && /^https?:/.test(value.url))) continue;
-    const info = {generation:value.generation, url:value.url};
+        !(value.addressHash === null || typeof value.addressHash === "string" && /^[0-9a-f]{64}$/.test(value.addressHash))) continue;
+    const info = {generation:value.generation, url:null, addressHash:value.addressHash};
     if (opaque(value.documentGeneration) && opaque(value.hookGeneration))
       Object.assign(info, {documentGeneration:value.documentGeneration, hookGeneration:value.hookGeneration});
+    if (value.boundaryPending === true) info.boundaryPending = true;
     callGenerations.set(value.tabId, info);
+    try {
+      const tab = await chrome.tabs.get(value.tabId);
+      if (typeof tab.url === "string" && /^https?:/.test(tab.url)) {
+        if (info.addressHash !== null && await addressFingerprint(tab.url) !== info.addressHash)
+          callChanged(value.tabId, callAddress(tab.url));
+        else info.url = callAddress(tab.url);
+      }
+    } catch { /* A missing lookup cannot erase a retained call identity. */ }
   }
   const previous = Array.isArray(stored.cassiniSessions) ? stored.cassiniSessions.slice(0, 100) : stored.cassiniActive ? [stored.cassiniActive] : [];
   for (const value of previous) {
@@ -382,7 +409,8 @@ chrome.runtime.onConnect.addListener(port => {
         const info = callInfo(frame.tabId);
         if (frame.frameId === 0 && !frame.identitySeeded) {
           frame.identitySeeded = true;
-          if (info.documentGeneration === document) {
+          if (info.boundaryPending) fenceBaseline(frame, info);
+          else if (info.documentGeneration === document) {
             frame.documentGeneration = document; frame.callGeneration = info.hookGeneration;
           }
         }
@@ -391,7 +419,7 @@ chrome.runtime.onConnect.addListener(port => {
         if (changed) callChanged(frame.tabId);
         frame.documentGeneration = document; frame.callGeneration = generation;
         if (frame.frameId === 0 && (info.documentGeneration !== document || info.hookGeneration !== generation)) {
-          Object.assign(info, {documentGeneration:document, hookGeneration:generation});
+          Object.assign(info, {documentGeneration:document, hookGeneration:generation, boundaryPending:false});
           void persistSessions().catch(() => {});
         }
       }
