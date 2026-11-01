@@ -23,3 +23,13 @@ class LifecycleTests(unittest.TestCase):
         case=json.loads((ROOT/'conformance/multistream/lifecycle.json').read_text())['cases'][0]
         old=legacy.Policy()
         self.assertTrue(any(old.step(dict(pageState='present',**s))!=s['expect'] for s in case['steps']))
+    def test_transport_loss_with_present_page_never_arms_page_gone(self):
+        # D52.4 Q3: treating a closed audio transport as missing-page evidence
+        # (a 2 s missing timer and the 120 s pageGone deadline) must fail.
+        cases={c['name']:c for c in json.loads((ROOT/'conformance/multistream/lifecycle.json').read_text())['cases']}
+        case=cases['transport-lost-with-present-page-stays-on-fallback']
+        missing=policy.Policy()
+        actual=[missing.step(dict(s,controlAlive=s.get('controlAlive',True) and s.get('transportAlive',True))) for s in case['steps']]
+        self.assertNotEqual(actual,[s['expect'] for s in case['steps']])
+        sticky=policy.Policy()  # ignoring transportAlive never falls back
+        self.assertNotEqual([sticky.step({k:v for k,v in s.items() if k!='transportAlive'}) for s in case['steps']],[s['expect'] for s in case['steps']])
