@@ -21,10 +21,13 @@ class CassiniPCM extends AudioWorkletProcessor {
     this.port.postMessage({ pcm, frame: this.firstFrame }, [pcm]);
     this.used = 0;
   }
-  process(inputs) {
+  process(inputs, outputs) {
     if (this.stopped) return false;
     const input = inputs[0];
-    const frames = input[0]?.length ?? 128;
+    // An unconnected input has no channel buffer. Chromium's render quantum
+    // can be larger than 128; use the actual output block so silence and the
+    // render clock advance by the same number of samples during attachment.
+    const frames = outputs?.[0]?.[0]?.length ?? input[0]?.length ?? 128;
     for (let frame = 0; frame < frames; frame++) {
       if (!this.used) this.firstFrame = currentFrame + frame;
       for (let channel = 0; channel < this.channels; channel++) {

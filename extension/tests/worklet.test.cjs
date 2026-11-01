@@ -38,3 +38,20 @@ test('missing and non-finite samples become silence', () => {
   node.port.onmessage({ data: 'stop' });
   assert.ok([...new Int16Array(packets[0].pcm)].every(sample => sample === 0));
 });
+
+for(const quantum of [128,256,512])test(`empty input preserves the real ${quantum}-frame quantum and has no phantom timestamp gap`,()=>{
+ const {node,packets,context}=processor(1);context.currentFrame=0;
+ for(let index=0;index<64;index++){
+  const input=index<14?[[]]:[[new Float32Array(quantum).fill(.25)]];
+  node.process(input,[[new Float32Array(quantum)]]);context.currentFrame+=quantum;
+ }
+ node.port.onmessage({data:'stop'});
+ let frames=0;
+ for(const packet of packets.filter(p=>p.pcm)){
+  assert.equal(packet.frame,frames,'missing input must not consume fewer samples than the render clock');
+  frames+=packet.pcm.byteLength/2;
+ }
+ assert.equal(frames,64*quantum);
+ const samples=packets.filter(p=>p.pcm).flatMap(p=>[...new Int16Array(p.pcm)]);
+ assert.ok(samples.slice(0,14*quantum).every(value=>value===0));assert.ok(samples.slice(14*quantum).every(value=>value>0));
+});

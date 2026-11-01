@@ -366,7 +366,7 @@ expectations for both apps, checked by an independent fixture oracle. It is not
 production policy code. Each app must additionally test its actual writer and
 fallback/restore device failures.
 
-## D52 multi-stream lifecycle (extension 0.2.5; draft PR)
+## D52 multi-stream lifecycle (extension 0.2.6; draft PR)
 
 The extension advertises multi-stream-v1 alongside its existing capabilities.
 The following policy supersedes the legacy two-second present-page call-end
