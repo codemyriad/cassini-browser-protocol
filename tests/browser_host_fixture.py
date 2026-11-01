@@ -166,7 +166,7 @@ try:
                 if key and any(t.get('sourceTrackId') == key and not t.get('ended') for t in manifest['tracks']):
                     refused('source', 'Overlapping live source span', request['id']); continue
             label = ''.join(c for c in request.get('label', kind) if unicodedata.category(c) not in ['Cc', 'Cf'])[:200]
-            track = dict(id=request['id'], label=label, kind=request['kind'], sampleRate=request['sampleRate'], channels=request['channels'], frames=0, file='track-' + str(uuid.uuid4()) + '.wav', labelSource='browser')
+            track = dict(id=request['id'], label=label, kind=request['kind'], sampleRate=request['sampleRate'], channels=request['channels'], frames=0, file='track-' + str(uuid.uuid4()) + '.wav', labelSource='browser', gaps=[])
             if request.get('sourceTrackId') is not None:
                 track['sourceTrackId'] = request['sourceTrackId']
             seen.setdefault(track.get('sourceTrackId') or track['id'], dict(kind=track['kind'], label=label))
@@ -197,7 +197,14 @@ try:
             track.setdefault('startOffsetMs', request['offsetMs'])
             delta = round((request['offsetMs'] - track['startOffsetMs']) * track['sampleRate'] / 1000) - len(pcm) // (track['channels'] * 2)
             if delta > track['sampleRate'] // 50:
+                before = len(pcm) // (track['channels'] * 2)
                 pcm.extend(b'\0' * (delta * track['channels'] * 2))
+                track['gapFrames'] = track.get('gapFrames', 0) + delta
+                if len(track['gaps']) < 1000:
+                    track['gaps'].append(dict(atMs=track['startOffsetMs'] + before * 1000 / track['sampleRate'],
+                                              durationMs=delta * 1000 / track['sampleRate'], frames=delta, kind='jump'))
+                elif track['gaps'][-1]['kind'] != 'overflow':
+                    track['gaps'].append(dict(atMs=track['startOffsetMs'] + before * 1000 / track['sampleRate'], kind='overflow'))
             data = base64.b64decode(request['pcm'])
             pcm.extend(data)
             received[track['id']] += len(data) // (track['channels'] * 2)
@@ -208,7 +215,7 @@ try:
             if track is None or track.get('ended'):
                 refused('state', 'No live span', request['id']); continue
             track['ended'] = True
-            track['droppedFrames'] = request['droppedFrames']
+            track['droppedFrames'] = track.get('droppedFrames', 0) + request['droppedFrames']
             if request['reason'] == 'failed': track.setdefault('problemKind', 'capture')
             if track.get('startOffsetMs') is not None:
                 track['endOffsetMs'] = track['startOffsetMs'] + len(audio[track['id']]) / (track['sampleRate'] * track['channels'] * 2) * 1000
