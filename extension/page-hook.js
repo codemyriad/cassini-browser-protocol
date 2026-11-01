@@ -211,7 +211,7 @@
       return;
     }
     if (message.type === "start" && !active) {
-      const state = { token: message.token, callGeneration, sourceOutcomes: message.sourceOutcomes === true, pending: new Map(), sourceUpdates: new Set(), tracks: new Map(), sources: new Map(), spanCount: 0, localMetadata: new Map(), next: 0, stopping: false, scanning: false };
+      const state = { token: message.token, callGeneration, sourceOutcomes: message.sourceOutcomes === true, pending: new Map(), sourceUpdates: new Set(), announcedSources: new Set(), tracks: new Map(), sources: new Map(), spanIds: new Set(), localMetadata: new Map(), next: 0, stopping: false, scanning: false };
       active = state;
       const send = packet => new Promise((resolve, reject) => {
         refreshCall();
@@ -221,7 +221,7 @@
         }
         const request = ++state.next;
         const timer = setTimeout(() => { state.pending.delete(request); reject(new Error("Cassini did not confirm receiving audio.")); }, 10000);
-        state.pending.set(request, { resolve, reject, timer });
+        state.pending.set(request, { resolve: () => { if (packet.type === "track") state.spanIds.add(packet.id); resolve(); }, reject, timer });
         emit(state.token, { type: "packet", request, packet });
       });
       const fail = message => emit(state.token, { type: "error", message });
@@ -229,7 +229,7 @@
         error.code === "state" && ["source", "command"].includes(error.scope);
       const announce = record => {
         if (!state.sourceOutcomes) return Promise.resolve();
-        const pending = send({type: "sources", discoveredSources: [{...record, label: [...record.label].slice(0, 200).join("")}]});
+        const pending = send({type: "sources", discoveredSources: [{...record, label: [...record.label].slice(0, 200).join("")}]}).then(() => { state.announcedSources.add(record.sourceTrackId); });
         state.sourceUpdates.add(pending);
         pending.then(() => state.sourceUpdates.delete(pending), () => state.sourceUpdates.delete(pending));
         return pending;
@@ -312,13 +312,13 @@
               const record = state.sources.get(sourceTrackId) || { sourceTrackId, kind: metadata.kind,
                 label: `${metadata.kind}: ${track.label || track.id}`, failed: false };
               state.sources.set(sourceTrackId, record);
-              const nextSpanId = () => state.spanCount < 64 ? (state.spanCount++, crypto.randomUUID()) : null;
+              const nextSpanId = () => state.spanIds.size < 64 ? crypto.randomUUID() : null;
               try {
-              await announce(record); // Durable discovery precedes every possible attach failure.
+              if (!state.announcedSources.has(sourceTrackId)) await announce(record);
               if (state.stopping) break;
               state.context ??= new AudioContext({ sampleRate: 48000 });
               const id = nextSpanId();
-              if (!id) { sourceFailed(record); continue; }
+              if (!id) { if (!record.failed) sourceFailed(record); continue; }
               const recorder = await capture({ stream: new MediaStream([track]), id, sourceTrackId,
                 reportOutcomes: message.sourceOutcomes === true, nextSpanId, live: () => track.readyState === "live",
                 label: `${metadata.kind}: ${track.label || track.id}`, kind: metadata.kind, enabled,

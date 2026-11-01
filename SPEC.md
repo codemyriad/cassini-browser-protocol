@@ -337,6 +337,9 @@ sources stay in the durable capture record across EOF or a native-first Stop.
 A matching Stop with an empty summary may still ACK as stopped without changing
 the saved files. A scoped state error retires the producer without retries or a
 false failed-source update; native-first Stop is an intentional end.
+Unchanged, already-ACKed discoveries do not generate periodic source writes.
+The producer's span budget counts successful track ACKs, not IDs generated for
+attachments that failed before a WAV was opened; retries cannot spend that budget.
 
 Source ownership is half-open at each othersSource.atMs. Outgoing source audio
 is masked at the boundary before recognition, mixing and export. This is not a

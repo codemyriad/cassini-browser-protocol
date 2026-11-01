@@ -131,7 +131,10 @@ test('discovery is acknowledged before an AudioContext attach failure and the fa
 
 test('257 discovered sources are announced without a diagnostic cap; only 64 WAV spans are opened',()=>fixture(async f=>{
  const slots=Array.from({length:257},()=>f.remote());await f.tick();for(const slot of slots)slot.packets=10;
- await f.tick();await f.start('many-sources',{sourceOutcomes:true});await f.stop();
+ await f.tick();await f.start('many-sources',{sourceOutcomes:true});
+ const before=f.messages.filter(m=>m.type==='packet'&&m.packet.type==='sources').length;
+ await f.scan();assert.equal(f.messages.filter(m=>m.type==='packet'&&m.packet.type==='sources').length,before,'unchanged refused sources do not create repeated durable writes');
+ await f.stop();
  const sources=new Map();for(const message of f.messages.filter(m=>m.type==='packet'&&m.packet.type==='sources'))
   for(const source of message.packet.discoveredSources)sources.set(source.sourceTrackId,source);
  assert.equal(sources.size,257);assert.equal(f.captures.length,64);
@@ -146,4 +149,11 @@ test('native-first Stop refuses a late discovery without creating a retry or fal
  assert.equal(sources.length,1);assert.equal(sources[0].packet.discoveredSources[0].failed,false);
  assert.equal(f.captures.length,0);
  assert.deepEqual(f.messages.filter(m=>m.type==='warning'||m.type==='error'),[]);
+}));
+
+test('retry ids before a successful track ACK cannot exhaust the WAV allocation budget',()=>fixture(async f=>{
+ const remote=f.remote();await f.tick();remote.packets=10;await f.tick();await f.start('retry-before-track',{sourceOutcomes:true});
+ const ids=Array.from({length:70},()=>f.captures[0].nextSpanId());
+ assert.ok(ids.every(id=>typeof id==='string'&&id.length>0));assert.equal(new Set(ids).size,70);
+ assert.equal(f.messages.filter(m=>m.type==='packet'&&m.packet.type==='track').length,1);
 }));
