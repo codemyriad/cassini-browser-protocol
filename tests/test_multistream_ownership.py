@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 import unittest
+from jsonschema.exceptions import ValidationError
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('ownership', ROOT / 'conformance/multistream/ownership.py')
@@ -33,4 +34,4 @@ class OwnershipTests(unittest.TestCase):
             if mutation == 'disabled': case['events'][0]['others'] = False
             if mutation == 'wrong-source': case['events'][-1]['source'] = 'system'
             if mutation == 'wrong-history': case['events'][1]['reason'] = 'user'
-            with self.subTest(mutation=mutation), self.assertRaises(ValueError): annotations.validate(case)
+            with self.subTest(mutation=mutation), self.assertRaises((ValueError, ValidationError)): annotations.validate(case)

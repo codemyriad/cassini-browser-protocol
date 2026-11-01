@@ -9,7 +9,7 @@ const {once}=require('node:events');
 const {setup,event,until}=require('./support/app-control-harness.cjs');
 test('seventy sources cross the production relay and worker into a framed native writer',async()=>{
  const root=fs.mkdtempSync(path.join(os.tmpdir(),'cassini-source-ledger-'));
- const child=spawn('python3',[path.resolve(__dirname,'../../tests/browser_host_fixture.py'),root],{stdio:['pipe','pipe','pipe']});
+ const child=spawn('python3',[process.env.CASSINI_TEST_NATIVE_HOST_FIXTURE || path.resolve(__dirname,'../../tests/browser_host_fixture.py'),root],{stdio:['pipe','pipe','pipe'],timeout:10000});
  const exited=once(child,'exit');let stderr='';child.stderr.on('data',b=>stderr+=b);let buffered=Buffer.alloc(0);
  const native={sent:[],closed:false,onMessage:event(),onDisconnect:event(),postMessage(p){this.sent.push(p);const b=Buffer.from(JSON.stringify(p)),header=Buffer.alloc(4);header.writeUInt32LE(b.length);child.stdin.write(Buffer.concat([header,b]))},disconnect(){if(!this.closed){this.closed=true;child.stdin.end();this.onDisconnect.emit()}}};
  child.stdout.on('data',b=>{buffered=Buffer.concat([buffered,b]);while(buffered.length>=4&&buffered.length>=4+buffered.readUInt32LE()){const n=buffered.readUInt32LE();const packet=JSON.parse(buffered.subarray(4,4+n));buffered=buffered.subarray(4+n);native.onMessage.emit(packet)}});
