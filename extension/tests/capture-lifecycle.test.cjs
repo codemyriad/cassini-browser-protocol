@@ -16,7 +16,7 @@ async function mocked(run) {
   async resume(){if(this.state==='suspended'){now+=500;this.state='running';this.listeners.forEach(fn=>fn())}}
   async close(){this.state='closed'}
  }
- class Worklet extends Graph {constructor(){super();nodes.push(this);this.port={postMessage:()=>this.port.onmessage({data:{stopped:true}})}}}
+ class Worklet extends Graph {connect(target){if(!Context.deferReadiness)queueMicrotask(()=>this.port.onmessage?.({data:{ready:true}}));return target}constructor(){super();nodes.push(this);this.port={postMessage:message=>{if(message==="stop")this.port.onmessage({data:{stopped:true}})}}}}
  globalThis.AudioContext=Context;globalThis.AudioWorkletNode=Worklet;
  Object.defineProperty(globalThis,'performance',{configurable:true,value:{timeOrigin:100000,now:()=>now}});
  try {const module=await import('data:text/javascript;base64,'+Buffer.from(source).toString('base64'));await run({...module,nodes,contexts,Context,setNow:value=>{now=value}})}
@@ -242,4 +242,22 @@ test('a failed shared-context suspension closes it and allows the next live atta
   await time.advance(retryDelay(0));assert.equal(instances.length,2);assert.equal(instances[1].state,'running');
   assert.equal(f.messages.filter(m=>m.packet?.type==='track').length,1);
  },{Context:Startup,capture:options=>capture({...options,clock:time.now,schedule:time.schedule,cancel:time.cancel})});
+}));
+
+
+test('source connects only after render readiness and PCM arms only after the native declaration ACK',async()=>mocked(async({capture,nodes,Context})=>{
+ Context.deferReadiness=true;
+ const context=new Context(),packets=[],commands=[];let connected=false,ack;
+ context.createMediaStreamSource=()=>({connect(){connected=true},disconnect(){}});
+ const declaration=new Promise(resolve=>{ack=resolve});
+ const pending=capture({stream:{},id:'clock-ready',kind:'local',label:'Voice',origin:100000,workletURL:'',sharedContext:context,
+  send:async packet=>{packets.push(packet);if(packet.type==='track')await declaration}});
+ await tick();
+ assert.equal(nodes.length,1);assert.equal(connected,false);assert.deepEqual(packets,[]);
+ const node=nodes[0];
+ node.port.postMessage=message=>{commands.push(message);if(message==='stop')node.port.onmessage({data:{stopped:true}})};
+ node.port.onmessage({data:{ready:true}});await tick();
+ assert.equal(connected,true);assert.equal(packets[0].type,'track');assert.deepEqual(commands,[]);
+ ack();const recorder=await pending;
+ assert.deepEqual(commands,['start']);await recorder.stop();
 }));

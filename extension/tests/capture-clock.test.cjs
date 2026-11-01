@@ -26,9 +26,10 @@ async function exercise(timestamp) {
     getOutputTimestamp() { return timestamp; }
   }
   class Worklet extends GraphNode {
+    connect(target) { queueMicrotask(()=>this.port.onmessage?.({data:{ready:true}})); return target; }
     constructor() {
       super(); node = this;
-      this.port = { onmessage: null, postMessage: () => this.port.onmessage({ data: { stopped: true } }) };
+      this.port = { onmessage: null, postMessage: message => { if(message === "stop") this.port.onmessage({ data: { stopped: true } }); } };
     }
   }
   Object.defineProperty(globalThis, 'performance', { configurable: true, value: { timeOrigin: 100000, now: () => now } });
@@ -84,9 +85,10 @@ test('ten-second source budget pipelines four requests, counts drops and leaves 
     getOutputTimestamp() { return { contextTime: 0, performanceTime: 0 }; }
   }
   class Worklet extends GraphNode {
+    connect(target) { queueMicrotask(()=>this.port.onmessage?.({data:{ready:true}})); return target; }
     constructor() {
       super(); nodes.push(this);
-      this.port = { postMessage: () => this.port.onmessage({ data: { stopped: true } }) };
+      this.port = { postMessage: message => { if(message === "stop") this.port.onmessage({ data: { stopped: true } }); } };
     }
   }
   globalThis.AudioContext = Context; globalThis.AudioWorkletNode = Worklet;

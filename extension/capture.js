@@ -79,10 +79,16 @@ async function captureOnce({ stream, id, label, kind, origin, workletURL, send, 
     });
     silent = context.createGain();
     silent.gain.value = 0;
-    source.connect(node).connect(silent).connect(context.destination);
+    // A newly constructed worklet can observe its initial global frame before
+    // the device clock catches up. Warm only the disconnected graph; no source
+    // PCM is admitted or timestamp adjusted during this readiness handshake.
+    const ready = new Promise(resolve => { node.port.onmessage = ({data}) => {if (data.ready) resolve();}; });
+    node.connect(silent).connect(context.destination);
     if (audible) source.connect(context.destination);
     await bounded(context.resume(), "Click somewhere in the meeting page so the browser allows audio, then try again. Or record the whole tab.");
     if (context.state !== "running") throw new Error("Audio capture is suspended. Interact with the meeting page, then try again or use Tab audio.");
+    await bounded(ready, "Audio render clock did not become ready.");
+    source.connect(node);
     let clockOffset = clocks.get(context);
     await send({ type: "track", id, label, kind, sampleRate: context.sampleRate, channels,
       ...(sourceTrackId ? { sourceTrackId } : {}) });
@@ -129,6 +135,7 @@ async function captureOnce({ stream, id, label, kind, origin, workletURL, send, 
       waiting.push({ message, frames });
       pump();
     };
+    node.port.postMessage("start");
     return {
       get failed() { return !!failure; },
       get droppedFrames() { return droppedFrames; },
