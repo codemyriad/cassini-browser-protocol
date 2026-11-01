@@ -90,7 +90,7 @@ class ControlTests(unittest.TestCase):
         # D52.2 Q7 added host-derived gapFrames/state to the two legacy gap vectors.
         self.assertEqual(hashlib.sha256((ROOT / 'conformance/vectors.json').read_bytes()).hexdigest(), 'd79a75fcf3608ab652f11fc89d5426c9476737bc9f5f22bbb6260b397b0f35e1')
         # The runner gained per-case private Libraries (test Library isolation).
-        self.assertEqual(hashlib.sha256((ROOT / 'conformance/run.py').read_bytes()).hexdigest(), '0e23b5607e8f1d7b75559efdf75f14724245b11ba5aa080486535348213e879b')
+        self.assertEqual(hashlib.sha256((ROOT / 'conformance/run.py').read_bytes()).hexdigest(), 'e1c01b919bcfb465e511058d285171f9ff1095f9193b8ca4684cc40236a26cb1')
 
 if __name__ == '__main__':
     unittest.main()

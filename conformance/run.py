@@ -98,8 +98,8 @@ def check_session(directory, case, accepted, stopped, stop_response, start_reque
             for key,value in fields.items(): assert by_id[id].get(key)==value,(id,key)
     return manifest
 
-def run(host, case):
-    temporary = tempfile.mkdtemp(prefix='cassini-conformance-')
+def run(host, case, parent=None):
+    temporary = tempfile.mkdtemp(prefix='cassini-conformance-', dir=parent)
     library, env = isolated(temporary)
     process = subprocess.Popen([host],stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,env=env)
     stderr = bytearray()
@@ -161,8 +161,10 @@ def run(host, case):
         shutil.rmtree(temporary)
         print('PASS',case['name']);return True
     except LibraryEscape as error:
+        shutil.rmtree(temporary,ignore_errors=True)
         print('FAIL',case['name'],str(error),file=sys.stderr);raise
     except Exception as error:
+        if directory is None: shutil.rmtree(temporary,ignore_errors=True)  # nothing to inspect
         print('FAIL',case['name'],str(error),'retained session:',directory,file=sys.stderr);return False
     finally:
         if process.poll() is None:process.kill()
