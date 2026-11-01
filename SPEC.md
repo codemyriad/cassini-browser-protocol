@@ -296,8 +296,9 @@ Every writer records where it wrote padding: per track, `gaps: [{atMs, durationM
 New writers always write the key, so `gaps: []` means no gaps and a missing key means unknown.
 - `atMs` is on the session timeline (same as offsetMs/startOffsetMs/events): the position of the
   first padded frame in the file, startOffsetMs + framesBefore/rate*1000. Absorbed jitter means
-  this can differ from the wire offset by up to the tolerance. Clock-mapped native tracks use
-  the mapped position. `frames` is the exact integer padding at the track rate.
+  this can differ from the wire offset by up to the tolerance. Native tracks with host-clock
+  anchors use the host time at which the gap began (the next buffer's stamp minus the gap), which
+  the anchor mapping approximates. `frames` is the exact integer padding at the track rate.
 - Ranges are half-open, sorted and never coalesced: one entry per padding write, even when
   only a little received audio separates two of them.
 - `kind` is diagnostic and open. Host-derived kinds: `jump` (browser offset jump; overflow,
