@@ -186,7 +186,7 @@ for(const order of ['browser-first','hook-first'])test(`SPA generation changes e
    const once=app.api.callInfo(2).generation;
    discover(page,'A');assert.equal([...app.api.frames].find(f=>f.tabId===2&&f.frameId===0).heard,false,'in-flight A cannot vote under B');
    discover(page,'B');assert.equal((await app.api.meetings()).meetings[0].callGeneration,once);
-  }else{discover(page,'B');const once=(await app.api.meetings()).meetings[0].callGeneration;app.chrome.tabs.onUpdated.emit(2,{url:'https://meet.example/B'});assert.equal((await app.api.meetings()).meetings[0].callGeneration,once)}
+  }else{discover(page,'B');const once=(await app.api.meetings()).meetings[0].callGeneration;await until(()=>app.audio[0].closed);app.chrome.tabs.onUpdated.emit(2,{url:'https://meet.example/B'});assert.equal((await app.api.meetings()).meetings[0].callGeneration,once)}
   const observed=(await app.api.meetings()).meetings[0];assert.equal(observed.heard,true);assert.equal(observed.sourceCount,1);
   await until(()=>app.audio[0].closed);
   discover(page,'B');const generation=(await app.api.meetings()).meetings[0].callGeneration;assert.notEqual(generation,before);
