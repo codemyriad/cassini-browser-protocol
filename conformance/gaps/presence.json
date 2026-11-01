@@ -223,6 +223,83 @@
     ],
     "unknown": []
    }
+  },
+  {
+   "name": "non-integer-edges-take-the-next-sample",
+   "track": {
+    "startOffsetMs": 0,
+    "sampleRate": 48000,
+    "frames": 96000,
+    "gaps": [
+     {
+      "atMs": 1000.03,
+      "durationMs": 100,
+      "frames": 4800,
+      "kind": "jump"
+     }
+    ]
+   },
+   "expected": {
+    "present": [
+     [
+      0,
+      16001
+     ],
+     [
+      17601,
+      32000
+     ]
+    ],
+    "unknown": []
+   }
+  },
+  {
+   "name": "float-noise-does-not-move-a-boundary",
+   "note": "125.43750000000001 is 6021/48000*1000 in binary floating point; exactly 2007/16.",
+   "track": {
+    "startOffsetMs": 0,
+    "sampleRate": 48000,
+    "frames": 48000,
+    "gaps": [
+     {
+      "atMs": 125.43750000000001,
+      "durationMs": 20,
+      "frames": 960,
+      "kind": "jump"
+     }
+    ]
+   },
+   "expected": {
+    "present": [
+     [
+      0,
+      2007
+     ],
+     [
+      2327,
+      16000
+     ]
+    ],
+    "unknown": []
+   }
+  },
+  {
+   "name": "null-gaps-is-unknown",
+   "track": {
+    "startOffsetMs": 0,
+    "sampleRate": 48000,
+    "frames": 48000,
+    "gaps": null
+   },
+   "expected": {
+    "present": [],
+    "unknown": [
+     [
+      0,
+      16000
+     ]
+    ]
+   }
   }
  ]
 }

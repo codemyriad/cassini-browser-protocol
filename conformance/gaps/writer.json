@@ -663,6 +663,168 @@
      }
     ]
    }
+  },
+  {
+   "name": "jump-of-exactly-one-second-flags",
+   "features": [
+    "source-outcomes-v1"
+   ],
+   "steps": [
+    {
+     "op": "track",
+     "id": "a"
+    },
+    {
+     "op": "audio",
+     "id": "a",
+     "offsetMs": 0,
+     "frames": 48000
+    },
+    {
+     "op": "audio",
+     "id": "a",
+     "offsetMs": 2000,
+     "frames": 48000
+    }
+   ],
+   "expected": {
+    "state": "interrupted",
+    "problemKind": "gap",
+    "tracks": [
+     {
+      "wire": "a",
+      "startOffsetMs": 0,
+      "frames": 144000,
+      "gapFrames": 48000,
+      "droppedFrames": 0,
+      "gaps": [
+       {
+        "atMs": 1000,
+        "durationMs": 1000,
+        "frames": 48000,
+        "kind": "jump"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "early-jitter-makes-a-one-second-wire-jump-pad-less",
+   "features": [
+    "source-outcomes-v1"
+   ],
+   "steps": [
+    {
+     "op": "track",
+     "id": "a"
+    },
+    {
+     "op": "audio",
+     "id": "a",
+     "offsetMs": 0,
+     "frames": 48000
+    },
+    {
+     "op": "audio",
+     "id": "a",
+     "offsetMs": 985,
+     "frames": 48000
+    },
+    {
+     "op": "audio",
+     "id": "a",
+     "offsetMs": 2995,
+     "frames": 48000
+    }
+   ],
+   "expected": {
+    "state": "completed",
+    "problemKind": null,
+    "tracks": [
+     {
+      "wire": "a",
+      "startOffsetMs": 0,
+      "frames": 191760,
+      "gapFrames": 47760,
+      "droppedFrames": 0,
+      "gaps": [
+       {
+        "atMs": 2000,
+        "durationMs": 995,
+        "frames": 47760,
+        "kind": "jump"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "long-jump-after-overflow-still-flags",
+   "features": [
+    "source-outcomes-v1"
+   ],
+   "steps": [
+    {
+     "op": "track",
+     "id": "a"
+    },
+    {
+     "op": "series",
+     "id": "a",
+     "firstOffsetMs": 0,
+     "everyMs": 100,
+     "count": 1002,
+     "frames": 2400
+    },
+    {
+     "op": "audio",
+     "id": "a",
+     "offsetMs": 102100,
+     "frames": 48000
+    }
+   ],
+   "expected": {
+    "state": "interrupted",
+    "problemKind": "gap",
+    "tracks": [
+     {
+      "wire": "a",
+      "startOffsetMs": 0,
+      "frames": 4948800,
+      "gapFrames": 2496000,
+      "droppedFrames": 0,
+      "gapsCount": 1001,
+      "gapsHead": [
+       {
+        "atMs": 50,
+        "durationMs": 50,
+        "frames": 2400,
+        "kind": "jump"
+       },
+       {
+        "atMs": 150,
+        "durationMs": 50,
+        "frames": 2400,
+        "kind": "jump"
+       }
+      ],
+      "gapsTail": [
+       {
+        "atMs": 99950,
+        "durationMs": 50,
+        "frames": 2400,
+        "kind": "jump"
+       },
+       {
+        "atMs": 100050,
+        "kind": "overflow"
+       }
+      ]
+     }
+    ]
+   }
   }
  ]
 }

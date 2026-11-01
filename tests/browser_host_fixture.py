@@ -27,6 +27,7 @@ features = set()
 capture_id = None
 received = {}
 seen = {}
+long_gaps = set()
 
 def reply(value):
     payload = json.dumps(value).encode()
@@ -95,6 +96,10 @@ def finish(problem=None, reason=None):
         if any(source['captureOutcome'] != 'captured' for source in manifest['captureOutcome']['sources']):
             problem = problem or 'Some announced audio was not fully captured.'
             manifest['problemKind'] = 'io' if any(t.get('problemKind') == 'io' for t in manifest['tracks']) else 'capture'
+    if not problem and long_gaps:
+        # D52.2: only a padding write of one second or more flags the session.
+        problem = 'Some input time was preserved as silence.'
+        manifest['problemKind'] = 'gap'
     manifest['state'] = 'interrupted' if problem else 'completed'
     if problem:
         manifest['problem'] = problem
@@ -200,6 +205,8 @@ try:
                 before = len(pcm) // (track['channels'] * 2)
                 pcm.extend(b'\0' * (delta * track['channels'] * 2))
                 track['gapFrames'] = track.get('gapFrames', 0) + delta
+                if delta >= track['sampleRate']:
+                    long_gaps.add(track['id'])
                 if len(track['gaps']) < 1000:
                     track['gaps'].append(dict(atMs=track['startOffsetMs'] + before * 1000 / track['sampleRate'],
                                               durationMs=delta * 1000 / track['sampleRate'], frames=delta, kind='jump'))
@@ -232,7 +239,7 @@ try:
                 except ValueError as error:
                     refused('source', str(error), scope='command'); continue
             finish(request.get('problem'), request.get('reason') or 'user')
-            reply(dict(type='stopped', path=str(directory), **({'problem': request['problem']} if request.get('problem') else {})))
+            reply(dict(type='stopped', path=str(directory), **({'problem': manifest['problem']} if manifest.get('problem') else {})))
         else:
             raise ValueError('Unsupported test request')
 finally:

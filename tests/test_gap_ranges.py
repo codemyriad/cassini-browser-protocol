@@ -73,6 +73,13 @@ class AnyGapFlags(gaps.Writer):
         self.flagged = True
 
 
+class FlagFromStoredRanges(gaps.Writer):
+    def result(self):
+        result = super().result()
+        long = any(g['kind'] in ('jump', 'input') and g['frames'] >= 48000 for t in result['tracks'] for g in t['gaps'])
+        return dict(result, state='interrupted' if long else 'completed', problemKind='gap' if long else None)
+
+
 class GapTests(unittest.TestCase):
     def test_oracle_reproduces_every_hand_written_writer_case(self):
         for case in WRITER:
@@ -86,7 +93,7 @@ class GapTests(unittest.TestCase):
 
     def test_mutations_fail_the_vectors(self):
         for name, mutant in (('coalesce', Coalescing), ('truncate', Truncating), ('current-span-drops', CurrentSpanOnly),
-                             ('flag-any-gap', AnyGapFlags)):
+                             ('flag-any-gap', AnyGapFlags), ('flag-from-stored-ranges', FlagFromStoredRanges)):
             with self.subTest(mutation=name):
                 self.assertTrue(any(not matches(replay(c, mutant), c['expected']) for c in WRITER))
 

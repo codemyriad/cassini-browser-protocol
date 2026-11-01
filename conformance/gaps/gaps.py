@@ -15,6 +15,10 @@ def _position(span):
     return Fraction(str(span['startOffsetMs'])) + Fraction(span['frames'] * 1000, span['rate'])
 
 
+def _half_up(value):
+    return math.floor(value + Fraction(1, 2))
+
+
 def _number(value):
     return int(value) if value.denominator == 1 else float(value)
 
@@ -65,7 +69,7 @@ class Writer:
             return  # deselected: discarded, not recorded
         if span['startOffsetMs'] is None:
             span['startOffsetMs'] = offsetMs
-        delta = round((Fraction(str(offsetMs)) - Fraction(str(span['startOffsetMs']))) * span['rate'] / 1000) - span['frames']
+        delta = _half_up((Fraction(str(offsetMs)) - Fraction(str(span['startOffsetMs']))) * span['rate'] / 1000) - span['frames']
         if delta > span['rate'] // 50:
             self._pad(span, delta, 'prefix' if span['boundary'] and not span['frames'] else 'jump')
         span['frames'] += frames
@@ -102,12 +106,12 @@ class Writer:
             if span['startOffsetMs'] is None:
                 span['startOffsetMs'] = hostMs
             else:
-                prefix = round((Fraction(str(hostMs)) - Fraction(str(span['startOffsetMs']))) * span['rate'] / 1000)
+                prefix = _half_up((Fraction(str(hostMs)) - Fraction(str(span['startOffsetMs']))) * span['rate'] / 1000)
                 if prefix > 0:
                     self._pad(span, prefix, 'prefix')
         else:
             lag = (Fraction(str(hostMs)) - Fraction(str(state['host']))) * span['rate'] / 1000 - state['frames']
-            gap = math.floor(lag + Fraction(1, 2))
+            gap = _half_up(lag)
             if gap >= span['rate']:
                 self._pad(span, gap, 'input')
         state['host'], state['frames'] = hostMs, frames
@@ -127,8 +131,12 @@ def replay(case):
     return writer.result()
 
 
+EPSILON = Fraction(1, 1_000_000)
+
+
 def _samples(left, right):
-    return [math.ceil(Fraction(str(left)) * 16), math.ceil(Fraction(str(right)) * 16)]
+    # The epsilon absorbs floating-point noise in stored times (SPEC).
+    return [math.ceil(Fraction(str(left)) * 16 - EPSILON), math.ceil(Fraction(str(right)) * 16 - EPSILON)]
 
 
 def _subtract(windows, left, right):
@@ -160,7 +168,7 @@ def presence(track, ownership=None):
     """Present and unknown half-open windows as 16 kHz session sample ranges."""
     start = Fraction(str(track['startOffsetMs']))
     extent = [(start, start + Fraction(track['frames'] * 1000, track['sampleRate']))]
-    if 'gaps' not in track or track['gaps'] is None:
+    if track.get('gaps') is None:
         present, unknown = [], extent
     else:
         present, unknown = extent, []

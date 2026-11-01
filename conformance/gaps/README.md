@@ -18,11 +18,14 @@ features: `[]` is a legacy session, which records ranges too. `selection` sets t
 | `audio {id, offsetMs, frames}` | Browser chunk, applying SPEC tolerance/padding. Discarded while deselected. |
 | `series {id, firstOffsetMs, everyMs, count, frames}` | `count` audio chunks at `firstOffsetMs + i*everyMs`. |
 | `select {atMs, me?, others?}` | App selection change. It ends spans; reselection opens a new span with boundary `atMs`. |
-| `trackEnd {id, droppedFrames}` | Negotiated end. Adds the count to the latest span that recorded the wire ID. |
+| `trackEnd {id, droppedFrames}` | Negotiated end, replayed with reason `ended` and endOffsetMs null. Adds the count to the latest span that recorded the wire ID. |
 | `nativeTrack {id, kind, rate, boundaryMs?}` | Native span, with an optional selection boundary. |
 | `input {id, hostMs, frames}` | Native input buffer with its session-relative host stamp. |
 
-Each recorded span is closed at the end of the case, as by a user Stop.
+Each recorded span is closed at the end of the case, as by a user Stop without a problem.
+Offsets round half up. A writer that keeps an inert zero-frame span for a source declared while
+deselected leaves it out of the comparison; such a span recorded nothing and receives no drops.
+Prefix cases follow S-6: a reselected or boundary-declared span starts at the boundary.
 
 Expected tracks hold `wire`, `startOffsetMs`, `frames` (including padding), `gapFrames`,
 `droppedFrames` and `gaps`. In the expected tracks, `gapFrames: 0` and `droppedFrames: 0`
@@ -35,9 +38,11 @@ Native gap kinds assume an unwarped clock, so nominal and mapped positions agree
 
 Stored track facts (`startOffsetMs`, `sampleRate`, `frames`, optional `gaps`) plus optional
 ownership windows go in; integer half-open 16 kHz session-sample ranges `present` and
-`unknown` come out. A window [a,b) ms covers samples [ceil(16a), ceil(16b)). Presence never
-reads PCM and never uses `droppedFrames`.
+`unknown` come out. A window [a,b) ms covers samples [ceil(16a - 1e-6), ceil(16b - 1e-6)).
+A missing or null `gaps` is unknown. Presence never reads PCM and never uses `droppedFrames`.
 
 `tests/test_gap_ranges.py` checks the oracle against every literal case. It also checks
-that coalescing ranges, truncating without an overflow marker, replacing drop counts or
-flagging every gap each fail at least one vector.
+that coalescing ranges, truncating without an overflow marker, storing drops only on the live
+span, flagging every gap, or deriving the flag from stored ranges alone each fail at least one
+vector. Not covered here (app fault injection): a long gap together with io or capture loss,
+where io and capture take precedence, and a `writer` range for in-place host write padding.

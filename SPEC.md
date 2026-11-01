@@ -54,13 +54,16 @@ reversible sender muting should retain its ID and send silence.
 An omitted/null title defaults to a host title. An omitted/null label defaults to kind.
 Titles are bounded to 500 Unicode characters; labels strip Unicode categories Cc and Cf (including U+200B, preserving private-use Co) and
 are bounded to 200 characters. Empty/null/absent stop problem means no interruption unless
-IO failure or an empty session independently requires one. Empty sessions are interrupted.
+IO failure, an empty session or a one-second gap (see Gap ranges) independently requires one.
+Empty sessions are interrupted.
 
 PCM is nonempty standard base64 of interleaved signed PCM16 little-endian samples. Acks
 follow acceptance/writing, not receipt alone. Sequence starts at 0 per ID and increments
 by one per accepted chunk. Offset is the chunk start relative to the session origin.
-The first chunk establishes startOffsetMs; there is no leading silence. Compare following
-start offsets to written frames: round((offset-start)*rate/1000), tolerance floor(rate/50).
+The first chunk establishes startOffsetMs; there is no leading silence, except that a span opened
+at a selection boundary (S-6) starts there and is padded to its first chunk under the same rule.
+Compare following start offsets to written frames: round((offset-start)*rate/1000), rounding
+half up, tolerance floor(rate/50).
 Positive gaps greater than tolerance become silence and a gap range (see Gap ranges). Negative deltas below -tolerance
 are errors. A positive gap over 60 seconds is an error. Smaller jitter is tolerated.
 
@@ -112,7 +115,7 @@ sample-accurate conference clocks. Local sender mute/suspension produces silence
 
 `session.json` has version=1, UUID id, createdAt, title, source, state, tracks. Source is
 chromium, macos, gnome, or recovered. State is recording, completed, or interrupted. Optional
-problem and problemKind explain an interruption (empty, capture, io, recovery). Unknown
+problem and problemKind explain an interruption (empty, capture, io, recovery, gap). Unknown
 additional properties are allowed. Writers omit absent optional fields; readers also accept
 null. Key order and whitespace are insignificant. New writers use whole-second UTC Z dates;
 readers accept fractional seconds and numeric UTC offsets from earlier writers.
@@ -299,23 +302,28 @@ New writers always write the key, so `gaps: []` means no gaps and a missing key 
   only a little received audio separates two of them.
 - `kind` is diagnostic and open. Host-derived kinds: `jump` (browser offset jump; overflow,
   suspension and stalls look the same on the wire), `input` (native host-time gap), `prefix`
-  (selection boundary to the first frame, browser or native). `dropped` and `suspended` are
+  (selection boundary to the first frame, browser or native, never in gapFrames), `writer` (below). `dropped` and `suspended` are
   reserved for a later producer tag. Readers treat every kind as absence.
 - Budget: at most 1000 ranges per track, then one `{atMs, kind:"overflow"}` at the next gap,
   meaning presence is unknown from there to the track end. `gapFrames` keeps counting. Never
   truncate silently, evict earlier ranges or merge ranges to stay within the budget.
 - A droppedFrames count never becomes a range. Mid-span producer drops already appear as a
   `jump`; drops after the last written frame or between spans are outside every extent.
+  Producer drop counts appear only in recording details: they never change state or problemKind.
+- A host writer that pads its own lost frames in place (instead of failing the source) records
+  that padding as a `writer` range. It counts in droppedFrames, not gapFrames, and never sets the
+  gap flag; host write loss is reported as io.
 - Writers record ranges whether or not multi-stream was negotiated: these are host facts.
-- Gap flag: only a non-prefix padding write of at least one second (frames >= rate) makes the
-  session interrupted with problemKind `gap`; io and capture take precedence. Folders without
-  `gaps` keep the older reading, any gapFrames > 0.
+- Gap flag: only a `jump` or `input` padding write of at least one second (frames >= rate),
+  including one written after the overflow marker, makes the session interrupted with
+  problemKind `gap`; io and capture take precedence. Folders without `gaps` (or with null) keep
+  the older reading, any gapFrames > 0.
 
 Presence comes only from span extents minus `gaps`, intersected with othersSource ownership.
 Zero samples are not evidence of absence: a muted sender's zeros are present audio. Presence
-never reads PCM. An `overflow` marker or a missing `gaps` key makes the affected time unknown,
+never reads PCM. An `overflow` marker or a missing/null `gaps` makes the affected time unknown,
 neither present nor absent. On a 16 kHz session grid a window [a,b) ms covers samples
-[ceil(16a), ceil(16b)). The same `gaps` are carried into recordingDetails.captureRecord.tracks[]
+[ceil(16a - 1e-6), ceil(16b - 1e-6)); the epsilon absorbs floating-point noise in stored times. The same `gaps` are carried into recordingDetails.captureRecord.tracks[]
 and the Cassini file's x["codemyriad.io"].tracks[]. See conformance/gaps/.
 
 ## Multi-stream capture (D52, extension 0.2.4; draft PR)
