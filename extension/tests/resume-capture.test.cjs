@@ -85,12 +85,13 @@ test('resume uses the original identity/origin in early status, native request a
   } finally {f.deferred.splice(0).forEach(fn=>fn());await f.close();}
 });
 
-test('Stop cancels a resume queued before session construction; a later fresh Record is allowed', async () => {
+for(const scoped of [false,true]) test('Stop cancels a resume queued before construction; fresh Record remains allowed (scoped='+scoped+')', async () => {
   const f = await fixture();
   try {
     const port = f.app.ports[0];
     port.onMessage.emit(f.start('resume-queued'));
-    port.onMessage.emit(f.stop('stop-queued'));
+    const stopping = f.stop('stop-queued'); if(!scoped) delete stopping.captureId;
+    port.onMessage.emit(stopping);
     await until(() => port.sent.some(p=>p.type==='result'&&p.requestId==='stop-queued'));
     assert.equal(port.sent.find(p=>p.type==='result'&&p.requestId==='resume-queued').ok,false);
     assert.equal(port.sent.find(p=>p.type==='result'&&p.requestId==='stop-queued').ok,true);

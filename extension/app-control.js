@@ -129,7 +129,7 @@ export class AppControl {
       if (validOptions && resume !== undefined) this.resumeIntents.set(key, intent);
       if (message.independent === true && message.action === 'stop' && Number.isSafeInteger(message.tabId) && message.tabId >= 0 && validOptions) {
         for (const pending of this.resumeIntents.values()) {
-          if (pending.message.tabId === message.tabId && message.captureId === pending.message.resumeCapture.captureId) {
+          if (pending.message.tabId === message.tabId && (message.captureId === undefined || message.captureId === pending.message.resumeCapture.captureId)) {
             pending.cancelled = true;
             intent.cancelledResume = true;
           }
