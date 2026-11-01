@@ -614,5 +614,5 @@ Shared literal cases: `conformance/control/heartbeat-vectors.json` (ping/loss
 timing and the exact wire replies, independent oracle `heartbeat.py`) and the
 `transportAlive` cases in `conformance/multistream/lifecycle.json`. Frozen
 companion example: control lost at 25 s and computer-sound fallback at 27 s;
-the audio transport closed at 40 s; `pageGone` at 145 s if the browser never
+the audio transport closed at 45 s (`PCM_STALE_AFTER`); `pageGone` at 145 s if the browser never
 returns, or restoration once it returns with a new audio transport.

@@ -116,3 +116,17 @@ class ResumeOnceTests(unittest.TestCase):
                 if 'askResume' in actions: self.ever.add(connection)
                 return actions
         self.assertIn('D52.5-a-new-loss-after-restore-asks-again',failing_cases(OncePerRecording))
+class StaleAfterTests(unittest.TestCase):
+    def test_transport_stale_cases_close_at_pcm_stale_after_45_seconds(self):
+        # D52.5 amendment: PCM_STALE_AFTER is 45 s (40 s = 30 s retry + 10 s ACK left
+        # no margin under >=). Cases whose last audio frame is at 0 close at 45000.
+        self.assertIn('`PCM_STALE_AFTER = 45 s`',(ROOT/'SPEC.md').read_text())
+        self.assertNotIn('PCM_STALE_AFTER = 40',(ROOT/'SPEC.md').read_text())
+        cases={c['name']:c for c in json.loads((ROOT/'conformance/multistream/lifecycle.json').read_text())['cases']}
+        for name in ['frozen-companion-control-lost-then-transport-stale-then-returns','frozen-companion-never-returns',
+                'transport-lost-with-present-page-stays-on-fallback','transport-lost-then-new-transport-restores',
+                'transport-lost-with-unknown-count-falls-back-at-once','D52.5-transport-lost-asks-resume-once-then-restores',
+                'D52.5-refused-resume-is-not-retried-on-a-timer-only-on-a-new-hello','D52.5-frozen-companion-asks-once-per-new-control-connection',
+                'D52.5-ask-needs-heard-in-the-same-call-generation','D52.5-a-new-loss-after-restore-asks-again']:
+            with self.subTest(case=name):
+                self.assertEqual(next(s['atMs'] for s in cases[name]['steps'] if s.get('transportAlive') is False),45000)
