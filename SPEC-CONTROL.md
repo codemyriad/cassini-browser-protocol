@@ -437,7 +437,7 @@ source failures remain in the capture ledger. A source still retrying at Stop
 is reported failed, with its existing specific error retained. A recovered
 transient readiness error does not turn the final Stop into an interruption.
 
-## Resume an app's active stand-in (D52.1 / R67; extension 0.2.8)
+## Resume an app's active stand-in (D52.1 / R67; extension 0.2.7)
 
 Opt-in capability `resume-capture-v1` joins an already recording native system-
 sound stand-in. Apps MUST see this hello capability before sending the command;

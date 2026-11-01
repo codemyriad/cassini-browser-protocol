@@ -24,4 +24,4 @@ real retained microphone/system capture (private generated audio):
   and browser from6000ms, without mixing both or dropping the seam sample.
 
 Adoption is opt-in. Neither desktop should send this operation before it owns
-the native `resume` handler. Extension0.2.8 is not a store upload instruction.
+the native `resume` handler. Extension0.2.7 is not a store upload instruction.

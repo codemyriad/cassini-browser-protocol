@@ -403,7 +403,7 @@ See SPEC-CONTROL.md and conformance/control/RESUME-CAPTURE.md for cancellation,
 interleavings and the shared seam fixture. Existing ordinary Start is unchanged.
 
 
-### Source retirement during an active capture (extension0.2.7)
+### Source retirement during an active capture (extension0.2.8)
 
 An ended/failed physical span in a still-active capture returns error with
 code:state, scope:source, id and retired:true. It does not mean the whole capture
