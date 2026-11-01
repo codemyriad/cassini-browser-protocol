@@ -12,6 +12,7 @@ async function mocked(run) {
   constructor(){contexts.push(this)}createMediaStreamSource(){return new Graph()}createGain(){return Object.assign(new Graph(),{gain:{value:0}})}
   addEventListener(_event,fn){this.listeners.add(fn)}removeEventListener(_event,fn){this.listeners.delete(fn)}
   getOutputTimestamp(){return {contextTime:1,performanceTime:1000}}
+  async suspend(){this.state="suspended"}
   async resume(){if(this.state==='suspended'){now+=500;this.state='running';this.listeners.forEach(fn=>fn())}}
   async close(){this.state='closed'}
  }
@@ -208,4 +209,37 @@ test('Stop drains admitted PCM and worklet final flush before ending the span',a
  nodes[0].port.postMessage=()=>{nodes[0].port.onmessage({data:{pcm:new ArrayBuffer(256),frame:768}});nodes[0].port.onmessage({data:{stopped:true}})};
  const stopping=recorder.stop();release();await stopping;
  assert.equal(packets.filter(p=>p.type==='audio').length,7);assert.equal(packets.at(-1).type,'trackEnd');assert.equal(nodes[0].port.onmessage,null);
+}));
+
+test('new shared graph waits for suspension before module/node setup and reuses the running context',async()=>mocked(async({capture,Context})=>{
+ const fixture=require('./support/page-capture-harness.cjs'),{until}=require('./support/app-control-harness.cjs');
+ const stages=[];let release,builds=0;
+ class Startup extends Context {
+  constructor(){super();this.audioWorklet.addModule=async()=>stages.push('module')}
+  suspend(){stages.push('suspend');this.state='suspended';return new Promise(resolve=>release=resolve)}
+  createMediaStreamSource(stream){assert.equal(this.state,builds++?'running':'suspended');stages.push('node');return super.createMediaStreamSource(stream)}
+  async resume(){stages.push('resume');this.state='running'}
+ }
+ await fixture(async f=>{
+  const sender=id=>({track:{id,kind:'audio',readyState:'live',enabled:true,muted:false},getParameters:()=>({encodings:[]})});
+  f.peer.senders=[sender('one')];const starting=f.start();await until(()=>release);
+  assert.deepEqual(stages,['suspend']);assert.equal(f.messages.some(m=>m.packet?.type==='track'),false);
+  release();await starting;assert.deepEqual(stages,['suspend','module','node','resume']);
+  f.peer.senders.push(sender('two'));await f.scan();
+  assert.equal(stages.filter(s=>s==='suspend').length,1);assert.equal(builds,2);
+ },{Context:Startup,capture});
+}));
+
+test('a failed shared-context suspension closes it and allows the next live attach',async()=>mocked(async({capture,Context,retryDelay})=>{
+ const fixture=require('./support/page-capture-harness.cjs'),time=clock(),instances=[];
+ class Startup extends Context {
+  constructor(){super();instances.push(this)}
+  suspend(){if(instances.length===1)throw Error('generated preparation failure');this.state='suspended';return Promise.resolve()}
+ }
+ await fixture(async f=>{
+  f.peer.senders=[{track:{id:'mic',kind:'audio',readyState:'live',enabled:true,muted:false},getParameters:()=>({encodings:[]})}];
+  await f.start();assert.equal(f.captures[0].recorder.state,'retrying');assert.equal(instances[0].state,'closed');
+  await time.advance(retryDelay(0));assert.equal(instances.length,2);assert.equal(instances[1].state,'running');
+  assert.equal(f.messages.filter(m=>m.packet?.type==='track').length,1);
+ },{Context:Startup,capture:options=>capture({...options,clock:time.now,schedule:time.schedule,cancel:time.cancel})});
 }));

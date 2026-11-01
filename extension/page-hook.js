@@ -339,7 +339,20 @@
               const recorder = await capture({ stream: new MediaStream([track]), id, sourceTrackId,
                 reportOutcomes: message.sourceOutcomes === true, nextSpanId, live: () => track.readyState === "live",
                 label: `${metadata.kind}: ${track.label || track.id}`, kind: metadata.kind, enabled,
-                origin: message.origin, workletURL: message.workletURL, send, getSharedContext: () => state.context ??= new AudioContext({ sampleRate: 48000 }), warn: (_message, details) => warn(details?.kind === "retry"),
+                origin: message.origin, workletURL: message.workletURL, send, getSharedContext: () => {
+                  if (!state.contextReady) {
+                    // Initialise the graph before this new context's render clock
+                    // starts. Never suspend the context again for another source.
+                    const context = state.context = new AudioContext({sampleRate:48000});
+                    let suspended;
+                    try { suspended = context.suspend(); } catch (error) { suspended = Promise.reject(error); }
+                    state.contextReady = Promise.resolve(suspended).then(() => context, async error => {
+                      if (state.context === context) {state.context = null;state.contextReady = null;}
+                      await context.close().catch(() => {});throw error;
+                    });
+                  }
+                  return state.contextReady;
+                }, warn: (_message, details) => warn(details?.kind === "retry"),
                 fail: () => sourceFailed(record) });
               state.tracks.set(track, recorder);
               } catch (error) { if (!intentional(error)) { state.refusedTracks.add(track); sourceFailed(record); } }
