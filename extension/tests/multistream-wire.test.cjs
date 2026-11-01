@@ -270,7 +270,11 @@ for(const order of ['browser-first','hook-first'])test(`idle SPA boundary and ea
   discover('A');await app.api.meetings();app.tabs.get(2).url='https://meet.example/B';
   if(order==='browser-first')app.chrome.tabs.onUpdated.emit(2,{url:'https://meet.example/B'});else discover('B');
   const generation=app.api.callInfo(2).generation;
-  await app.command(command('start-B','start',{callGeneration:generation}));
+  if(order==='browser-first'){
+   assert.equal((await app.command(command('before-inventory','start',{callGeneration:generation}))).ok,false);
+   assert.equal(app.audio.length,0);discover('B');
+  }
+  assert.equal((await app.command(command('start-B','start',{callGeneration:generation}))).ok,true);
   if(order==='browser-first')discover('B');else app.chrome.tabs.onUpdated.emit(2,{url:'https://meet.example/B'});
   assert.equal(app.api.callInfo(2).generation,generation);assert.equal(app.audio[0].closed,false);
   const row=(await app.api.meetings()).meetings[0];assert.equal(row.heard,true);assert.equal(row.sourceCount,1);
