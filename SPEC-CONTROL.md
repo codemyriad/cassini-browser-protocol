@@ -406,9 +406,14 @@ source and is visible in failedSources. See the schemas and new source tests.
 ### Call identity across service-worker restart (D52)
 
 A browser service-worker restart is not a new call. Persist the per-tab browser
-callGeneration and last known URL in storage.session, with the main frame's hook
+callGeneration and a bounded SHA-256 address fingerprint in storage.session,
+with the main frame's hook
 documentGeneration/callGeneration baseline. Hydrate these before processing page
 messages or browser URL changes and before publishing the initial inventory.
+Hydration compares the current browser-owned tab address to the saved digest;
+long query strings cannot discard the identity or expand the stored record. A
+URL boundary fences the saved hook baseline before the first returning snapshot,
+so stale heard evidence cannot vote or rotate the generation a second time.
 A reconnect from the same live document and hook generation keeps the same
 browser callGeneration. A reload at the same URL also retains call identity;
 a real address or same-document hook-generation boundary still rotates exactly
