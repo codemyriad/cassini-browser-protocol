@@ -55,3 +55,14 @@ for(const quantum of [128,256,512])test(`empty input preserves the real ${quantu
  const samples=packets.filter(p=>p.pcm).flatMap(p=>[...new Int16Array(p.pcm)]);
  assert.ok(samples.slice(0,14*quantum).every(value=>value===0));assert.ok(samples.slice(14*quantum).every(value=>value>0));
 });
+
+test('temporarily empty input channels do not lose fourteen render quanta inside the first batch',()=>{
+ const {node,packets,context}=processor(1);context.currentFrame=0;
+ for(let index=0;index<80;index++){
+  const input=index===0?[[]]:index<=14?[[new Float32Array(0)]]:[[new Float32Array(128).fill(.25)]];
+  node.process(input,[[new Float32Array(128)]]);context.currentFrame+=128;
+ }
+ node.port.onmessage({data:'stop'});let frames=0;
+ for(const packet of packets.filter(p=>p.pcm)){assert.equal(packet.frame,frames);frames+=packet.pcm.byteLength/2}
+ assert.equal(frames,80*128,'an empty channel must not lose 1792 samples while currentFrame advances');
+});
