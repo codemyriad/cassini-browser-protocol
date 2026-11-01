@@ -1,48 +1,7 @@
 // D52 production page-hook; generated peers only, no desktop or real devices.
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
-const vm=require('node:vm');
-const fs=require('node:fs');
-const path=require('node:path');
-const moduleURL='data:text/javascript;base64,'+Buffer.from('export const capture=options=>globalThis.__cassiniPageCapture(options);').toString('base64');
-
-async function fixture(run) {
- const messages=[],listeners=[],timers=[],captures=[];let now=0,uuid=0,contextError=false,nativeFinished=false;
- class Peer {
-  constructor(){this.connectionState='connected';this.iceConnectionState='connected';this.signalingState='stable';this.slots=[];this.senders=[]}
-  addEventListener(){}getTransceivers(){return this.slots}getSenders(){return this.senders}close(){this.signalingState='closed'}
- }
- for(const name of ['getStats','createOffer','createAnswer','setLocalDescription','setRemoteDescription','addTrack','addTransceiver'])Peer.prototype[name]=()=>{};
- Peer.prototype.setRemoteDescription=function(){return this.descriptionTask || Promise.resolve()};
- class Stream {constructor(tracks){this.tracks=tracks}getAudioTracks(){return this.tracks}}
- class Context {constructor(){if(contextError)throw Error('generated context attach failure')}sampleRate=48000;state='running';async close(){this.state='closed'}}
- const control=async data=>{for(const fn of listeners)await fn({source:window,data:{channel:'cassini-control',...data}})};
- const window={location:{href:'https://meet.test/call-A'},RTCPeerConnection:Peer,addEventListener:(_n,fn)=>listeners.push(fn),postMessage(message){
-  messages.push(message);
-  if(message.type==='packet')queueMicrotask(()=>control({type:'ack',token:message.token,request:message.request,...(nativeFinished?{error:'Native capture already saved',scope:'command',code:'state'}:{})}));
- }};
- globalThis.__cassiniPageCapture=async options=>{
-  const item={...options,stopped:false};captures.push(item);
-  await options.send({type:'track',id:options.id,label:options.label,kind:options.kind,sampleRate:48000,channels:1,sourceTrackId:options.sourceTrackId});
-  return {failed:false,async stop(){item.stopped=true}};
- };
- const context=vm.createContext({window,navigator:{},document:{querySelectorAll:()=>[]},MediaStream:Stream,AudioContext:Context,
-  crypto:{randomUUID:()=>`id-${++uuid}`},performance:{now:()=>now},setInterval:fn=>(timers.push(fn),timers.length),clearInterval(){},
-  setTimeout,clearTimeout,queueMicrotask});
- vm.runInContext(fs.readFileSync(path.join(__dirname,'../page-hook.js'),'utf8'),context,{importModuleDynamically:vm.constants.USE_MAIN_CONTEXT_DEFAULT_LOADER});
- const peer=new window.RTCPeerConnection();
- function remote(label='Guest',target=peer){
-  const slot={currentDirection:'recvonly',packets:0};
-  slot.receiver={track:{id:`remote-${peer.slots.length}`,label,kind:'audio',readyState:'live',enabled:true,muted:false},
-   getStats:async()=>new Map([['rtp',{id:'rtp',type:'inbound-rtp',kind:'audio',packetsReceived:slot.packets}]])};
-  target.slots.push(slot);return slot;
- }
- const tick=async()=>{now+=1000;await timers[0]();};
- const scan=async()=>{assert.ok(timers[1],'capture scan exists');await timers.at(-1)();};
- let activeToken='recording';
- try {await run({peer,window,remote,tick,scan,captures,messages,nativeStopFirst(){nativeFinished=true},breakContext(){contextError=true},async stop(){await control({type:'stop',token:activeToken})},async start(token='recording',options={}){activeToken=token;await control({type:'start',token,origin:0,moduleURL,workletURL:'',...options})}})}
- finally {await control({type:'stop',token:activeToken});delete globalThis.__cassiniPageCapture;}
-}
+const fixture=require('./support/page-capture-harness.cjs');
 
 test('remote span waits for a connected peer and a positive packet delta',()=>fixture(async f=>{
  const remote=f.remote();f.peer.connectionState='new';f.peer.iceConnectionState='new';
@@ -124,7 +83,7 @@ test('discovery is acknowledged before an AudioContext attach failure and the fa
  assert.equal(updates.length,2);assert.equal(updates[0].packet.discoveredSources[0].failed,false);
  assert.equal(updates[1].packet.discoveredSources[0].failed,true);
  assert.equal(updates[0].packet.discoveredSources[0].sourceTrackId,updates[1].packet.discoveredSources[0].sourceTrackId);
- assert.equal(f.captures.length,0,'no WAV/track was opened');
+ assert.equal(f.messages.filter(m=>m.type==='packet'&&m.packet.type==='track').length,0,'no WAV/track was opened');
  assert.ok(f.messages.indexOf(updates[1])<f.messages.findIndex(m=>m.type==='stopped'));
  assert.equal(f.messages.find(m=>m.type==='stopped').discoveredSources,undefined,'Stop is not the only discovery carrier');
 }));
@@ -156,4 +115,25 @@ test('retry ids before a successful track ACK cannot exhaust the WAV allocation 
  const ids=Array.from({length:70},()=>f.captures[0].nextSpanId());
  assert.ok(ids.every(id=>typeof id==='string'&&id.length>0));assert.equal(new Set(ids).size,70);
  assert.equal(f.messages.filter(m=>m.type==='packet'&&m.packet.type==='track').length,1);
+}));
+
+for(const cloned of [false,true])test(`rendered receiver ${cloned?'clone':'alias'} never bypasses connected/RTP admission`,()=>fixture(async f=>{
+ const slot=f.remote();f.render(cloned?slot.receiver.track.clone():slot.receiver.track);
+ f.peer.connectionState='new';f.peer.iceConnectionState='new';await f.tick();await f.start('rendered',{sourceOutcomes:true});
+ assert.equal(f.captures.length,0,'rendering an unconnected receiver is not a standalone media source');
+ f.peer.connectionState='connected';f.peer.iceConnectionState='connected';await f.tick();await f.scan();
+ assert.equal(f.captures.length,0,'zero-packet receiver aliases remain excluded');
+ slot.packets=10;await f.tick();await f.scan();assert.equal(f.captures.length,1);assert.equal(f.captures[0].kind,'remote');
+ const root=f.captures[0].sourceTrackId;f.peer.close();await f.scan();
+ assert.equal(f.captures.length,1,'a closed receiver cannot return through its rendered alias');
+ assert.equal(f.captures[0].sourceTrackId,root);assert.equal(f.captures[0].stopped,true);
+}));
+
+test('starting after an address change refreshes the call generation before the first scan',()=>fixture(async f=>{
+ f.window.location.href='https://meet.test/call-B';
+ f.peer.senders=[{track:{id:'new-call-mic',label:'Microphone',kind:'audio',readyState:'live',enabled:true,muted:false},getParameters:()=>({encodings:[]})}];
+ // Bind the existing peer to B, but deliberately do not run discovery first.
+ await f.peer.setRemoteDescription({type:'answer',sdp:'B'});
+ await f.start('B',{sourceOutcomes:true});assert.equal(f.captures.length,1);
+ assert.equal(f.messages.find(m=>m.type==='packet'&&m.packet.type==='track').token,'B');
 }));

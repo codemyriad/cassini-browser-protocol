@@ -20,7 +20,13 @@ class Policy:
             self.missing = self.ended = None; return []
         if self.missing is not None and now - self.missing >= 120000:
             self.stopped = True; return ['stop:pageGone']
-        if page != 'present' or not row.get('controlAlive', True):
+        if page == 'present' and row.get('controlAlive', True) and known and count > 0:
+            self.missing = self.ended = None
+            if self.source == 'system' and self.heard:
+                action = 'switch:browser:callConnected' if self.reason == 'missing' else 'restore'
+                self.source, self.reason = 'browser', 'restored'; return [action]
+            return []
+        if page != 'present' or not row.get('controlAlive', True) or self.missing is not None:
             self.ended = None
             self.missing = now if self.missing is None else self.missing
             if now - self.missing >= 2000 and self.source != 'system':
@@ -28,13 +34,7 @@ class Policy:
             return []
         if not known:
             self.ended = None; return []
-        self.missing = None
-        if count > 0:
-            self.ended = None
-            if self.source == 'system' and self.heard:
-                action = 'switch:browser:callConnected' if self.reason == 'missing' else 'restore'
-                self.source, self.reason = 'browser', 'restored'; return [action]
-        elif self.heard:
+        if self.heard:
             self.ended = now if self.ended is None else self.ended
             if now - self.ended >= 30000:
                 self.stopped = True; return ['stop:callEnded']

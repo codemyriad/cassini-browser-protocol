@@ -3,6 +3,7 @@
   const peers = new Set();
   const peerGenerations = new WeakMap();
   const knownLocalTracks = new WeakSet();
+  const knownReceiverRoots = new WeakSet();
   const sourceRoots = new WeakMap();
   const sourceKeys = new WeakMap();
   const receiverGenerations = new WeakMap(), trackGenerations = new WeakMap();
@@ -28,6 +29,12 @@
     return sourceKeys.get(root);
   }
   const sourceRoot = track => sourceRoots.get(track) || track;
+  function rememberReceivers(pc) {
+    for (const {receiver} of pc.getTransceivers()) if (receiver?.track) {
+      knownReceiverRoots.add(sourceRoot(receiver.track));
+      receiverGeneration(receiver, pc);
+    }
+  }
   // Remember microphone origins before they become senders, including local previews.
   const devices = navigator.mediaDevices;
   if (devices?.getUserMedia) {
@@ -38,8 +45,11 @@
         return stream;
       });
     };
-    const clone = MediaStreamTrack.prototype.clone;
-    MediaStreamTrack.prototype.clone = function (...args) {
+  }
+  const trackPrototype = globalThis.MediaStreamTrack?.prototype;
+  if (trackPrototype?.clone) {
+    const clone = trackPrototype.clone;
+    trackPrototype.clone = function (...args) {
       const track = Reflect.apply(clone, this, args);
       sourceRoots.set(track, sourceRoot(this));
       if (knownLocalTracks.has(sourceRoot(this))) knownLocalTracks.add(track);
@@ -53,7 +63,7 @@
     peers.add(pc);
     peerGenerations.set(pc, callGeneration);
     pc.addEventListener("connectionstatechange", () => {
-      if (pc.connectionState === "closed") peers.delete(pc);
+      if (pc.connectionState === "closed") { rememberReceivers(pc); peers.delete(pc); }
       discover();
     });
     pc.addEventListener("iceconnectionstatechange", () => discover());
@@ -64,6 +74,7 @@
   if (window.webkitRTCPeerConnection === original) window.webkitRTCPeerConnection = window.RTCPeerConnection;
   const close = original.prototype.close;
   original.prototype.close = function (...args) {
+    rememberReceivers(this);
     peers.delete(this);
     const value = Reflect.apply(close, this, args);
     discover();
@@ -211,7 +222,8 @@
       return;
     }
     if (message.type === "start" && !active) {
-      const state = { token: message.token, callGeneration, sourceOutcomes: message.sourceOutcomes === true, pending: new Map(), sourceUpdates: new Set(), announcedSources: new Set(), tracks: new Map(), sources: new Map(), spanIds: new Set(), localMetadata: new Map(), next: 0, stopping: false, scanning: false };
+      refreshCall();
+      const state = { token: message.token, callGeneration, sourceOutcomes: message.sourceOutcomes === true, pending: new Map(), sourceUpdates: new Set(), announcedSources: new Set(), tracks: new Map(), recordsByTrack: new WeakMap(), refusedTracks: new WeakSet(), sources: new Map(), spanIds: new Set(), localMetadata: new Map(), next: 0, stopping: false, scanning: false };
       active = state;
       const send = packet => new Promise((resolve, reject) => {
         refreshCall();
@@ -234,7 +246,7 @@
         pending.then(() => state.sourceUpdates.delete(pending), () => state.sourceUpdates.delete(pending));
         return pending;
       };
-      const warn = () => emit(state.token, { type: "warning" });
+      const warn = (transient=false) => emit(state.token, { type: "warning", transient: transient === true });
       const sourceFailed = record => {
         if (!record.failed) {
           record.failed = true;
@@ -242,6 +254,7 @@
         }
         warn();
       };
+      state.sourceFailed = sourceFailed;
       try {
         const { capture } = await import(message.moduleURL);
         if (state.stopping) return;
@@ -254,8 +267,10 @@
               await Promise.allSettled([...state.tracks.values()].map(recorder => recorder.stop("callChanged")));
               state.tracks.clear(); discover(true); return;
             }
-            const sources = new Map();
+            const sources = new Map(), roots = new Set();
             for (const pc of peers) {
+              rememberReceivers(pc);
+              for (const {receiver} of pc.getTransceivers()) if (receiver?.track) roots.add(sourceRoot(receiver.track));
               if (pc.signalingState === "closed") { peers.delete(pc); continue; }
               for (const transceiver of pc.getTransceivers()) {
                 const receiver = transceiver.receiver;
@@ -279,12 +294,12 @@
               if (track.readyState === "ended" || metadata.pc.signalingState === "closed" || (metadata.sender.track && metadata.sender.track !== track)) state.localMetadata.delete(track);
               else if (!sources.has(track)) sources.set(track, metadata);
             }
-            const roots = new Set([...sources.keys()].map(sourceRoot));
+            for (const track of sources.keys()) roots.add(sourceRoot(track));
             for (const media of document.querySelectorAll("audio,video")) {
               if (media.srcObject instanceof MediaStream) {
                 for (const track of media.srcObject.getAudioTracks()) {
                   // A removed sender must not reappear as the page's raw microphone preview.
-                  if (!roots.has(sourceRoot(track)) && !knownLocalTracks.has(sourceRoot(track)) &&
+                  if (!roots.has(sourceRoot(track)) && !knownReceiverRoots.has(sourceRoot(track)) && !knownLocalTracks.has(sourceRoot(track)) &&
                       (!trackGenerations.has(sourceRoot(track)) || trackGenerations.get(sourceRoot(track)) === callGeneration)) {
                     trackGenerations.set(sourceRoot(track), callGeneration);
                     sources.set(track, { kind: "media", root: sourceRoot(track) });
@@ -294,11 +309,12 @@
               }
             }
             for (const [track, recorder] of state.tracks) {
-              if (track.readyState === "ended" || !sources.has(track) || recorder.failed) { await recorder.stop(track.readyState === "ended" ? "ended" : "replaced").catch(warn); state.tracks.delete(track); }
+              if (recorder.failed) state.refusedTracks.add(track);
+              if (track.readyState === "ended" || !sources.has(track) || recorder.failed) { await recorder.stop(track.readyState === "ended" ? "ended" : "replaced").catch(error => { if (!recorder.failed) warn(error); }); state.tracks.delete(track); }
             }
             for (const [track, metadata] of sources) {
               if (state.stopping) break;
-              if (track.kind !== "audio" || track.readyState !== "live" || state.tracks.has(track)) continue;
+              if (track.kind !== "audio" || track.readyState !== "live" || state.tracks.has(track) || state.refusedTracks.has(track)) continue;
               const enabled = () => {
                 if (!track.enabled || track.muted) return false;
                 if (!metadata.sender) return true;
@@ -312,20 +328,20 @@
               const record = state.sources.get(sourceTrackId) || { sourceTrackId, kind: metadata.kind,
                 label: `${metadata.kind}: ${track.label || track.id}`, failed: false };
               state.sources.set(sourceTrackId, record);
+              state.recordsByTrack.set(track, record);
               const nextSpanId = () => state.spanIds.size < 64 ? crypto.randomUUID() : null;
               try {
               if (!state.announcedSources.has(sourceTrackId)) await announce(record);
               if (state.stopping) break;
-              state.context ??= new AudioContext({ sampleRate: 48000 });
               const id = nextSpanId();
-              if (!id) { if (!record.failed) sourceFailed(record); continue; }
+              if (!id) { state.refusedTracks.add(track); if (!record.failed) sourceFailed(record); continue; }
               const recorder = await capture({ stream: new MediaStream([track]), id, sourceTrackId,
                 reportOutcomes: message.sourceOutcomes === true, nextSpanId, live: () => track.readyState === "live",
                 label: `${metadata.kind}: ${track.label || track.id}`, kind: metadata.kind, enabled,
-                origin: message.origin, workletURL: message.workletURL, send, sharedContext: state.context, warn: () => sourceFailed(record),
+                origin: message.origin, workletURL: message.workletURL, send, getSharedContext: () => state.context ??= new AudioContext({ sampleRate: 48000 }), warn: (_message, details) => warn(details?.kind === "retry"),
                 fail: () => sourceFailed(record) });
               state.tracks.set(track, recorder);
-              } catch (error) { if (!intentional(error)) sourceFailed(record); }
+              } catch (error) { if (!intentional(error)) { state.refusedTracks.add(track); sourceFailed(record); } }
             }
           } catch (error) { fail(error.message); }
           finally { state.scanning = false; }
@@ -343,6 +359,7 @@
       state.stopping = true;
       clearInterval(state.timer);
       await state.scanPromise;
+      for (const [track, recorder] of state.tracks) if (recorder.state === "retrying" || recorder.failed) state.sourceFailed(state.recordsByTrack.get(track));
       const results = await Promise.allSettled([...state.tracks.values()].map(recorder => recorder.stop()));
       const error = results.find(result => result.status === "rejected");
       if (error) emit(state.token, { type: "error", message: error.reason.message });

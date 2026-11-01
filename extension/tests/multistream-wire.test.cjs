@@ -32,6 +32,7 @@ test('a per-source native refusal is acknowledged without closing the recording'
   assert.equal((await packet(app,{type:'audio',id:'healthy',sequence:0,offsetMs:0,pcm:'AAA='},2)).error,undefined);
   assert.equal(app.api.controlStatus().sessions.length,1);
   assert.deepEqual(Array.from(app.api.controlStatus().sessions[0].failedSources),['missing-voice']);
+  assert.deepEqual(Array.from(app.api.controlStatus().failedSources),['missing-voice']);
   await app.command(command('stop','stop'));
  }finally{app.close()}
 });
@@ -150,5 +151,57 @@ test('native-first Stop retires the extension without false failed-source update
   assert.equal(refused.code,'state');await until(()=>port.closed);
   assert.equal(port.sent.filter(p=>p.type==='sources').length,1);
   assert.equal(port.sent.find(p=>p.type==='sources').discoveredSources[0].failed,false);
+ }finally{app.close()}
+});
+
+test('two frames cannot concurrently forward a 65th native track and refusal releases its reservation',async()=>{
+ const app=await setup(3,{},['source-outcomes-v1']);let release;
+ try{
+  await app.command(command('start','start'));const second=app.frame(2,1,1),port=app.audio[0],post=port.postMessage;
+  for(let i=0;i<63;i++)await packet(app,{type:'track',id:`admitted-${i}`,kind:'remote',sampleRate:48000,channels:1},i);
+  port.postMessage=function(value){if(value.type==='track'&&value.id==='pending-64'){this.sent.push(value);release=()=>this.onMessage.emit({type:'error',code:'source',scope:'source',id:value.id,message:'Generated source refusal'})}else post.call(this,value)};
+  const pending=packet(app,{type:'track',id:'pending-64',kind:'remote',sampleRate:48000,channels:1},64);
+  await until(()=>release);
+  second.onMessage.emit({type:'packet',request:65,packet:{type:'track',id:'overflow-65',kind:'remote',sampleRate:48000,channels:1}});
+  await until(()=>second.sent.some(m=>m.type==='ack'&&m.request===65));
+  assert.equal(second.sent.find(m=>m.type==='ack'&&m.request===65).code,'limit');
+  assert.equal(port.sent.filter(p=>p.type==='track').length,64,'only 64 declarations reach even a legacy unscoped host');
+  release();await pending;
+  assert.equal((await packet(app,{type:'track',id:'replacement-64',kind:'remote',sampleRate:48000,channels:1},66)).error,undefined);
+  await app.command(command('stop','stop'));
+ }finally{release?.();app.close()}
+});
+
+for(const order of ['browser-first','hook-first'])test(`SPA generation changes exactly once (${order}), rejects late A evidence, and child changes cannot stop B`,async()=>{
+ const app=await setup(3,{},['source-outcomes-v1']);
+ const discover=(port,generation,count=1)=>port.onMessage.emit({type:'discovery',sourceCount:count,heard:count>0,documentGeneration:'document',callGeneration:generation});
+ try{
+  const page=app.pages[0];discover(page,'A');await app.command(command('start-A','start'));
+  const before=app.api.controlStatus().sessions[0].callGeneration;
+  app.tabs.get(2).url='https://meet.example/B';
+  if(order==='browser-first'){
+   app.chrome.tabs.onUpdated.emit(2,{url:'https://meet.example/B'});
+   discover(page,'A');assert.equal((await app.api.meetings()).meetings[0].heard,false,'in-flight A cannot vote under B');
+   discover(page,'B');
+  }else{discover(page,'B');app.chrome.tabs.onUpdated.emit(2,{url:'https://meet.example/B'})}
+  await until(()=>app.audio[0].closed);
+  discover(page,'B');const generation=(await app.api.meetings()).meetings[0].callGeneration;assert.notEqual(generation,before);
+  await app.command(command('start-B','start',{callGeneration:generation}));
+  discover(page,'B');assert.equal(app.audio[1].closed,false,'a late matching hook notification cannot stop B');
+  assert.equal(app.api.controlStatus().sessions[0].callGeneration,generation);
+  const child=app.frame(2,1,1);discover(child,'child-A');discover(child,'child-B');
+  assert.equal(app.audio[1].closed,false);assert.equal(app.api.controlStatus().sessions[0].callGeneration,generation);
+  await app.command(command('stop-B','stop'));
+ }finally{app.close()}
+});
+
+test('a recovered transient retry does not send a false interrupted problem at Stop',async()=>{
+ const app=await setup(3,{},['source-outcomes-v1']);
+ try{
+  await app.command(command('start','start'));
+  app.pages[0].onMessage.emit({type:'warning',transient:true});
+  await packet(app,{type:'track',id:'recovered',kind:'remote',sampleRate:48000,channels:1},1);
+  await app.command(command('stop','stop'));
+  assert.equal(app.audio[0].sent.find(p=>p.type==='stop').problem,null);
  }finally{app.close()}
 });

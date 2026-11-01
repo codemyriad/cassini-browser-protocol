@@ -176,7 +176,8 @@
               "captureId": {
                 "type": "string",
                 "minLength": 1,
-                "maxLength": 128
+                "maxLength": 200,
+                "$comment": "At most 200 UTF-8 bytes, independently of this character bound."
               },
               "pageState": {
                 "enum": [
@@ -239,6 +240,12 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 200
+        },
+        "captureId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "$comment": "At most 200 UTF-8 bytes, independently of this character bound."
         }
       },
       "required": [
@@ -383,6 +390,12 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 200
+        },
+        "captureId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "$comment": "At most 200 UTF-8 bytes, independently of this character bound."
         }
       },
       "required": [

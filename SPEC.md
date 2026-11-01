@@ -346,3 +346,30 @@ is masked at the boundary before recognition, mixing and export. This is not a
 transcript display rule. `callConnected` moves an enabled others side from the
 initial system/missing stand-in to browser tracks (D49). Existing lost/restored
 semantics stay intact. See conformance/multistream/ownership.json.
+
+The 64-span limit counts accepted declarations plus declarations currently in
+flight across every frame. The worker reserves a slot synchronously before
+forwarding a new track, commits it on ACK, and releases it on refusal. Failed
+worklet/context initialization consumes no slot. A limit refusal retires that
+live track until a new capture; it never schedules endless allocation retries or
+repeats the same warning on discovery ticks.
+
+Receiver roots and all their clones remain receiver sources even when rendered
+in audio/video elements. They cannot enter through the media-element path:
+connected-peer, receiver direction, generation and inbound-RTP proof govern
+admission. A main-frame address boundary is fenced once whether browser URL
+notification or page discovery arrives first. Old-generation discoveries cannot
+vote in the new call; a child-frame generation change cannot end its parent call.
+
+A transient attach/recovery warning does not mark a source failed. Replacement
+spans after recovery close the previous span with reason=retry. Successful PCM
+ACKs clear the retrying state; merely opening a worklet does not. If Stop arrives
+while a source is still retrying, the producer checkpoints its failed discovery
+before Stop. Terminal source refusals and durable native I/O failures remain
+sticky; recovery never erases recorded loss. The optional internal relay warning
+flag transient distinguishes a pending retry from such terminal loss.
+
+During a page reload, present with zero sources is not proof of return: keep the
+original 120-second return deadline, start the fallback after two seconds, and
+end with pageGone at that deadline unless a fresh positive inventory restores
+browser tracks. See the executable lifecycle vectors.

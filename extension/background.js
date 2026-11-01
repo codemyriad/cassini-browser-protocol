@@ -40,10 +40,12 @@ function documentFor(tabId) {
 }
 function callChanged(tabId) {
   const current = sessions.get(tabId);
-  if (current?.callChanged) return;
   callInfo(tabId).generation = crypto.randomUUID();
-  for (const frame of frames) if (frame.tabId === tabId) { frame.sourceCount = 0; frame.heard = false; }
-  if (current) { current.callChanged = true; void stop(current, "callEnded"); }
+  for (const frame of frames) if (frame.tabId === tabId) {
+    if (frame.callGeneration !== undefined) frame.fencedGenerations.add(JSON.stringify([frame.documentGeneration,frame.callGeneration]));
+    frame.callGeneration = undefined; frame.sourceCount = 0; frame.heard = false;
+  }
+  if (current && !current.callChanged) { current.callChanged = true; void stop(current, "callEnded"); }
   notifyControl();
 }
 
@@ -230,7 +232,7 @@ async function start(mode, tabId = null, options = {}) {
       throw new Error("That call is no longer active.");
     identity.url = callAddress(tab.url);
     const session = { callGeneration: identity.generation, mode, tabId: tab.id, independent: options.independent === true, captureLocal: options.captureLocal !== false, keepOnNavigation: options.keepOnNavigation === true, token: crypto.randomUUID(), origin: Date.now(),
-      frames: new Set(), tracks: 0, trackIds: new Set(), trackSources: new Map(), discoveredSources: new Map(), sourceUpdates: new Set(), lastTab: tab, lastSourceCount: 0, stopping: false, problem: null };
+      frames: new Set(), tracks: 0, trackIds: new Set(), trackReservations: new Set(), trackSources: new Map(), discoveredSources: new Map(), sourceUpdates: new Set(), lastTab: tab, lastSourceCount: 0, stopping: false, problem: null };
     sessions.set(tab.id, session);
     notifyControl();
     const checkStarting = () => {
@@ -304,7 +306,7 @@ async function start(mode, tabId = null, options = {}) {
 
 chrome.runtime.onConnect.addListener(port => {
   if (port.name !== "cassini-frame" || port.sender?.id !== chrome.runtime.id || !port.sender.tab) return;
-  const frame = { port, tabId: port.sender.tab.id, frameId: port.sender.frameId ?? 0, sourceCount: 0, heard: false };
+  const frame = { port, tabId: port.sender.tab.id, frameId: port.sender.frameId ?? 0, sourceCount: 0, heard: false, fencedGenerations: new Set() };
   if (pageState(frame.tabId) === "closed") return;
   if (frame.frameId === 0) setPageState(frame.tabId, "present");
   frames.add(frame);
@@ -329,9 +331,10 @@ chrome.runtime.onConnect.addListener(port => {
       const document = message.documentGeneration, generation = message.callGeneration;
       if (typeof document === "string" && document.length > 0 && document.length <= 200 &&
           typeof generation === "string" && generation.length > 0 && generation.length <= 200) {
-        const changed = frame.documentGeneration === document && frame.callGeneration !== undefined && frame.callGeneration !== generation;
+        if (frame.fencedGenerations.has(JSON.stringify([document,generation]))) return;
+        const changed = frame.frameId === 0 && frame.documentGeneration === document && frame.callGeneration !== undefined && frame.callGeneration !== generation;
+        if (changed) { callInfo(frame.tabId).url = null; callChanged(frame.tabId); }
         frame.documentGeneration = document; frame.callGeneration = generation;
-        if (changed) callChanged(frame.tabId);
       }
       if (frame.obsolete || pageState(frame.tabId) === "closed") return;
       if (Number.isInteger(message.sourceCount) && message.sourceCount >= 0 && message.sourceCount <= 64 &&
@@ -360,7 +363,8 @@ chrome.runtime.onConnect.addListener(port => {
     }
     if (message.type === "warning") {
       session.warning = "One track was interrupted and has a gap. The other tracks continue.";
-      session.problem ??= session.warning; notifyControl(); return;
+      if (!message.transient) session.problem ??= session.warning;
+      notifyControl(); return;
     }
     if (message.type === "error") { failure("The meeting page could not record separate tracks. Record the whole tab instead. Audio recorded so far was saved.", session); return; }
     if (message.type !== "packet" || !["track", "audio", ...(session.sourceOutcomes ? ["trackEnd", "sources"] : [])].includes(message.packet?.type)) return;
@@ -368,18 +372,22 @@ chrome.runtime.onConnect.addListener(port => {
       if (session.callChanged && message.packet.type !== "trackEnd")
         throw Object.assign(new Error("This audio belongs to a different call."), { scope: "source", code: "callChanged" });
       if (JSON.stringify(message.packet).length > 400000) throw new Error("The meeting page sent an oversized audio chunk.");
-      if (message.packet.type === "track" && !session.trackIds.has(message.packet.id) && session.trackIds.size >= 64)
+      const reserve = message.packet.type === "track" && !session.trackIds.has(message.packet.id) && !session.trackReservations.has(message.packet.id);
+      if (reserve && session.trackIds.size + session.trackReservations.size >= 64)
         throw Object.assign(new Error("This recording has reached its track limit."), { code: "limit", scope: "source" });
-      if (message.packet.type === "sources") {
-        if (!Array.isArray(message.packet.discoveredSources) || !message.packet.discoveredSources.length)
-          throw Object.assign(new Error("Empty audio source update."), {scope:"command",code:"source"});
-        await recordSources(session, message.packet.discoveredSources);
-      }
-      else await session.host.send(message.packet);
-      if (message.packet.type === "track" && !session.trackIds.has(message.packet.id)) {
-        session.trackIds.add(message.packet.id);
-        session.trackSources.set(message.packet.id, message.packet.sourceTrackId || message.packet.id); session.tracks++; session.warning = null; notifyControl();
-      }
+      if (reserve) session.trackReservations.add(message.packet.id);
+      try {
+        if (message.packet.type === "sources") {
+          if (!Array.isArray(message.packet.discoveredSources) || !message.packet.discoveredSources.length)
+            throw Object.assign(new Error("Empty audio source update."), {scope:"command",code:"source"});
+          await recordSources(session, message.packet.discoveredSources);
+        }
+        else await session.host.send(message.packet);
+        if (message.packet.type === "track" && !session.trackIds.has(message.packet.id)) {
+          session.trackIds.add(message.packet.id);
+          session.trackSources.set(message.packet.id, message.packet.sourceTrackId || message.packet.id); session.tracks++; session.warning = null; notifyControl();
+        }
+      } finally { if (reserve) session.trackReservations.delete(message.packet.id); }
       port.postMessage({ type: "ack", token: session.token, request: message.request });
     } catch (error) {
       if (error.code === "state" && ["source", "command"].includes(error.scope)) {
@@ -419,10 +427,10 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     await recovery;
     if (offscreen) {
       const active = [...sessions.values()].find(s => s.mode === "tab");
-      if (["warning", "error"].includes(message.type) && active?.sourceOutcomes && active.tabSourceId) {
+      if ((message.type === "error" || message.type === "warning" && !message.transient) && active?.sourceOutcomes && active.tabSourceId) {
         await recordSources(active, [{sourceTrackId:active.tabSourceId,kind:"tab",label:"Tab audio",failed:true}]);
       }
-      if (message.type === "warning" && active) { active.problem ??= "Tab audio lost samples during a recording stall."; active.warning = active.problem; return {}; }
+      if (message.type === "warning" && active) { active.warning = "Tab audio lost samples during a recording stall."; if (!message.transient) active.problem ??= active.warning; return {}; }
       if (message.type === "error") { failure(message.message, active); return {}; }
       if (message.type === "packet" && active?.mode === "tab" && ["track", "audio", ...(active.sourceOutcomes ? ["trackEnd"] : [])].includes(message.packet?.type)) {
         if (active.callChanged && message.packet.type !== "trackEnd")
@@ -468,7 +476,7 @@ chrome.tabs.onUpdated.addListener((id, change) => {
 function controlStatus(tabId = null) {
   const value = tabId === null ? status() : sessions.has(tabId) ? status(sessions.get(tabId)) : saved.get(tabId) || { recording: false, tabId, path: null, message: lastStatus.message };
   const packet = { type: "status", recording: value.recording, tabId: value.tabId ?? null,
-    path: value.path ?? null, message: value.message, captureId: value.captureId, documentGeneration: value.documentGeneration,
+    path: value.path ?? null, message: value.message, captureId: value.captureId, failedSources: value.failedSources, documentGeneration: value.documentGeneration,
     callGeneration: value.callGeneration, pageState: value.tabId == null ? undefined : value.pageState || pageState(value.tabId), tracks: value.tracks ?? 0, stopping: !!value.stopping };
   if (interrupted.length) packet.interrupted = interrupted;
   packet.sessions = [...sessions.values()].map(session => {

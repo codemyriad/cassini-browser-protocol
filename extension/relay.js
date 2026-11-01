@@ -82,6 +82,7 @@
       if (JSON.stringify(packet).length <= 400000) { pending.add(request); port?.postMessage({ type, packet, request }); }
     } else if (["ready", "stopped", "error", "warning"].includes(type)) {
       const details = {};
+      if (event.data.transient === true) details.transient = true;
       if (Array.isArray(event.data.discoveredSources)) details.discoveredSources = event.data.discoveredSources.filter(s =>
         s && typeof s.sourceTrackId === "string" && s.sourceTrackId.length > 0 && s.sourceTrackId.length <= 200 &&
         ["local", "remote", "media", "tab"].includes(s.kind)).map(s => ({ sourceTrackId: s.sourceTrackId, kind: s.kind,

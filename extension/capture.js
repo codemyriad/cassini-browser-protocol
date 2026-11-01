@@ -29,7 +29,8 @@ function resumeSuspended(context) {
   return task;
 }
 
-async function captureOnce({ stream, id, label, kind, origin, workletURL, send, fail, audible = false, enabled = () => true, channels = 1, sharedContext, warn = () => {}, sourceTrackId, reportOutcomes = false, onAudio = () => {} }) {
+async function captureOnce({ stream, id, label, kind, origin, workletURL, send, fail, audible = false, enabled = () => true, channels = 1, sharedContext, getSharedContext, warn = () => {}, sourceTrackId, reportOutcomes = false, onAudio = () => {} }) {
+  sharedContext ||= getSharedContext?.();
   const context = sharedContext || new AudioContext({ sampleRate: 48000 });
   let source, node, silent, remotePlayback, ending = false, failure = null;
   let pendingFrames = 0, sequence = 0, flushed, droppedFrames = 0;
@@ -108,7 +109,7 @@ async function captureOnce({ stream, id, label, kind, origin, workletURL, send, 
       }
       if (pendingFrames + frames > context.sampleRate * 10) {
         droppedFrames += frames;
-        warn("One track fell more than ten seconds behind and has a gap. The other tracks continue.");
+        warn("One track fell more than ten seconds behind and has a gap. The other tracks continue.", {kind:"gap"});
         return;
       }
       const offsetMs = Math.max(0, clockOffset + data.frame / context.sampleRate * 1000);
@@ -144,7 +145,7 @@ async function captureOnce({ stream, id, label, kind, origin, workletURL, send, 
         while (inFlight.size) await Promise.allSettled([...inFlight]);
         context.removeEventListener?.("statechange", stateChanged);
         if (!sharedContext) await context.close();
-        await end(retirementReason(failure) || (failure ? "failed" : reason));
+        await end(retirementReason(failure) || (reason === "retry" ? "retry" : failure ? "failed" : reason));
         if (failure && !retirementReason(failure)) throw failure;
       }
     };
@@ -187,6 +188,7 @@ export async function capture(options) {
     return !tracks || tracks.some(track => track.readyState === "live");
   });
   const healthy = () => {
+    recovering = false;
     healthySince ??= now();
     if (now() - healthySince >= 60000) retries = 0;
     options.onAudio?.();
@@ -202,13 +204,13 @@ export async function capture(options) {
       return;
     }
     const at = now();
-    if (reconcile({ live: live(), failedAt: at }, retries, healthySince, at) === "giveUpAndReport") {
+    if (error.code === "limit" || reconcile({ live: live(), failedAt: at }, retries, healthySince, at) === "giveUpAndReport") {
       terminal = error; options.fail?.(error.message); return;
     }
     if (healthySince !== null && at - healthySince >= 60000) retries = 0;
     healthySince = null;
     recovering = true;
-    warn("A track was interrupted; trying to resume it.");
+    warn("A track was interrupted; trying to resume it.", {kind:"retry"});
     const delay = options.retryDelayMs ?? retryDelay(retries);
     retryTimer = later(async () => {
       retryTimer = null;
@@ -221,9 +223,8 @@ export async function capture(options) {
         retries++;
         try {
           const id = options.nextSpanId ? options.nextSpanId() : crypto.randomUUID();
-          if (!id) throw new Error("This recording has reached its track limit.");
+          if (!id) throw Object.assign(new Error("This recording has reached its track limit."), {code:"limit",scope:"source"});
           current = await captureOnce({ ...options, id, fail: schedule, onAudio: healthy });
-          recovering = false;
         } catch (next) { schedule(next); }
       })();
       await restarting;

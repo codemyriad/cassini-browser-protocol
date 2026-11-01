@@ -392,7 +392,10 @@
                 "if": {
                   "properties": {
                     "reason": {
-                      "const": "restored"
+                      "enum": [
+                        "restored",
+                        "callConnected"
+                      ]
                     }
                   }
                 },

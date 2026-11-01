@@ -11,7 +11,7 @@ async function until(check) {
   const deadline = Date.now() + 3000;
   while (!check()) { assert.ok(Date.now() < deadline, 'control fixture timed out'); await new Promise(resolve => setImmediate(resolve)); }
 }
-async function setup(sourceCount = 3, previous = {}, hostFeatures = []) {
+async function setup(sourceCount = 3, previous = {}, hostFeatures = [], nativeFactory = null) {
   const ports = [], audio = [], alarms = new Map(), timers = new Map(), pages = [];
   const stored = { ...previous }; let timerID = 0, uuid = 0;
   const tabs = new Map([[2, { id: 2, title: 'Meeting B', url: 'https://meet.example/call' }], [99, { id: 99, title: 'Active unrelated page', url: 'https://other.example/' }]]);
@@ -19,6 +19,7 @@ async function setup(sourceCount = 3, previous = {}, hostFeatures = []) {
   const chrome = {
     runtime: { id: 'extension', onConnect: event(), onMessage: event(), getURL: name => 'chrome-extension://extension/' + name,
       getContexts: async () => [], connectNative(name) {
+        if (name === 'io.codemyriad.cassini' && nativeFactory) { const port = nativeFactory(); audio.push(port); return port; }
         const port = { name, sent: [], closed: false, onMessage: event(), onDisconnect: event(),
           postMessage(packet) {
             this.sent.push(JSON.parse(JSON.stringify(packet)));

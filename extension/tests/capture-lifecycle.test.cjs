@@ -56,6 +56,7 @@ test('live source retries beyond three attempts, preserving identity and closing
  for(let i=1;i<tracks.length;i++){
   const opened=packets.indexOf(tracks[i]);const ended=packets.findIndex(p=>p.type==='trackEnd'&&p.id===tracks[i-1].id);
   assert.ok(ended>=0&&ended<opened,'the old span ends before its replacement opens');
+  assert.equal(packets[ended].reason,'retry','recovery rotations must not mark an old span failed');
  }
  assert.deepEqual(failures,[]);await recorder.stop();assert.equal(time.timers.size,0);
 }));
@@ -66,7 +67,8 @@ test('first attach failures are retried and Stop cancels future work',async()=>m
   clock:time.now,schedule:time.schedule,cancel:time.cancel,send:async p=>packets.push(p)});
  assert.equal(recorder.state,'retrying');assert.equal(nodes.length,0);
  await time.advance(1000);assert.equal(attempts,2);
- await time.advance(5000);assert.equal(recorder.state,'recording');assert.equal(nodes.length,1);
+ await time.advance(5000);assert.equal(nodes.length,1);
+ nodes[0].port.onmessage({data:{pcm:new ArrayBuffer(8192*2),frame:0}});await tick();assert.equal(recorder.state,'recording');
  nodes[0].onprocessorerror();assert.equal(time.timers.size,1);
  await recorder.stop();await time.advance(90000);assert.equal(nodes.length,1);assert.equal(time.timers.size,0);
 }));
@@ -131,4 +133,51 @@ test('native-first Stop retires pending PCM and TrackEnd without retries or fals
  nodes[0].port.onmessage({data:{pcm:new ArrayBuffer(8192*2),frame:8192}});await tick();
  assert.equal(time.timers.size,0);await recorder.stop();
  assert.deepEqual(warnings,[]);assert.deepEqual(failures,[]);
+}));
+
+test('production page quota survives seventy real worklet failures and then records audio',async()=>mocked(async({capture,nodes,Context,retryDelay})=>{
+ const fixture=require('./support/page-capture-harness.cjs'),time=clock();let attempts=0;
+ class FlakyContext extends Context {constructor(){super();this.audioWorklet.addModule=async()=>{if(++attempts<=70)throw Error('generated initial worklet failure')}}}
+ await fixture(async f=>{
+  f.peer.senders=[{track:{id:'mic',label:'Microphone',kind:'audio',readyState:'live',enabled:true,muted:false},getParameters:()=>({encodings:[]})}];
+  await f.start('seventy-initial-failures',{sourceOutcomes:true});
+  for(let i=0;i<70;i++)await time.advance(retryDelay(i));
+  assert.equal(attempts,71);assert.equal(nodes.length,1);
+  nodes[0].port.onmessage({data:{pcm:new ArrayBuffer(8192*2),frame:0}});await tick();
+  assert.equal(f.captures[0].recorder.state,'recording');
+  assert.equal(f.messages.filter(m=>m.type==='packet'&&m.packet.type==='track').length,1);
+  assert.ok(f.messages.filter(m=>m.type==='packet'&&m.packet.type==='sources').every(m=>m.packet.discoveredSources.every(s=>!s.failed)));
+  await f.stop();
+ },{Context:FlakyContext,capture:options=>capture({...options,clock:time.now,schedule:time.schedule,cancel:time.cancel})});
+}));
+
+test('a real allocation limit is terminal for that track with no thirty-second retry loop',async()=>mocked(async({capture,nodes,Context})=>{
+ const time=clock(),failures=[];
+ const recorder=await capture({stream:{},id:'allocated',sourceTrackId:'root',kind:'local',label:'Guest',origin:100000,workletURL:'',sharedContext:new Context(),
+  nextSpanId:()=>null,clock:time.now,schedule:time.schedule,cancel:time.cancel,send:async()=>{},fail:m=>failures.push(m)});
+ nodes[0].onprocessorerror();await time.advance(1000);
+ assert.equal(recorder.failed,true);assert.equal(time.timers.size,0);await time.advance(600000);
+ assert.equal(nodes.length,1);assert.equal(failures.length,1);await assert.rejects(recorder.stop(),/track limit/);
+}));
+
+test('a refused live track is terminal and rescans never reattach or re-warn it',async()=>mocked(async({capture,Context})=>{
+ const fixture=require('./support/page-capture-harness.cjs'),time=clock();
+ await fixture(async f=>{
+  f.peer.senders=[{track:{id:'mic',label:'Microphone',kind:'audio',readyState:'live',enabled:true,muted:false},getParameters:()=>({encodings:[]})}];
+  await f.start('refused',{sourceOutcomes:true});assert.equal(f.captures[0].recorder.failed,true);
+  const warnings=f.messages.filter(m=>m.type==='warning').length;
+  for(let i=0;i<5;i++)await f.scan();
+  assert.equal(f.captures.length,1);assert.equal(f.messages.filter(m=>m.type==='warning').length,warnings);assert.equal(time.timers.size,0);
+ },{Context,capture:options=>capture({...options,clock:time.now,schedule:time.schedule,cancel:time.cancel,send:packet=>packet.type==='track'?Promise.reject(Object.assign(new Error('Generated native quota'),{code:'limit',scope:'source'})):options.send(packet)})});
+}));
+
+test('Stop retains a source still retrying before its first track was opened',async()=>mocked(async({capture,Context})=>{
+ const fixture=require('./support/page-capture-harness.cjs'),time=clock();
+ class Unavailable extends Context {constructor(){super();this.audioWorklet.addModule=async()=>{throw Error('generated initial attach failure')}}}
+ await fixture(async f=>{
+  f.peer.senders=[{track:{id:'mic',label:'Microphone',kind:'audio',readyState:'live',enabled:true,muted:false},getParameters:()=>({encodings:[]})}];
+  await f.start('unrecovered',{sourceOutcomes:true});assert.equal(f.captures[0].recorder.state,'retrying');await f.stop();
+  const records=f.messages.filter(m=>m.type==='packet'&&m.packet.type==='sources').flatMap(m=>m.packet.discoveredSources);
+  assert.equal(records.at(-1).failed,true);assert.equal(time.timers.size,0);
+ },{Context:Unavailable,capture:options=>capture({...options,clock:time.now,schedule:time.schedule,cancel:time.cancel})});
 }));
