@@ -39,7 +39,7 @@ async function setup(sourceCount = 3, previous = {}, hostFeatures = []) {
   };
   const later = (fn, ms) => { const id = ++timerID; timers.set(id, { fn, ms }); return id; };
   const cancel = id => timers.delete(id);
-  const context = vm.createContext({ chrome, URL, crypto: { randomUUID: () => 'token-' + (++uuid) }, queueMicrotask, setTimeout, clearTimeout });
+  const context = vm.createContext({ chrome, URL, TextEncoder, crypto: { randomUUID: () => 'token-' + (++uuid) }, queueMicrotask, setTimeout, clearTimeout });
   const extension = path.resolve(__dirname, '../..');
   vm.runInContext(fs.readFileSync(path.join(extension, 'app-control.js'), 'utf8').replace('export class AppControl', 'class AppControl'), context);
   context.controlLater = later; context.controlCancel = cancel;

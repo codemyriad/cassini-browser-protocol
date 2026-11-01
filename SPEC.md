@@ -288,7 +288,7 @@ one-second system gap, with both macos/gnome manifest variants.
 
 This additive mode keeps version 1 and every legacy conversation. Start requests
 `features:["source-outcomes-v1"]`; `started.features` acknowledges support. Only
-then may the extension send `trackEnd` and `stop.discoveredSources`. An older
+then may the extension send `sources`, `trackEnd` and `stop.discoveredSources`. An older
 host continues to receive its original packet types.
 
 `track.sourceTrackId` is an optional opaque ID, bounded to 200 UTF-8 bytes. It
@@ -317,6 +317,23 @@ Diagnostic source lists include refused/never-opened sources and are not capped
 at the 64 audio-track allocation limit. Their serialized requests remain bounded
 by the existing native-message framing limit; identities/labels retain their
 per-field bounds. No diagnostic entry allocates a WAV.
+
+`sources` carries a nonempty `discoveredSources` array with the same record shape
+as Stop. Each discovery is sent and durably ACKed before attempting its first
+audio attachment; a source failure sends a sticky update immediately. Readers
+merge records by sourceTrackId and never clear an earlier failed flag. Reject a
+malformed batch with scope=command, without closing the connection or allocating
+WAVs. The whole batch is validated before its records are changed. Native request
+framing remains the size bound; writers stream bounded UTF-8 batches rather than
+pruning at 64 or 256 sources. ACK means the capture record is checkpointed, even
+when no WAV exists yet. The extension drains outstanding source updates before
+its terminal Stop. Its final summary may be empty when all updates were ACKed.
+
+Desktop Stop may finish native capture before an unreachable extension responds;
+it must not wait indefinitely for that final summary or depend on it to discover
+sources that already failed. A source packet after native finalization is refused
+with scope=command and code=state; it cannot rewrite a published meeting. Announced
+sources stay in the durable capture record across EOF or a native-first Stop.
 
 Source ownership is half-open at each othersSource.atMs. Outgoing source audio
 is masked at the boundary before recognition, mixing and export. This is not a

@@ -50,6 +50,41 @@ function callChanged(tabId) {
 const saved = new Map();
 const interrupted = [];
 const firstSession = () => sessions.values().next().value;
+const sourceEncoder = new TextEncoder();
+function sourceRecords(values) {
+  if (!Array.isArray(values)) throw Object.assign(new Error("Invalid audio source records."), {scope: "command", code: "source"});
+  return values.map(source => {
+    if (!source || typeof source.sourceTrackId !== "string" || !source.sourceTrackId.length ||
+        sourceEncoder.encode(source.sourceTrackId).length > 200 ||
+        !["local", "remote", "media", "tab", "application"].includes(source.kind) ||
+        (source.failed !== undefined && typeof source.failed !== "boolean"))
+      throw Object.assign(new Error("Invalid audio source record."), {scope: "command", code: "source"});
+    return {sourceTrackId: source.sourceTrackId, kind: source.kind,
+      label: typeof source.label === "string" ? [...source.label.replace(/[\u0000-\u001f\u007f-\u009f]/g, "")].slice(0, 200).join("") : source.kind,
+      failed: source.failed === true};
+  });
+}
+async function recordSources(session, values) {
+  const records = sourceRecords(values).map(source => {
+    const previous = session.discoveredSources.get(source.sourceTrackId);
+    source.failed ||= previous?.failed === true;
+    session.discoveredSources.set(source.sourceTrackId, source);
+    return source;
+  });
+  // Bound each UTF-8 native request, never the session's append-only ledger.
+  const packets = []; let batch = [], bytes = 42;
+  for (const source of records) {
+    const size = sourceEncoder.encode(JSON.stringify(source)).length + 1;
+    if (bytes + size > 400000 && batch.length) { packets.push({type: "sources", discoveredSources: batch}); batch = []; bytes = 42; }
+    batch.push(source); bytes += size;
+  }
+  if (batch.length) packets.push({type: "sources", discoveredSources: batch});
+  // Enqueue together: every request's existing ten-second deadline starts now,
+  // rather than accumulating an unbounded chain of sequential Stop waits.
+  const pending = Promise.all(packets.map(packet => session.host.send(packet)));
+  session.sourceUpdates.add(pending);
+  try { await pending; } finally { session.sourceUpdates.delete(pending); }
+}
 let lastStatus = { recording: false, message: "Ready. Choose Separate tracks or Whole tab." };
 let storageTail = Promise.resolve();
 function persistSessions() {
@@ -148,7 +183,10 @@ async function stop(session = firstSession(), reason = "user") {
       }
       const packet = { type: "stop", problem: session.problem };
       if (session.independent) packet.captureId = session.token;
-      if (session.sourceOutcomes) packet.discoveredSources = [...session.discoveredSources.values()];
+      if (session.sourceOutcomes) {
+        await Promise.all([...session.sourceUpdates]);
+        packet.discoveredSources = []; // The acknowledged live batches are already durable.
+      }
       if ((session.keepOnNavigation || session.sourceOutcomes) && !session.loss) packet.reason = reason;
       if (session.independent && session.loss) packet.failureReason = "lost";
       const result = session.host ? await session.host.send(packet) : {};
@@ -192,7 +230,7 @@ async function start(mode, tabId = null, options = {}) {
       throw new Error("That call is no longer active.");
     identity.url = callAddress(tab.url);
     const session = { callGeneration: identity.generation, mode, tabId: tab.id, independent: options.independent === true, captureLocal: options.captureLocal !== false, keepOnNavigation: options.keepOnNavigation === true, token: crypto.randomUUID(), origin: Date.now(),
-      frames: new Set(), tracks: 0, trackIds: new Set(), trackSources: new Map(), discoveredSources: new Map(), lastTab: tab, lastSourceCount: 0, stopping: false, problem: null };
+      frames: new Set(), tracks: 0, trackIds: new Set(), trackSources: new Map(), discoveredSources: new Map(), sourceUpdates: new Set(), lastTab: tab, lastSourceCount: 0, stopping: false, problem: null };
     sessions.set(tab.id, session);
     notifyControl();
     const checkStarting = () => {
@@ -304,13 +342,8 @@ chrome.runtime.onConnect.addListener(port => {
       frame.finished?.(); notifyControl(); return;
     }
     if (session.sourceOutcomes && Array.isArray(message.discoveredSources)) {
-      for (const source of message.discoveredSources.slice(0, 64)) {
-        if (source && typeof source.sourceTrackId === "string" && source.sourceTrackId.length <= 200 &&
-            ["local", "remote", "media", "tab"].includes(source.kind) && session.discoveredSources.size < 256)
-          session.discoveredSources.set(source.sourceTrackId, { sourceTrackId: source.sourceTrackId, kind: source.kind,
-            label: typeof source.label === "string" ? [...source.label].slice(0, 200).join("") : source.kind,
-            failed: source.failed === true || session.discoveredSources.get(source.sourceTrackId)?.failed === true });
-      }
+      try { await recordSources(session, message.discoveredSources); }
+      catch (error) { failure(error.message, session); return; }
     }
     if (message.type === "stopped") {
       if (!session.stopping) failure("The meeting page stopped sending audio. The recording so far was saved.", session);
@@ -321,27 +354,31 @@ chrome.runtime.onConnect.addListener(port => {
       session.problem ??= session.warning; notifyControl(); return;
     }
     if (message.type === "error") { failure("The meeting page could not record separate tracks. Record the whole tab instead. Audio recorded so far was saved.", session); return; }
-    if (message.type !== "packet" || !["track", "audio", ...(session.sourceOutcomes ? ["trackEnd"] : [])].includes(message.packet?.type)) return;
+    if (message.type !== "packet" || !["track", "audio", ...(session.sourceOutcomes ? ["trackEnd", "sources"] : [])].includes(message.packet?.type)) return;
     try {
       if (session.callChanged && message.packet.type !== "trackEnd")
-        throw Object.assign(new Error("This audio belongs to a different call."), { scope: "source", code: "source" });
+        throw Object.assign(new Error("This audio belongs to a different call."), { scope: "source", code: "callChanged" });
       if (JSON.stringify(message.packet).length > 400000) throw new Error("The meeting page sent an oversized audio chunk.");
       if (message.packet.type === "track" && !session.trackIds.has(message.packet.id) && session.trackIds.size >= 64)
         throw Object.assign(new Error("This recording has reached its track limit."), { code: "limit", scope: "source" });
-      await session.host.send(message.packet);
+      if (message.packet.type === "sources") await recordSources(session, message.packet.discoveredSources);
+      else await session.host.send(message.packet);
       if (message.packet.type === "track" && !session.trackIds.has(message.packet.id)) {
         session.trackIds.add(message.packet.id);
         session.trackSources.set(message.packet.id, message.packet.sourceTrackId || message.packet.id); session.tracks++; session.warning = null; notifyControl();
       }
       port.postMessage({ type: "ack", token: session.token, request: message.request });
     } catch (error) {
-      try { port.postMessage({ type: "ack", token: session.token, request: message.request, error: error.message, code: error.code, scope: error.scope }); } catch {}
-      if (error.scope === "source") {
+      if (error.scope === "source" && error.code !== "callChanged") {
         const key = message.packet.sourceTrackId || session.trackSources.get(message.packet.id);
-        if (typeof key === "string" && key.length <= 200 && session.discoveredSources.size < 256)
-          session.discoveredSources.set(key, {sourceTrackId:key,kind:message.packet.kind || "remote",label:message.packet.label || "Audio",failed:true});
+        if (session.sourceOutcomes && typeof key === "string") {
+          const previous = session.discoveredSources.get(key);
+          try { await recordSources(session, [{sourceTrackId:key,kind:previous?.kind || message.packet.kind || "remote",label:previous?.label || message.packet.label || "Audio",failed:true}]); }
+          catch (recordError) { failure(recordError.message, session); }
+        }
         session.warning = "One track was interrupted and has a gap. The other tracks continue."; session.problem ??= session.warning; notifyControl(); }
-      else failure(error.message, session);
+      else if (!["command", "source"].includes(error.scope)) failure(error.message, session);
+      try { port.postMessage({ type: "ack", token: session.token, request: message.request, error: error.message, code: error.code, scope: error.scope }); } catch {}
     }
   });
   port.onDisconnect.addListener(() => {

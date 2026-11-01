@@ -223,6 +223,27 @@
         }
       },
       "additionalProperties": true
+    },
+    {
+      "type": "object",
+      "required": [
+        "type",
+        "discoveredSources"
+      ],
+      "properties": {
+        "type": {
+          "const": "sources"
+        },
+        "discoveredSources": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "$ref": "#/$defs/discoveredSource"
+          },
+          "$comment": "Negotiated source-outcomes-v1 only. Bounded by native framing; does not allocate a WAV."
+        }
+      },
+      "additionalProperties": true
     }
   ],
   "$defs": {

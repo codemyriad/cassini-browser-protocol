@@ -31,6 +31,29 @@
       "writes": [{"id":"sparse","offsetMs":0,"frames":2000,"value":0},{"id":"sparse","offsetMs":10000,"frames":2000,"value":0}],
       "expected": {"sparse":"lowAudio"},
       "sourceExpected": {"source-sparse":"lowAudio"}
+    },
+    {
+      "name": "live-discovery-durable-before-native-stop",
+      "tracks": [],
+      "writes": [],
+      "announcedSources": [
+        {
+          "sourceTrackId": "not-opened",
+          "kind": "remote",
+          "label": "Guest",
+          "failed": true
+        },
+        {
+          "sourceTrackId": "not-yet-audible",
+          "kind": "media",
+          "label": "Lesson"
+        }
+      ],
+      "expected": {},
+      "sourceExpected": {
+        "not-opened": "failed",
+        "not-yet-audible": "neverAudio"
+      }
     }
   ]
 }

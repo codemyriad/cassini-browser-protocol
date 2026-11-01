@@ -77,12 +77,12 @@
     }
     if (!token || event.data.token !== token) return;
     // Page code is untrusted. It may supply audio, never filesystem paths or host commands.
-    if (type === "packet" && ["track", "audio", "trackEnd"].includes(packet?.type)) {
+    if (type === "packet" && ["track", "audio", "trackEnd", "sources"].includes(packet?.type)) {
       if (packet.type === "track" && typeof packet.label === "string") packet.label = [...packet.label.replace(/[\u0000-\u001f\u007f-\u009f]/g, "")].slice(0, 200).join("");
       if (JSON.stringify(packet).length <= 400000) { pending.add(request); port?.postMessage({ type, packet, request }); }
     } else if (["ready", "stopped", "error", "warning"].includes(type)) {
       const details = {};
-      if (Array.isArray(event.data.discoveredSources)) details.discoveredSources = event.data.discoveredSources.slice(0, 64).filter(s =>
+      if (Array.isArray(event.data.discoveredSources)) details.discoveredSources = event.data.discoveredSources.filter(s =>
         s && typeof s.sourceTrackId === "string" && s.sourceTrackId.length > 0 && s.sourceTrackId.length <= 200 &&
         ["local", "remote", "media", "tab"].includes(s.kind)).map(s => ({ sourceTrackId: s.sourceTrackId, kind: s.kind,
           label: typeof s.label === "string" ? [...s.label.replace(/[\u0000-\u001f\u007f-\u009f]/g, "")].slice(0, 200).join("") : s.kind, failed: s.failed === true }));

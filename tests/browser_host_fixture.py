@@ -42,6 +42,8 @@ def checkpoint():
             writer.setsampwidth(2)
             writer.setframerate(track['sampleRate'])
             writer.writeframes(pcm)
+    if 'source-outcomes-v1' in features:
+        manifest['captureOutcome'] = source_summary()
     temporary = directory / 'session.tmp'
     temporary.write_text(json.dumps(manifest))
     temporary.replace(directory / 'session.json')
@@ -65,6 +67,24 @@ def source_summary():
         result.append(dict(sourceTrackId=key, kind=source['kind'], label=source.get('label', source['kind']),
                            captureOutcome=state, audioMs=milliseconds, trackIds=[t['id'] for t in tracks]))
     return dict(sources=result)
+
+def observe_sources(sources):
+    if not isinstance(sources, list): raise ValueError('Invalid sources')
+    proposed = {key: dict(value) for key, value in seen.items()}
+    for source in sources:
+        if not isinstance(source, dict): raise ValueError('Invalid source')
+        key = source.get('sourceTrackId')
+        if not isinstance(key, str) or not key or len(key.encode('utf-8')) > 200:
+            raise ValueError('Invalid source identity')
+        if source.get('kind') not in ('local','remote','media','tab','application'):
+            raise ValueError('Invalid source kind')
+        if type(source.get('failed', False)) is not bool: raise ValueError('Invalid failure flag')
+        label = source.get('label', source['kind'])
+        if not isinstance(label, str) or len(label) > 200: raise ValueError('Invalid source label')
+        previous = proposed.get(key, {})
+        proposed[key] = dict(sourceTrackId=key, kind=source['kind'], label=source.get('label', source['kind'])[:200],
+                             failed=source.get('failed', False) or previous.get('failed', False))
+    seen.update(proposed)
 
 def finish(problem=None, reason=None):
     if 'source-outcomes-v1' in features:
@@ -114,6 +134,15 @@ try:
             manifest = dict(version=1, id=id, createdAt=datetime.datetime.now(datetime.timezone.utc).isoformat(), title=request.get('title', 'Browser test'), source='chromium', state='recording', tracks=[])
             checkpoint()
             reply(dict(type='started', path=str(directory), **({'features': sorted(features)} if features else {})))
+        elif kind == 'sources' and 'source-outcomes-v1' in features:
+            if manifest is None or manifest['state'] != 'recording':
+                refused('state', 'Capture already saved', scope='command'); continue
+            try:
+                if not request.get('discoveredSources'): raise ValueError('Empty source update')
+                observe_sources(request['discoveredSources'])
+            except ValueError as error:
+                refused('source', str(error), scope='command'); continue
+            checkpoint(); reply(dict(type='ack'))
         elif kind == 'track':
             existing = next((t for t in manifest['tracks'] if t['id'] == request['id']), None)
             if 'source-outcomes-v1' in features:
@@ -179,12 +208,13 @@ try:
             checkpoint(); reply(dict(type='ack'))
         elif kind == 'stop':
             if 'source-outcomes-v1' in features:
+                if manifest['state'] != 'recording':
+                    refused('state', 'Capture already saved', scope='command'); continue
                 if capture_id is not None and request.get('captureId') != capture_id:
                     refused('state', 'Capture identity does not match', scope='command'); continue
-                for source in request.get('discoveredSources', []):
-                    key = source['sourceTrackId']
-                    if key not in seen: seen[key] = source
-                    elif source.get('failed'): seen[key]['failed'] = True
+                try: observe_sources(request.get('discoveredSources', []))
+                except ValueError as error:
+                    refused('source', str(error), scope='command'); continue
             finish(request.get('problem'), request.get('reason') or 'user')
             reply(dict(type='stopped', path=str(directory), **({'problem': request['problem']} if request.get('problem') else {})))
         else:

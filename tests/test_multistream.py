@@ -57,10 +57,35 @@ def end(send, identifier, reason='ended'):
 
 
 class MultistreamTests(unittest.TestCase):
+    def test_live_source_updates_are_durable_atomic_sticky_and_cannot_rewrite_after_stop(self):
+        with host() as (send, folder, _):
+            source = dict(sourceTrackId='never-opened', kind='remote', label='Guest', failed=True)
+            self.assertEqual(send(dict(type='sources', discoveredSources=[source]))['type'], 'ack')
+            saved = json.loads((folder / 'session.json').read_text())
+            wire.VALIDATORS['session'].validate(saved)
+            self.assertEqual(saved['tracks'], [])
+            self.assertEqual(saved['captureOutcome']['sources'][0]['captureOutcome'], 'failed')
+            before = (folder / 'session.json').read_bytes()
+            invalid = send(dict(type='sources', discoveredSources=[dict(source, sourceTrackId='valid-but-rolled-back'), dict(source, sourceTrackId='é'*101)]))
+            self.assertEqual((invalid['type'],invalid['scope']), ('error','command'))
+            self.assertEqual((folder / 'session.json').read_bytes(), before)
+            send(dict(type='sources', discoveredSources=[dict(source, failed=False)]))
+            self.assertEqual(json.loads((folder / 'session.json').read_text())['captureOutcome']['sources'][0]['captureOutcome'], 'failed')
+            send(dict(type='stop', captureId='capture-current'))
+            before = (folder / 'session.json').read_bytes()
+            refused = send(dict(type='sources', discoveredSources=[dict(source, sourceTrackId='too-late')]))
+            self.assertEqual((refused['type'],refused['scope'],refused['code']),('error','command','state'))
+            self.assertEqual((folder / 'session.json').read_bytes(), before)
+
     def test_hand_written_capture_outcomes(self):
         vectors = json.loads((ROOT / 'conformance/multistream/outcomes.json').read_text())
         for case in vectors['cases']:
             with self.subTest(case=case['name']), host() as (send, folder, _):
+                if case.get('announcedSources'):
+                    self.assertEqual(send(dict(type='sources', discoveredSources=case['announcedSources']))['type'], 'ack')
+                    checkpoint = json.loads((folder / 'session.json').read_text())
+                    self.assertEqual(checkpoint['tracks'], [])
+                    self.assertEqual({s['sourceTrackId']:s['captureOutcome'] for s in checkpoint['captureOutcome']['sources']}, case['sourceExpected'])
                 for item in case['tracks']:
                     self.assertEqual(track(send, item['id'], item['sourceTrackId'])['type'], 'ack')
                 for item in case['writes']:

@@ -76,3 +76,36 @@ test('call address change retires A, publishes a new generation, and rejects lat
   assert.equal(app.audio.length,1);
  }finally{app.close()}
 });
+
+test('live source batches retain 257 never-opened sources and Stop waits for their native ACK',async()=>{
+ const app=await setup(3,{},['source-outcomes-v1']);let release;
+ try{
+  await app.command(command('start','start'));const port=app.audio[0],post=port.postMessage;
+  port.postMessage=function(value){if(value.type==='sources'){this.sent.push(value);release=()=>this.onMessage.emit({type:'ack'})}else post.call(this,value)};
+  const sources=Array.from({length:257},(_,i)=>({sourceTrackId:`never-opened-${i}`,kind:'remote',label:'Guest',failed:true}));
+  const update=packet(app,{type:'sources',discoveredSources:sources},257);
+  await until(()=>release);
+  assert.equal(port.sent.filter(p=>p.type==='track').length,0);
+  assert.equal(app.api.controlStatus().sessions[0].failedSources.length,257);
+  const stopping=app.command(command('stop','stop'));
+  await until(()=>app.pages[0].sent.some(m=>m.type==='stop'));
+  assert.equal(port.sent.some(p=>p.type==='stop'),false,'native Stop cannot overtake unacknowledged source records');
+  release();await update;await stopping;
+  assert.equal(port.sent.find(p=>p.type==='sources').discoveredSources.length,257);
+  assert.deepEqual(Array.from(port.sent.find(p=>p.type==='stop').discoveredSources),[]);
+ }finally{release?.();app.close()}
+});
+
+test('a legacy full discovery update is streamed without the old 64/256 truncation',async()=>{
+ const app=await setup(3,{},['source-outcomes-v1']);
+ try{
+  await app.command(command('start','start'));
+  app.pages[0].onMessage.emit({type:'warning',discoveredSources:Array.from({length:600},(_,i)=>({sourceTrackId:`source-${i}`,kind:'remote',label:'🙂'.repeat(200),failed:true}))});
+  await until(()=>app.audio[0].sent.filter(p=>p.type==='sources').flatMap(p=>p.discoveredSources).length===600);
+  const packets=app.audio[0].sent.filter(p=>p.type==='sources');
+  assert.equal(new Set(packets.flatMap(p=>p.discoveredSources).map(s=>s.sourceTrackId)).size,600);
+  assert.ok(packets.length>1,'multibyte source labels require more than one native frame');
+  assert.ok(packets.every(p=>Buffer.byteLength(JSON.stringify(p))<=400000));
+  await app.command(command('stop','stop'));
+ }finally{app.close()}
+});

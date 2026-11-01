@@ -7,7 +7,7 @@ const path=require('node:path');
 const moduleURL='data:text/javascript;base64,'+Buffer.from('export const capture=options=>globalThis.__cassiniPageCapture(options);').toString('base64');
 
 async function fixture(run) {
- const messages=[],listeners=[],timers=[],captures=[];let now=0,uuid=0;
+ const messages=[],listeners=[],timers=[],captures=[];let now=0,uuid=0,contextError=false;
  class Peer {
   constructor(){this.connectionState='connected';this.iceConnectionState='connected';this.signalingState='stable';this.slots=[];this.senders=[]}
   addEventListener(){}getTransceivers(){return this.slots}getSenders(){return this.senders}close(){this.signalingState='closed'}
@@ -15,7 +15,7 @@ async function fixture(run) {
  for(const name of ['getStats','createOffer','createAnswer','setLocalDescription','setRemoteDescription','addTrack','addTransceiver'])Peer.prototype[name]=()=>{};
  Peer.prototype.setRemoteDescription=function(){return this.descriptionTask || Promise.resolve()};
  class Stream {constructor(tracks){this.tracks=tracks}getAudioTracks(){return this.tracks}}
- class Context {sampleRate=48000;state='running';async close(){this.state='closed'}}
+ class Context {constructor(){if(contextError)throw Error('generated context attach failure')}sampleRate=48000;state='running';async close(){this.state='closed'}}
  const control=async data=>{for(const fn of listeners)await fn({source:window,data:{channel:'cassini-control',...data}})};
  const window={location:{href:'https://meet.test/call-A'},RTCPeerConnection:Peer,addEventListener:(_n,fn)=>listeners.push(fn),postMessage(message){
   messages.push(message);
@@ -40,7 +40,7 @@ async function fixture(run) {
  const tick=async()=>{now+=1000;await timers[0]();};
  const scan=async()=>{assert.ok(timers[1],'capture scan exists');await timers.at(-1)();};
  let activeToken='recording';
- try {await run({peer,window,remote,tick,scan,captures,messages,async stop(){await control({type:'stop',token:activeToken})},async start(token='recording'){activeToken=token;await control({type:'start',token,origin:0,moduleURL,workletURL:''})}})}
+ try {await run({peer,window,remote,tick,scan,captures,messages,breakContext(){contextError=true},async stop(){await control({type:'stop',token:activeToken})},async start(token='recording',options={}){activeToken=token;await control({type:'start',token,origin:0,moduleURL,workletURL:'',...options})}})}
  finally {await control({type:'stop',token:activeToken});delete globalThis.__cassiniPageCapture;}
 }
 
@@ -115,4 +115,26 @@ test('a late old peer sender is not recorded by the new call',()=>fixture(async 
  f.window.location.href='https://meet.test/call-B';await f.tick();await f.scan();
  await f.stop();await f.start('B');
  assert.equal(f.captures.length,1,'old call sender cannot leak into B');
+}));
+
+test('discovery is acknowledged before an AudioContext attach failure and the failure is sent before Stop',()=>fixture(async f=>{
+ const remote=f.remote();await f.tick();remote.packets=10;await f.tick();f.breakContext();
+ await f.start('failed-source',{sourceOutcomes:true});await f.stop();
+ const updates=f.messages.filter(m=>m.type==='packet'&&m.packet.type==='sources');
+ assert.equal(updates.length,2);assert.equal(updates[0].packet.discoveredSources[0].failed,false);
+ assert.equal(updates[1].packet.discoveredSources[0].failed,true);
+ assert.equal(updates[0].packet.discoveredSources[0].sourceTrackId,updates[1].packet.discoveredSources[0].sourceTrackId);
+ assert.equal(f.captures.length,0,'no WAV/track was opened');
+ assert.ok(f.messages.indexOf(updates[1])<f.messages.findIndex(m=>m.type==='stopped'));
+ assert.equal(f.messages.find(m=>m.type==='stopped').discoveredSources,undefined,'Stop is not the only discovery carrier');
+}));
+
+test('257 discovered sources are announced without a diagnostic cap; only 64 WAV spans are opened',()=>fixture(async f=>{
+ const slots=Array.from({length:257},()=>f.remote());await f.tick();for(const slot of slots)slot.packets=10;
+ await f.tick();await f.start('many-sources',{sourceOutcomes:true});await f.stop();
+ const sources=new Map();for(const message of f.messages.filter(m=>m.type==='packet'&&m.packet.type==='sources'))
+  for(const source of message.packet.discoveredSources)sources.set(source.sourceTrackId,source);
+ assert.equal(sources.size,257);assert.equal(f.captures.length,64);
+ assert.equal([...sources.values()].filter(s=>s.failed).length,193);
+ assert.ok(f.messages.filter(m=>m.type==='packet'&&m.packet.type==='sources').every(m=>m.packet.discoveredSources.length===1));
 }));

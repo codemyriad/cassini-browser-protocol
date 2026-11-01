@@ -207,11 +207,11 @@
     if (message.type === "discover") { discover(true); return; }
     if (message.type === "ack" && active?.token === message.token) {
       const pending = active.pending.get(message.request);
-      if (pending) { clearTimeout(pending.timer); active.pending.delete(message.request); message.error ? pending.reject(new Error(message.error)) : pending.resolve(); }
+      if (pending) { clearTimeout(pending.timer); active.pending.delete(message.request); message.error ? pending.reject(Object.assign(new Error(message.error), {code: message.code, scope: message.scope})) : pending.resolve(); }
       return;
     }
     if (message.type === "start" && !active) {
-      const state = { token: message.token, callGeneration, sourceOutcomes: message.sourceOutcomes === true, pending: new Map(), tracks: new Map(), sources: new Map(), spanCount: 0, localMetadata: new Map(), next: 0, stopping: false, scanning: false };
+      const state = { token: message.token, callGeneration, sourceOutcomes: message.sourceOutcomes === true, pending: new Map(), sourceUpdates: new Set(), tracks: new Map(), sources: new Map(), spanCount: 0, localMetadata: new Map(), next: 0, stopping: false, scanning: false };
       active = state;
       const send = packet => new Promise((resolve, reject) => {
         refreshCall();
@@ -225,8 +225,21 @@
         emit(state.token, { type: "packet", request, packet });
       });
       const fail = message => emit(state.token, { type: "error", message });
-      const warn = () => emit(state.token, { type: "warning", ...(message.sourceOutcomes ? {
-        discoveredSources: [...state.sources.values()], failedSources: [...state.sources.values()].filter(s => s.failed).map(s => s.sourceTrackId) } : {}) });
+      const announce = record => {
+        if (!state.sourceOutcomes) return Promise.resolve();
+        const pending = send({type: "sources", discoveredSources: [{...record, label: [...record.label].slice(0, 200).join("")}]});
+        state.sourceUpdates.add(pending);
+        pending.then(() => state.sourceUpdates.delete(pending), () => state.sourceUpdates.delete(pending));
+        return pending;
+      };
+      const warn = () => emit(state.token, { type: "warning" });
+      const sourceFailed = record => {
+        if (!record.failed) {
+          record.failed = true;
+          void announce(record).catch(error => { if (error.code !== "callChanged") fail(error.message); });
+        }
+        warn();
+      };
       try {
         const { capture } = await import(message.moduleURL);
         if (state.stopping) return;
@@ -293,22 +306,24 @@
                 const encodings = metadata.sender.getParameters().encodings;
                 return !encodings?.length || encodings.some(e => e.active !== false);
               };
-              state.context ??= new AudioContext({ sampleRate: 48000 });
               const sourceTrackId = sourceKey(metadata.root || sourceRoot(track));
               const record = state.sources.get(sourceTrackId) || { sourceTrackId, kind: metadata.kind,
                 label: `${metadata.kind}: ${track.label || track.id}`, failed: false };
               state.sources.set(sourceTrackId, record);
               const nextSpanId = () => state.spanCount < 64 ? (state.spanCount++, crypto.randomUUID()) : null;
               try {
+              await announce(record); // Durable discovery precedes every possible attach failure.
+              if (state.stopping) break;
+              state.context ??= new AudioContext({ sampleRate: 48000 });
               const id = nextSpanId();
-              if (!id) { record.failed = true; warn(); continue; }
+              if (!id) { sourceFailed(record); continue; }
               const recorder = await capture({ stream: new MediaStream([track]), id, sourceTrackId,
                 reportOutcomes: message.sourceOutcomes === true, nextSpanId, live: () => track.readyState === "live",
                 label: `${metadata.kind}: ${track.label || track.id}`, kind: metadata.kind, enabled,
-                origin: message.origin, workletURL: message.workletURL, send, sharedContext: state.context, warn: () => { record.failed = true; warn(); },
-                fail: () => { record.failed = true; warn(); } });
+                origin: message.origin, workletURL: message.workletURL, send, sharedContext: state.context, warn: () => sourceFailed(record),
+                fail: () => sourceFailed(record) });
               state.tracks.set(track, recorder);
-              } catch { record.failed = true; warn(); }
+              } catch (error) { if (error.code !== "callChanged") sourceFailed(record); }
             }
           } catch (error) { fail(error.message); }
           finally { state.scanning = false; }
@@ -329,8 +344,9 @@
       const results = await Promise.allSettled([...state.tracks.values()].map(recorder => recorder.stop()));
       const error = results.find(result => result.status === "rejected");
       if (error) emit(state.token, { type: "error", message: error.reason.message });
+      await Promise.allSettled([...state.sourceUpdates]);
       await state.context?.close();
-      emit(state.token, { type: "stopped", ...(state.sourceOutcomes ? { discoveredSources: [...state.sources.values()] } : {}) });
+      emit(state.token, { type: "stopped" });
       active = null;
     }
   });
