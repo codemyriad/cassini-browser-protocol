@@ -187,7 +187,6 @@
               },
               "failedSources": {
                 "type": "array",
-                "maxItems": 256,
                 "uniqueItems": true,
                 "items": {
                   "type": "string",
@@ -224,7 +223,6 @@
         },
         "failedSources": {
           "type": "array",
-          "maxItems": 256,
           "uniqueItems": true,
           "items": {
             "type": "string",
@@ -369,7 +367,6 @@
         },
         "failedSources": {
           "type": "array",
-          "maxItems": 256,
           "uniqueItems": true,
           "items": {
             "type": "string",

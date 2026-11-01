@@ -106,3 +106,17 @@ test('a ninety-second suspension rotates the source before sending an oversized 
  assert.equal(new Set(packets.filter(p=>p.type==='track').map(p=>p.sourceTrackId)).size,1);
  assert.equal(recorder.droppedFrames,8192);await recorder.stop();
 }));
+
+test('intentional call fencing ends the span without retries or a false source failure',async()=>mocked(async({capture,nodes,Context})=>{
+ const time=clock(),packets=[],warnings=[],failures=[],context=new Context();let chunks=0;
+ const recorder=await capture({stream:{},id:'call-A',sourceTrackId:'receiver-A',reportOutcomes:true,label:'Guest',kind:'local',origin:100000,workletURL:'',sharedContext:context,
+  clock:time.now,schedule:time.schedule,cancel:time.cancel,warn:m=>warnings.push(m),fail:m=>failures.push(m),
+  send:async p=>{if(p.type==='audio'&&++chunks===2)throw Object.assign(new Error('Call changed'),{code:'callChanged'});packets.push(p)}});
+ nodes[0].port.onmessage({data:{pcm:new ArrayBuffer(8192*2),frame:0}});await tick();
+ nodes[0].port.onmessage({data:{pcm:new ArrayBuffer(8192*2),frame:8192}});await tick();
+ assert.equal(time.timers.size,0,'old call must never retry in the new call');
+ assert.deepEqual(warnings,[]);assert.deepEqual(failures,[]);
+ await recorder.stop('callChanged');
+ const ended=packets.find(p=>p.type==='trackEnd');assert.equal(ended.reason,'callChanged');
+ assert.equal(packets.filter(p=>p.type==='audio').length,1);assert.ok(ended.endOffsetMs>0);
+}));

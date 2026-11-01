@@ -171,10 +171,10 @@
         },
         "discoveredSources": {
           "type": "array",
-          "maxItems": 256,
           "items": {
             "$ref": "#/$defs/discoveredSource"
-          }
+          },
+          "$comment": "The framed JSON size limit bounds diagnostics; the separate 64-track limit bounds audio allocation."
         }
       },
       "additionalProperties": true

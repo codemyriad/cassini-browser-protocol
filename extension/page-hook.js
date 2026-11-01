@@ -216,7 +216,8 @@
       const send = packet => new Promise((resolve, reject) => {
         refreshCall();
         if (state.callGeneration !== callGeneration && packet.type !== "trackEnd") {
-          discover(true); reject(new Error("This audio belongs to a different call.")); return;
+          const error = Object.assign(new Error("This audio belongs to a different call."), { code: "callChanged" });
+          discover(true); reject(error); return;
         }
         const request = ++state.next;
         const timer = setTimeout(() => { state.pending.delete(request); reject(new Error("Cassini did not confirm receiving audio.")); }, 10000);

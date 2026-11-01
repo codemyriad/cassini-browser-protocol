@@ -226,7 +226,6 @@
       "properties": {
         "sources": {
           "type": "array",
-          "maxItems": 256,
           "items": {
             "type": "object",
             "required": [

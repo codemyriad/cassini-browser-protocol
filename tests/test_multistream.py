@@ -157,6 +157,20 @@ class MultistreamTests(unittest.TestCase):
             metadata['tracks'][0]['sourceTrackId'] = None
             wire.VALIDATORS['session'].validate(metadata)
 
+    def test_diagnostic_sources_can_exceed_the_audio_track_limit(self):
+        # No extra WAVs are allocated: the ledger includes sources refused
+        # before track admission. The native framing limit still bounds JSON.
+        sources = [dict(sourceTrackId=f'missing-{n}', kind='remote', failed=True) for n in range(257)]
+        request = dict(type='stop', captureId='capture-current', discoveredSources=sources)
+        wire.Draft202012Validator(json.loads((ROOT / 'schemas/request.schema.json').read_text())).validate(request)
+        with host() as (send, folder, _):
+            self.assertEqual(send(request)['type'], 'stopped')
+            metadata = json.loads((folder / 'session.json').read_text())
+            wire.VALIDATORS['session'].validate(metadata)
+            self.assertEqual(len(metadata['tracks']), 0)
+            self.assertEqual(len(metadata['captureOutcome']['sources']), 257)
+            self.assertTrue(all(s['captureOutcome'] == 'failed' for s in metadata['captureOutcome']['sources']))
+
 
 if __name__ == '__main__':
     unittest.main()

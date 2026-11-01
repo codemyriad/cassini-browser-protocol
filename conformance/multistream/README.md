@@ -22,11 +22,15 @@ corrected; browser and system sources never own the same interval. Fixture-only
 bleed follows the actual remote waveform at both single-voice and overlapping
 turns. The latter check independently subtracts the pinned A carrier.
 
-Pending before this PR is ready: remaining
-production-shaped shared assertions and a real-browser pass; final generation/
-receiver-reuse audit; strict host/schema edge cases; R63 cutoff/shape review.
-The local Chromium attempt produced zero ICE candidates before capture started,
-so it is not recorded as a browser acceptance pass. Hosted Chromium connects,
-but the receiver tone-switch assertion is currently red; its PCM evidence is
-retained for diagnosis rather than relaxing the spectral thresholds. No desktop pin changes and
-no extension packaging or store upload are part of this draft.
+Desktop adoption runs the literal policy and seam cases through each app's own
+policy, mixing and transcript adapters; the independent Python oracle is never
+production code. Full native framing/host-edge and generated-peer tests run in CI.
+`tests/call-generation.mjs` additionally proves a real in-page A/B/C switch with
+A closing late and B's unchanged receiver reused for C. Intentional retirement
+has no false source failure. Pre-join tests open no remote track until RTP flows.
+
+Real-browser tests need a usable route for ICE even though all peers and HTTP
+fixtures are local. A private Docker bridge with a route works; `--network=none`
+or an internal bridge without a route may yield zero ICE candidates. Keep audio,
+display, home and D-Bus isolated. No live product account, user media, desktop pin,
+extension packaging or store upload is involved.

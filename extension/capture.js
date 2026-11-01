@@ -141,8 +141,8 @@ async function captureOnce({ stream, id, label, kind, origin, workletURL, send, 
         while (inFlight.size) await Promise.allSettled([...inFlight]);
         context.removeEventListener?.("statechange", stateChanged);
         if (!sharedContext) await context.close();
-        await end(failure ? "failed" : reason);
-        if (failure) throw failure;
+        await end(failure?.code === "callChanged" ? "callChanged" : failure ? "failed" : reason);
+        if (failure && failure.code !== "callChanged") throw failure;
       }
     };
   } catch (error) {
@@ -151,7 +151,7 @@ async function captureOnce({ stream, id, label, kind, origin, workletURL, send, 
     if (remotePlayback) { remotePlayback.pause(); remotePlayback.srcObject = null; }
     context.removeEventListener?.("statechange", stateChanged);
     if (!sharedContext) await context.close();
-    await end("failed").catch(() => {});
+    await end(error?.code === "callChanged" ? "callChanged" : "failed").catch(() => {});
     throw error;
   }
 }
@@ -173,7 +173,7 @@ export function reconcile(state, attempts, lastHealthyAt, now) {
 
 export async function capture(options) {
   let current = null, ending = false, terminal = null, retryTimer = null, retries = 0;
-  let recovering = false, retiredDrops = 0, healthySince = null;
+  let recovering = false, retiring = false, retiredDrops = 0, healthySince = null;
   let restarting = Promise.resolve();
   const warn = options.warn || (() => {});
   const now = options.clock || (() => performance.now());
@@ -189,8 +189,15 @@ export async function capture(options) {
     options.onAudio?.();
   };
   const schedule = value => {
-    if (ending || terminal || retryTimer !== null) return;
+    if (ending || retiring || terminal || retryTimer !== null) return;
     const error = value instanceof Error ? value : new Error(String(value));
+    if (error.code === "callChanged") {
+      // The old token is deliberately fenced; retrying would cross calls.
+      retiring = true;
+      if (retryTimer !== null) cancel(retryTimer);
+      retryTimer = null;
+      return;
+    }
     const at = now();
     if (reconcile({ live: live(), failedAt: at }, retries, healthySince, at) === "giveUpAndReport") {
       terminal = error; options.fail?.(error.message); return;
@@ -223,7 +230,7 @@ export async function capture(options) {
   catch (error) { schedule(error); }
   return {
     get failed() { return !!terminal; },
-    get state() { return ending ? "stopped" : terminal ? "failed" : recovering ? "retrying" : "recording"; },
+    get state() { return ending || retiring ? "stopped" : terminal ? "failed" : recovering ? "retrying" : "recording"; },
     get droppedFrames() { return retiredDrops + (current?.droppedFrames || 0); },
     async stop(reason = "stopped") {
       if (ending) return;

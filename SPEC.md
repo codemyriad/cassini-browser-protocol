@@ -313,6 +313,10 @@ neverAudio for zero received frames, lowAudio below 1000 ms, captured otherwise,
 and failed for a sticky source error. R63 requests coordinator review of that
 cutoff/shape. Per-track captureOutcome/receivedFrames and the top-level
 captureOutcome.sources reconcile the result; io takes precedence over capture.
+Diagnostic source lists include refused/never-opened sources and are not capped
+at the 64 audio-track allocation limit. Their serialized requests remain bounded
+by the existing native-message framing limit; identities/labels retain their
+per-field bounds. No diagnostic entry allocates a WAV.
 
 Source ownership is half-open at each othersSource.atMs. Outgoing source audio
 is masked at the boundary before recognition, mixing and export. This is not a
