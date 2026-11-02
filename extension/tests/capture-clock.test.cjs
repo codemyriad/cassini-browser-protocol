@@ -7,7 +7,7 @@ const source = fs.readFileSync(path.join(__dirname, '../capture.js'), 'utf8');
 // D61: Date.now() is the wall clock the session origin comes from; performance.now()
 // is the document's monotonic clock. timeOrigin is deliberately unrelated to both,
 // so a calibration that reads it moves every offset.
-async function exercise(timestamp, { timeOrigin = 100000, currentTime = 0, clockFrame = 4800, frames = [0, 2048], spans = 1, retries = [] } = {}) {
+async function exercise(timestamp, { timeOrigin = 100000, currentTime = 0, clockFrame = 4800, frames = [0, 2048], spans = 1, retries = [], outputLatency, baseLatency } = {}) {
   const originals = new Map(['AudioContext', 'AudioWorkletNode', 'performance'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   const wall = Date.now;
   let now = 100;
@@ -19,6 +19,8 @@ async function exercise(timestamp, { timeOrigin = 100000, currentTime = 0, clock
   class Context {
     sampleRate = 48000;
     currentTime = currentTime;
+    outputLatency = outputLatency;
+    baseLatency = baseLatency;
     state = 'running';
     destination = new GraphNode();
     audioWorklet = { addModule: async () => {} };
@@ -94,6 +96,31 @@ test('without a positive output timestamp the worklet round trip calibrates with
     const stamped = await exercise({ contextTime: 0.02, performanceTime: 880 });
     assert.ok(tracks[0].clockUncertaintyMs > stamped.tracks[0].clockUncertaintyMs, 'the round trip adds its measured half');
   }
+});
+
+test('both methods place a render frame at the instant it reaches the output, within their bounds', async () => {
+  // One device: frame 4800 is rendered at 105 ms and reaches the output 40 ms later,
+  // which is what getOutputTimestamp reports; the callback moves 20 ms of frames at once.
+  const device = { currentTime: 0.1, frames: [4800, 6848], outputLatency: 0.04, baseLatency: 0.02 };
+  const stamped = await exercise({ contextTime: 0.1, performanceTime: 145 }, device), trip = await exercise(undefined, device);
+  close(stamped.audio[0].offsetMs, 45, 'output timestamp start');
+  close(trip.audio[0].offsetMs, 45, 'round trip start, moved by outputLatency');
+  // ceil(map 1 + the 20 ms callback in place of one quantum + half the 10 ms round trip).
+  assert.deepEqual(clockFields(trip.tracks[0]), { clockMethod: 'roundTrip', clockUncertaintyMs: 26, clockClampMs: undefined });
+  assert.ok(Math.abs(stamped.audio[0].offsetMs - trip.audio[0].offsetMs) <= stamped.tracks[0].clockUncertaintyMs + trip.tracks[0].clockUncertaintyMs);
+});
+
+test('a start raised to the origin is never a rounding hair below it', async () => {
+  // These exact values make first -464 ms, and (offset + 464) + start == -2.8e-14 ms.
+  const { audio, tracks } = await exercise({ contextTime: 171.723, performanceTime: 171106.75 }, { currentTime: 12108 / 48000, frames: [12108, 14156] });
+  assert.equal(tracks[0].clockClampMs, 464);
+  assert.equal(audio[0].offsetMs, 0);
+  close(audio[1].offsetMs - audio[0].offsetMs, 2048 / 48, 'spacing stays exact');
+});
+
+test('a start more than a day before the origin is a fault, not a clamp', async () => {
+  const { tracks } = await exercise({ contextTime: 90000, performanceTime: 1 }, { frames: [], retries: ['Audio timing fell before the recording start.'] });
+  assert.deepEqual(tracks, [], 'no track is declared with a clamp past the schema maximum');
 });
 
 test('a chunk timed before the origin aborts its span visibly instead of clamping', async () => {

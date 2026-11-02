@@ -67,7 +67,7 @@ class SchemaTests(unittest.TestCase):
                       dict(track, documentGeneration='x' * 200), dict(track, clockMethod=None, clockUncertaintyMs=None, clockClampMs=None, documentGeneration=None)]:
             request.validate(value)
         for key, value in [('clockMethod', 'unknown'), ('clockMethod', 'sampleClock'), ('clockUncertaintyMs', -1), ('clockUncertaintyMs', 1.5),
-                           ('clockUncertaintyMs', 86400001), ('clockClampMs', 0), ('documentGeneration', ''), ('documentGeneration', 'x' * 201)]:
+                           ('clockUncertaintyMs', 86400001), ('clockClampMs', 0), ('clockClampMs', 86400001), ('documentGeneration', ''), ('documentGeneration', 'x' * 201)]:
             with self.subTest(key=key, value=value):
                 self.assertFalse(request.is_valid(dict(track, **{key: value})))
         fixture = json.loads((ROOT / 'conformance/examples/session.json').read_text())

@@ -42,29 +42,38 @@ function resumeSuspended(context) {
 // D61: the session origin is a wall-clock Date.now(). Map it onto this document's
 // performance.now() once, so every later time is performance.now(),
 // performanceTime or render frames: never performance.timeOrigin, which each
-// document fixes on its own. The uncertainty is a measured bound on the span's
-// start against the origin; it excludes input latency the browser never reports.
+// document fixes on its own. Both methods place a render frame at the instant it
+// reaches the output, as getOutputTimestamp does. The uncertainty is the part of the
+// span's start error the extension measures; the browser's own latency estimates
+// and input latency it never reports are outside it.
+const latencyMs = value => Number.isFinite(value) && value > 0 ? value * 1000 : 0;
 async function measure(context, node, origin, wait) {
   const a = Date.now(), p = performance.now(), b = Date.now();
-  const originNow = p - ((a + b) / 2 - origin), rate = context.sampleRate;
-  let clockMethod = "outputTimestamp", clockOffset, uncertainty = b - a + 1 + 128 / rate * 1000;
+  const originNow = p - ((a + b) / 2 - origin), rate = context.sampleRate, quantum = 128 / rate * 1000;
+  let clockMethod = "outputTimestamp", clockOffset, uncertainty = b - a + 1 + quantum;
   const stamp = context.getOutputTimestamp?.();
   if (stamp?.contextTime > 0 && stamp?.performanceTime > 0) clockOffset = stamp.performanceTime - originNow - stamp.contextTime * 1000;
   else {
-    // The worklet reads its render frame between t0 and t1, so half the round trip bounds it.
+    // The worklet reads its render frame between t0 and t1, so half the round trip bounds
+    // when; the frame moves once per device callback (baseLatency), and reaches the
+    // output outputLatency after it is rendered.
     clockMethod = "roundTrip";
     const t0 = performance.now();
     const { frame, t1 } = await wait(new Promise(resolve => {
       node.port.onmessage = ({ data }) => { if (Number.isFinite(data?.clockFrame)) resolve({ frame: data.clockFrame, t1: performance.now() }); };
       node.port.postMessage("clock");
     }), "Audio render clock did not answer.");
-    clockOffset = (t0 + t1) / 2 - originNow - frame / rate * 1000;
-    uncertainty += (t1 - t0) / 2;
+    clockOffset = (t0 + t1) / 2 + latencyMs(context.outputLatency) - originNow - frame / rate * 1000;
+    uncertainty += (t1 - t0) / 2 + Math.max(0, latencyMs(context.baseLatency) - quantum);
   }
   // No PCM precedes currentTime. A negative start moves the whole span once, keeps
-  // its spacing exact and is recorded; it proves an error at least that large.
-  const first = clockOffset + (context.currentTime || 0) * 1000, clockClampMs = first < 0 ? Math.ceil(-first) : 0;
-  return { clockOffset: clockOffset + clockClampMs, clockMethod,
+  // its spacing exact and is recorded; it proves an error at least that large. One a
+  // day early is a fault, not a clamp. Chunks add the same start, so rounding cannot
+  // leave the raised first chunk a hair below zero.
+  const start = (context.currentTime || 0) * 1000, first = clockOffset + start, clockClampMs = first < 0 ? Math.ceil(-first) : 0;
+  if (clockClampMs > 86400000) throw new Error("Audio timing fell before the recording start.");
+  const raised = clockOffset + clockClampMs + start < 0 ? -start : clockOffset + clockClampMs;
+  return { clockOffset: raised, clockMethod,
     clockUncertaintyMs: Math.min(86400000, Math.max(Math.ceil(uncertainty), clockClampMs)), ...(clockClampMs ? { clockClampMs } : {}) };
 }
 function calibrate(context, node, origin, wait) {

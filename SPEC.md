@@ -112,7 +112,9 @@ once, by reading Date.now() on both sides of one performance.now(), and never us
 performance.timeOrigin, which each document fixes on its own. The render clock is then placed on
 that base with getOutputTimestamp (`outputTimestamp`), or, when no positive stamp exists, with a
 worklet round trip that reads the render frame between two performance.now() readings
-(`roundTrip`). Calibration happens before the track is declared. Later offsets come only from
+(`roundTrip`). Both place a render frame at the instant the browser says it reaches the output
+device, so roundTrip adds the context's outputLatency to the time it read the frame. Calibration
+happens before the track is declared. Later offsets come only from
 render frames. Different frames/devices remain approximately aligned, not sample-accurate
 conference clocks. Local sender mute/suspension produces silence.
 
@@ -121,13 +123,16 @@ one AudioContext repeat the same values. Native tracks omit them.
 
 - `clockMethod`: "outputTimestamp" or "roundTrip". Readers treat absent, null or any other
   value as unknown. Writers never send another value.
-- `clockUncertaintyMs`: an integer from 0 to 86400000. It is the largest error in the span's
-  start against the session origin that the extension measured, rounded up: the mapping read
-  plus one render quantum, plus half the round trip for roundTrip. It does not include input
-  latency the browser does not report.
-- `clockClampMs`: an integer of at least 1, present only when the calibrated start fell before
-  the origin. The extension then moves the whole span later by that many milliseconds, once, so
-  chunk spacing stays exact, and clockUncertaintyMs is at least clockClampMs. Offsets are never
+- `clockUncertaintyMs`: an integer from 0 to 86400000. It is the part of the error in the
+  span's start against the session origin that the extension measures, rounded up: the mapping
+  read plus one render quantum, and for roundTrip half the round trip, with one device callback
+  (baseLatency) in place of the quantum when that is longer. It is not a bound on what the
+  extension cannot measure: the accuracy of the browser's output timestamp and latency
+  estimates, and input latency the browser does not report.
+- `clockClampMs`: an integer from 1 to 86400000, present only when the calibrated start fell
+  before the origin. The extension then moves the whole span later by that many milliseconds,
+  once, so chunk spacing stays exact, and clockUncertaintyMs is at least clockClampMs. A start
+  more than 86400000 ms early is a fault: the span fails and is retried. Offsets are never
   clamped chunk by chunk; a chunk that would still be negative aborts its span.
 
 Hosts copy the three facts into the browser track entry of session.json as received, and omit

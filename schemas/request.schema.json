@@ -111,7 +111,7 @@
           ],
           "minimum": 0,
           "maximum": 86400000,
-          "$comment": "Since extension 0.2.12 (D61), record-only: the largest error in this span's start against the session origin that the extension measured, rounded up. It excludes input latency the browser does not report. At least clockClampMs when that is present."
+          "$comment": "Since extension 0.2.12 (D61), record-only: the part of the error in this span's start against the session origin that the extension measures, rounded up. Not a bound on the browser's own output timestamp and latency estimates or on input latency it does not report. At least clockClampMs when that is present."
         },
         "clockClampMs": {
           "type": [
