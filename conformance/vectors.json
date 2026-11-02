@@ -2191,6 +2191,9 @@
     "tracks": {
       "x": {
         "kind": "remote",
+        "clockMethod": "roundTrip",
+        "clockUncertaintyMs": 9,
+        "clockClampMs": 3,
         "documentGeneration": null
       }
     }

@@ -80,6 +80,9 @@ class SchemaTests(unittest.TestCase):
         self.assertLessEqual({'clockMethod', 'clockUncertaintyMs', 'clockClampMs', 'documentGeneration'}, set(declared))
         self.assertEqual(case['expect'][1], {'type': 'ack'})
         self.assertIsNone(case['tracks']['x']['documentGeneration'], 'documentGeneration is never written to session.json')
+        # Review of D61: hosts copy the three clock facts into session.json as received.
+        self.assertEqual({key: case['tracks']['x'].get(key) for key in ('clockMethod', 'clockUncertaintyMs', 'clockClampMs')},
+                         {key: declared[key] for key in ('clockMethod', 'clockUncertaintyMs', 'clockClampMs')})
 
     def test_shared_extension_is_platform_neutral(self):
         for path in (ROOT/'extension').rglob('*'):
