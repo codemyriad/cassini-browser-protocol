@@ -23,6 +23,10 @@ function setPageState(tabId, value) {
   }
   notifyControl();
 }
+// D58 (R79): an ok:false result may carry an open `code` classifying the
+// refusal (SPEC-CONTROL "Result codes"). It travels as `resultCode`, never as
+// `code`, which already holds the closed audio-plane code of a native error.
+const refused = (message, resultCode) => Object.assign(new Error(message), { resultCode });
 const sessions = new Map();
 const pendingStarts = new Map();
 const callGenerations = new Map();
@@ -275,25 +279,25 @@ async function stop(session = firstSession(), reason = "user") {
 async function start(mode, tabId = null, options = {}) {
   await recovery;
   if (options.resumeIntent?.cancelled) throw new Error("Recording could not start.");
-  if ((!options.independent && (sessions.size || pendingStarts.size)) || sessions.has(tabId) || pendingStarts.has(tabId)) throw new Error("A recording is already running. Stop it before starting another.");
-  if (!["tracks", "tab"].includes(mode)) throw new Error("Unknown recording mode.");
+  if ((!options.independent && (sessions.size || pendingStarts.size)) || sessions.has(tabId) || pendingStarts.has(tabId)) throw refused("A recording is already running. Stop it before starting another.", "busy");
+  if (!["tracks", "tab"].includes(mode)) throw refused("Unknown recording mode.", "invalid");
   const request = { cancelled: false, resumeCapture: options.resumeCapture };
   const key = tabId ?? Symbol();
-  if (sessions.size + pendingStarts.size >= 100) throw new Error("Cassini has received too many commands. Reconnect and try again.");
+  if (sessions.size + pendingStarts.size >= 100) throw refused("Cassini has received too many commands. Reconnect and try again.", "limit");
   pendingStarts.set(key, request);
   try {
     let tab;
     if (tabId !== null) {
-      if (!Number.isSafeInteger(tabId) || tabId < 0) throw new Error("Choose a meeting to record.");
+      if (!Number.isSafeInteger(tabId) || tabId < 0) throw refused("Choose a meeting to record.", "invalid");
       try { tab = await chrome.tabs.get(tabId); }
-      catch { throw new Error("That meeting is no longer available."); }
+      catch { throw refused("That meeting is no longer available.", "gone"); }
     } else [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (request.cancelled || options.resumeIntent?.cancelled) throw new Error("Recording could not start.");
-    if (!Number.isSafeInteger(tab?.id) || tab.id < 0 || !/^https?:/.test(tab.url || "")) throw new Error("Open the meeting tab first. Recording works on web pages only.");
-    if (sessions.has(tab.id)) throw new Error("A recording is already running. Stop it before starting another.");
+    if (!Number.isSafeInteger(tab?.id) || tab.id < 0 || !/^https?:/.test(tab.url || "")) throw refused("Open the meeting tab first. Recording works on web pages only.", "notWebPage");
+    if (sessions.has(tab.id)) throw refused("A recording is already running. Stop it before starting another.", "busy");
     const identity = callInfo(tab.id);
     if (options.expectedCallGeneration !== undefined && options.expectedCallGeneration !== identity.generation)
-      throw new Error("That call is no longer active.");
+      throw refused("That call is no longer active.", "gone");
     identity.url = callAddress(tab.url);
     const target = options.resumeCapture;
     const session = { callGeneration: identity.generation, mode, tabId: tab.id, independent: options.independent === true, captureLocal: options.captureLocal !== false, keepOnNavigation: options.keepOnNavigation === true, token: target?.captureId ?? crypto.randomUUID(), origin: target?.timelineOriginMs ?? Date.now(), resumeTarget: target,
@@ -303,7 +307,7 @@ async function start(mode, tabId = null, options = {}) {
     const checkStarting = () => {
       if (session.stopping || sessions.get(session.tabId) !== session) throw new Error("Recording could not start.");
       if (options.expectedCallGeneration !== undefined && callInfo(session.tabId).generation !== session.callGeneration)
-        throw new Error("That call is no longer active.");
+        throw refused("That call is no longer active.", "gone");
     };
     session.starting = (async () => {
       let streamId;
@@ -313,7 +317,7 @@ async function start(mode, tabId = null, options = {}) {
         while (!session.stopping && ![...frames].some(frame => frame.tabId === tab.id) && Date.now() < deadline) {
           await new Promise(resolve => setTimeout(resolve, 50));
         }
-        if (![...frames].some(frame => frame.tabId === tab.id)) throw new Error("Cassini cannot reach this page yet. Reload the meeting tab, then try again.");
+        if (![...frames].some(frame => frame.tabId === tab.id)) throw refused("Cassini cannot reach this page yet. Reload the meeting tab, then try again.", "pageUnreachable");
       } else {
         streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
       }
@@ -336,7 +340,7 @@ async function start(mode, tabId = null, options = {}) {
             result.resumed !== true || result.captureId !== session.token ||
             result.timelineOriginMs !== session.origin || result.callGeneration !== session.callGeneration ||
             !Array.isArray(result.features) || !result.features.includes("resume-capture-v1"))
-          throw new Error("That recording could not be resumed.");
+          throw refused("That recording could not be resumed.", "resumeRefused");
         session.resumed = true;
       }
       session.path = result.path;
@@ -641,16 +645,16 @@ async function controlCommand(command, intent = {}) {
   await recovery;
   if (intent.cancelled) throw new Error("Recording could not start.");
   if (command.action === "start") {
-    if (!command.independent && (sessions.size || pendingStarts.size)) throw new Error("A recording is already running. Stop it before starting another.");
+    if (!command.independent && (sessions.size || pendingStarts.size)) throw refused("A recording is already running. Stop it before starting another.", "busy");
     if (![...frames].some(frame => frame.tabId === command.tabId && frame.sourceCount > 0))
-      throw new Error("No audio is available from that meeting yet.");
+      throw refused("No audio is available from that meeting yet.", "noSources");
     await start("tracks", command.tabId, { independent: command.independent === true,
       captureLocal: command.captureLocal, microphone: command.microphone, keepOnNavigation: command.keepOnNavigation, expectedCallGeneration: command.callGeneration, resumeCapture: command.resumeCapture, resumeIntent: intent });
   } else {
-    if (!command.independent && firstSession() && firstSession().tabId !== command.tabId) throw new Error("A recording is already running. Stop it before starting another.");
+    if (!command.independent && firstSession() && firstSession().tabId !== command.tabId) throw refused("A recording is already running. Stop it before starting another.", "busy");
     const session = sessions.get(command.tabId);
     if (command.captureId !== undefined && session?.token !== command.captureId && !(intent.cancelledResume && !session))
-      throw new Error("That recording is no longer active.");
+      throw refused("That recording is no longer active.", "gone");
     if (session) await stop(session, command.reason);
     else if (pendingStarts.has(command.tabId)) pendingStarts.get(command.tabId).cancelled = true;
   }

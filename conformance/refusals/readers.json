@@ -1,0 +1,174 @@
+{
+ "version": 1,
+ "readers": [
+  {
+   "name": "unknown-code-uses-sources-failed",
+   "stored": [
+    {
+     "atMs": 0,
+     "side": "browser",
+     "code": "quotaExceeded"
+    }
+   ],
+   "expectedLines": [
+    {
+     "id": "details.sources.failed",
+     "source": "details.source.browser"
+    }
+   ]
+  },
+  {
+   "name": "unknown-side-is-not-shown",
+   "stored": [
+    {
+     "atMs": 0,
+     "side": "camera",
+     "code": "deviceUnavailable"
+    }
+   ],
+   "expectedLines": [
+    {
+     "id": "details.sources.empty"
+    }
+   ]
+  },
+  {
+   "name": "refusal-replaces-not-selected-and-empty",
+   "stored": [
+    {
+     "atMs": 45000,
+     "side": "others",
+     "code": "deviceUnavailable"
+    }
+   ],
+   "sources": [],
+   "notSelected": [
+    "others"
+   ],
+   "expectedLines": [
+    {
+     "id": "details.sources.refused.deviceUnavailable",
+     "source": "details.source.system"
+    }
+   ]
+  },
+  {
+   "name": "unknown-detail-is-ignored",
+   "stored": [
+    {
+     "atMs": 0,
+     "side": "browser",
+     "code": "startRejected",
+     "detail": "quotaExceeded",
+     "message": "Quota reached."
+    }
+   ],
+   "expectedLines": [
+    {
+     "id": "details.sources.refused.startRejected",
+     "source": "details.source.browser"
+    }
+   ]
+  },
+  {
+   "name": "each-known-code-has-its-line",
+   "stored": [
+    {
+     "atMs": 0,
+     "side": "me",
+     "code": "permissionDenied"
+    },
+    {
+     "atMs": 0,
+     "side": "browser",
+     "code": "startRejected"
+    },
+    {
+     "atMs": 1500.5,
+     "side": "others",
+     "code": "deviceUnavailable",
+     "futureMember": true
+    }
+   ],
+   "notSelected": [
+    "me"
+   ],
+   "expectedLines": [
+    {
+     "id": "details.sources.refused.permissionDenied",
+     "source": "details.source.microphone"
+    },
+    {
+     "id": "details.sources.refused.startRejected",
+     "source": "details.source.browser"
+    },
+    {
+     "id": "details.sources.refused.deviceUnavailable",
+     "source": "details.source.system"
+    }
+   ]
+  },
+  {
+   "name": "not-selected-stays-for-a-side-without-a-refusal",
+   "stored": [
+    {
+     "atMs": 0,
+     "side": "me",
+     "code": "deviceUnavailable"
+    }
+   ],
+   "notSelected": [
+    "others"
+   ],
+   "expectedLines": [
+    {
+     "id": "details.sources.refused.deviceUnavailable",
+     "source": "details.source.microphone"
+    },
+    {
+     "id": "details.sources.notSelected",
+     "source": "details.source.system"
+    }
+   ]
+  },
+  {
+   "name": "a-non-list-member-is-ignored",
+   "stored": {
+    "atMs": 0,
+    "side": "me",
+    "code": "deviceUnavailable"
+   },
+   "expectedLines": [
+    {
+     "id": "details.sources.empty"
+    }
+   ]
+  },
+  {
+   "name": "a-bad-entry-is-skipped",
+   "stored": [
+    7,
+    {
+     "atMs": 0,
+     "side": "me"
+    },
+    {
+     "atMs": 0,
+     "side": 3,
+     "code": "deviceUnavailable"
+    },
+    {
+     "atMs": 0,
+     "side": "others",
+     "code": "deviceUnavailable"
+    }
+   ],
+   "expectedLines": [
+    {
+     "id": "details.sources.refused.deviceUnavailable",
+     "source": "details.source.system"
+    }
+   ]
+  }
+ ]
+}
