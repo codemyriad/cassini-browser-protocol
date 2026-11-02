@@ -235,6 +235,9 @@ test('source connects only after render readiness and PCM arms only after the na
 for(const recover of [false,true])test(`a timed-out source stays visible through relay/status/retries (${recover?'recovered':'still failing'}) while healthy audio continues`,async()=>mocked(async({capture,nodes,contexts,renderers,Context})=>{
  const vm=require('node:vm'),{setup,until,event}=require('./support/app-control-harness.cjs');
  const pageFixture=require('./support/page-capture-harness.cjs'),time=clock();
+ // The background takes the session origin from the real wall clock: put the page's
+ // Date.now() on it, as one browser does, so calibration sees no day-sized skew.
+ const skew=new Date().getTime()-Date.now(),paged=Date.now;Date.now=()=>paged()+skew;
  const app=await setup(2,{},['source-outcomes-v1']);
  const frame=app.pages[0],endpoint={onMessage:event(),onDisconnect:event(),postMessage:packet=>frame.onMessage.emit(packet)};
  frame.postMessage=packet=>{frame.sent.push(packet);endpoint.onMessage.emit(packet)};
