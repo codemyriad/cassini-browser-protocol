@@ -48,9 +48,10 @@ function callInfo(tabId) {
   }
   return callGenerations.get(tabId);
 }
-function documentFor(tabId) {
-  return [...frames].find(f => f.tabId === tabId && !f.obsolete && f.frameId === 0)?.documentGeneration;
-}
+const mainFrame = tabId => [...frames].find(f => f.tabId === tabId && !f.obsolete && f.frameId === 0);
+function documentFor(tabId) { return mainFrame(tabId)?.documentGeneration; }
+// A documentGeneration is 1 to 200 UTF-8 bytes wherever it is read, so status and track agree.
+const validDocument = value => typeof value === "string" && value.length > 0 && new TextEncoder().encode(value).length <= 200;
 async function addressFingerprint(url) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(callAddress(url)));
   return [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, "0")).join("");
@@ -407,21 +408,15 @@ async function start(mode, tabId = null, options = {}) {
 
 // D61: a span's documentGeneration is the browser's record of the frame that
 // sent it, never the page's: one in the packet is replaced, or dropped when the
-// span has no known document (whole-tab spans have none).
-const utf8Length = value => new TextEncoder().encode(value).length;
-// A main frame's own generation; a subframe's main document as read at its discovery,
-// or now if it discovered before the main frame reported one (it is not obsolete, so
-// it still belongs to the current main document).
-function spanDocument(frame) {
-  if (frame.frameId === 0) return frame.documentGeneration;
-  if (frame.mainDocument === undefined && !frame.obsolete) frame.mainDocument = documentFor(frame.tabId);
-  return frame.mainDocument;
-}
+// span has no known document (whole-tab spans have none). A main frame's span
+// gets its own generation; a subframe's gets the generation of the main frame it
+// was first discovered under, never a later one's, so a departing subframe's late
+// span cannot name the next document.
+const spanDocument = frame => frame.frameId === 0 ? frame.documentGeneration : frame.mainFrame?.documentGeneration;
 function stampDocument(packet, documentGeneration) {
   if (packet?.type !== "track") return packet;
   const { documentGeneration: _ignored, ...track } = packet;
-  return typeof documentGeneration === "string" && documentGeneration.length > 0 && utf8Length(documentGeneration) <= 200
-    ? { ...track, documentGeneration } : track;
+  return validDocument(documentGeneration) ? { ...track, documentGeneration } : track;
 }
 
 // One admission path for page frames and whole-tab offscreen capture. A retired
@@ -491,9 +486,9 @@ chrome.runtime.onConnect.addListener(port => {
     if (message.type === "discovery") {
       if (frame.obsolete || pageState(frame.tabId) === "closed") return;
       // A subframe's spans belong to the main document it appeared under (D61).
-      if (frame.frameId !== 0) frame.mainDocument = documentFor(frame.tabId) ?? frame.mainDocument;
+      if (frame.frameId !== 0) frame.mainFrame ??= mainFrame(frame.tabId);
       const document = message.documentGeneration, generation = message.callGeneration;
-      if (typeof document === "string" && document.length > 0 && document.length <= 200 &&
+      if (validDocument(document) &&
           typeof generation === "string" && generation.length > 0 && generation.length <= 200) {
         const info = callInfo(frame.tabId);
         if (frame.frameId === 0 && !frame.identitySeeded) {

@@ -137,9 +137,10 @@ Since extension 0.2.12 a `track` may also carry `documentGeneration`: the opaque
 the document the span came from, 1 to 200 UTF-8 bytes, the same value status reports
 (SPEC-CONTROL.md) and compared only for equality. The extension's background writes it from
 the frame that sent the span and replaces any value the page sent. A main frame's span gets
-that frame's generation; a subframe's span gets the main frame's generation from when the
-subframe sent its discovery, if that main frame was not obsolete (or, when none was known then,
-from the span's declaration while the subframe is still current). It is absent for whole-tab
+that frame's generation; a subframe's span gets the generation of the main frame it was first
+discovered under (the first one not obsolete at one of its discoveries), never a later main
+frame's, so a departing subframe's late span cannot name the next document. A generation counts
+UTF-8 bytes wherever the extension reads it, so status and `track` agree. It is absent for whole-tab
 spans, when unknown, and from older extensions. It is a live liveness hint (see Audio transport
 liveness) and is never written to session.json. sourceTrackId stays opaque.
 

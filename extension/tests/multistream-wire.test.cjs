@@ -413,3 +413,51 @@ test('the background stamps each span with its frame\'s main document and replac
   await tab.api.stop();
  }finally{tab.close()}
 });
+
+test('a departing subframe keeps naming the main document it was discovered under after the next one reports',async()=>{
+ // Review of D61: a subframe's late span must never name the next main document,
+ // whether it first discovered before or after its main frame reported.
+ for(const early of [false,true]){
+  const app=await setup(3,{},['source-outcomes-v1']);
+  const sendFrom=async(page,value,id)=>{page.onMessage.emit({type:'packet',request:id,packet:value});await until(()=>page.sent.some(m=>m.type==='ack'&&m.request===id));};
+  const declared=id=>app.audio[0].sent.find(p=>p.type==='track'&&p.id===id);
+  const track=id=>({type:'track',id,kind:'remote',sampleRate:48000,channels:1});
+  try{
+   await app.command(command('start','start',{keepOnNavigation:true}));const main=app.pages[0];
+   const sub=app.frame(2,1,7);await until(()=>sub.sent.some(m=>m.type==='start'));
+   const report=()=>main.onMessage.emit({type:'discovery',sourceCount:3,documentGeneration:'doc-1',callGeneration:'0'});
+   if(!early)report();
+   sub.onMessage.emit({type:'discovery',sourceCount:1,documentGeneration:'doc-iframe',callGeneration:'0'});
+   if(early)report();
+   await sendFrom(sub,track('sub-early'),1);
+   assert.equal(declared('sub-early').documentGeneration,'doc-1',`early=${early}`);
+   // The main document navigates: the next one reports before the old ports close.
+   main.onMessage.emit({type:'pageState',state:'navigating'});
+   const next=app.frame(2,3,0);
+   next.onMessage.emit({type:'discovery',sourceCount:3,documentGeneration:'doc-2',callGeneration:'0'});
+   main.onDisconnect.emit();
+   await until(()=>app.api.status().documentGeneration==='doc-2');
+   // The old subframe's queued discovery and late span still arrive.
+   sub.onMessage.emit({type:'discovery',sourceCount:1,documentGeneration:'doc-iframe',callGeneration:'0'});
+   await sendFrom(sub,track('sub-late'),2);await sendFrom(next,track('next'),3);
+   assert.deepEqual([declared('sub-late').documentGeneration,declared('next').documentGeneration],['doc-1','doc-2'],`early=${early}`);
+  }finally{app.close()}
+ }
+});
+
+test('a generation status reports is the generation its spans carry, counted in UTF-8 bytes',async()=>{
+ const app=await setup(3,{},['source-outcomes-v1']);
+ try{
+  await app.command(command('start','start',{keepOnNavigation:true}));
+  // 150 characters, 300 UTF-8 bytes: too long for documentGeneration everywhere.
+  app.pages[0].onMessage.emit({type:'discovery',sourceCount:3,documentGeneration:'\u00e9'.repeat(150),callGeneration:'0'});
+  assert.equal((await packet(app,{type:'track',id:'wide',kind:'remote',sampleRate:48000,channels:1},1)).error,undefined);
+  const track=app.audio[0].sent.find(p=>p.type==='track'&&p.id==='wide');
+  assert.equal(app.api.status().documentGeneration,track.documentGeneration);
+  assert.equal(track.documentGeneration,undefined);
+  app.pages[0].onMessage.emit({type:'discovery',sourceCount:3,documentGeneration:'\u00e9'.repeat(100),callGeneration:'0'});
+  await packet(app,{type:'track',id:'fits',kind:'remote',sampleRate:48000,channels:1},2);
+  assert.equal(app.audio[0].sent.find(p=>p.type==='track'&&p.id==='fits').documentGeneration,'\u00e9'.repeat(100));
+  assert.equal(app.api.status().documentGeneration,'\u00e9'.repeat(100));
+ }finally{app.close()}
+});
