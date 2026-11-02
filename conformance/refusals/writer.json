@@ -279,7 +279,6 @@
   },
   {
    "name": "start-failed-timeout-never-falls-back",
-   "profile": "fallback",
    "request": {
     "me": true,
     "others": "browser"
@@ -443,7 +442,6 @@
   },
   {
    "name": "start-rejected-busy-no-fallback",
-   "profile": "fallback",
    "request": {
     "me": true,
     "others": "browser"
@@ -596,6 +594,54 @@
        "atMs": 0,
        "side": "others",
        "code": "deviceUnavailable"
+      }
+     ]
+    }
+   }
+  },
+  {
+   "name": "start-rejected-and-mic-refused-without-fallback",
+   "profile": "noFallback",
+   "request": {
+    "me": true,
+    "others": "browser"
+   },
+   "steps": [
+    {
+     "op": "refuse",
+     "atMs": 0,
+     "side": "browser",
+     "code": "startRejected",
+     "message": "Recording could not start."
+    },
+    {
+     "op": "refuse",
+     "atMs": 0,
+     "side": "me",
+     "code": "permissionDenied"
+    }
+   ],
+   "expected": {
+    "folder": false,
+    "opened": [],
+    "selection": null,
+    "othersFrom": null,
+    "state": null,
+    "problemKind": null,
+    "refusals": null,
+    "banner": {
+     "id": "errors.recordFailed.line",
+     "refusals": [
+      {
+       "atMs": 0,
+       "side": "browser",
+       "code": "startRejected",
+       "message": "Recording could not start."
+      },
+      {
+       "atMs": 0,
+       "side": "me",
+       "code": "permissionDenied"
       }
      ]
     }

@@ -5,7 +5,7 @@ Writer: replays abstract start/selection steps and returns the folder decision, 
 that opened, the selection events, the stored `refusals` member, othersFrom,
 state/problemKind and the start banner. Wire: turns an
 ok:false control result into the browser refusal it records. Readers: turns a stored list
-into the Audio sources lines.
+into the Audio sources lines and the entries Copy details keeps.
 """
 import re
 
@@ -85,8 +85,12 @@ def _start(case, profile):
     opened = requested - set(start)
     source = request['others'] or None
     browser = start.get('browser')
+    fallback = browser is not None and (profile == 'fallback' and browser['code'] == 'startRejected' and browser.get('detail') != 'busy')
+    # A start refusal names a side the app really tried to open on this profile: a
+    # requested side, or on a fallback the system tap for The others.
+    if set(start) - requested - ({'others'} if fallback else set()):
+        raise ValueError('a start refusal names a side this profile never opens')
     if browser is not None:
-        fallback = (profile == 'fallback' and browser['code'] == 'startRejected' and browser.get('detail') != 'busy')
         if fallback:
             source = 'system'
             if 'others' not in start:
@@ -152,6 +156,7 @@ def from_result(result):
 
 
 SOURCES = {'me': 'details.source.microphone', 'others': 'details.source.system', 'browser': 'details.source.browser'}
+ROLE = {'me': 'me', 'others': 'others', 'browser': 'others'}  # browser audio is The others' audio
 REFUSED = ('permissionDenied', 'deviceUnavailable', 'startRejected')
 
 
@@ -183,9 +188,15 @@ def lines(stored, sources=(), not_selected=()):
                 'source': SOURCES[item['side']]}
         if line not in shown:  # one line per distinct line, in first-occurrence order
             shown.append(line)
-    refused = {line['source'] for line in shown}
+    refused = {ROLE[item['side']] for item in copied(stored) if item['side'] in SOURCES}
     result = shown + [{'id': 'details.sources.notSelected', 'source': SOURCES[side]}
-                      for side in not_selected if SOURCES[side] not in refused]
-    if not sources and not shown:
+                      for side in not_selected if ROLE[side] not in refused]
+    if not sources and not result:  # empty only when no other Audio sources line is shown
         result.append({'id': 'details.sources.empty'})
     return result
+
+
+def copied(stored):
+    """The entries Copy details lists: every well-formed one, in stored order, exactly as
+    stored (no merging, no re-cut, no Unicode normalization). Malformed ones are left out."""
+    return [item for item in stored if well_formed(item)] if isinstance(stored, list) else []

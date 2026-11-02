@@ -36,14 +36,23 @@ def failing(oracle):
     names = set()
     for case in WRITER['cases']:
         for profile in runs(case):
-            actual = oracle['replay'](case, profile)
+            try:
+                actual = oracle['replay'](case, profile)
+            except Exception:  # a mutant that rejects or crashes on a literal case fails it
+                names.add(case['name'])
+                continue
             if any(actual[key] != value for key, value in case['expected'].items()):
                 names.add(case['name'])
     for case in WRITER['wire']:
         if oracle['from_result'](case['result']) != case['expected']:
             names.add(case['name'])
     for case in READERS['readers']:
-        if oracle['lines'](case['stored'], case.get('sources', ()), case.get('notSelected', ())) != case['expectedLines']:
+        try:
+            if oracle['lines'](case['stored'], case.get('sources', ()), case.get('notSelected', ())) != case['expectedLines']:
+                names.add(case['name'])
+            if 'expectedCopy' in case and oracle['copied'](case['stored']) != case['expectedCopy']:
+                names.add(case['name'])
+        except Exception:  # a mutant that crashes on a literal case fails it
             names.add(case['name'])
     return names
 
@@ -88,6 +97,20 @@ class RefusalTests(unittest.TestCase):
                        {'op': 'refuse', 'atMs': 5000, 'side': 'me', 'code': 'deviceUnavailable'}, stop]):
             with self.assertRaises(ValueError):
                 validate({'name': 'invalid', 'request': {'me': True, 'others': 'system'}, 'steps': steps})
+        # A start refusal names a side the profile really tries to open: never the system tap
+        # without a fallback, nor a side that was not requested.
+        replay = load()['replay']
+        rejected = {'op': 'refuse', 'atMs': 0, 'side': 'browser', 'code': 'startRejected'}
+        tap = {'op': 'refuse', 'atMs': 0, 'side': 'others', 'code': 'deviceUnavailable'}
+        for profile, steps, others in (('noFallback', [rejected, tap], 'browser'),
+                                       ('fallback', [dict(rejected, code='startFailed'), tap], 'browser'),
+                                       ('fallback', [dict(rejected, detail='busy'), tap], 'browser'),
+                                       ('fallback', [rejected], 'system'), ('fallback', [tap], False)):
+            with self.subTest(profile=profile, steps=steps, others=others), self.assertRaises(ValueError):
+                replay({'name': 'invalid', 'request': {'me': True, 'others': others}, 'steps': steps}, profile)
+        # Mac replays the browser cases that hold on both profiles (review of #35).
+        for name in ('start-failed-timeout-never-falls-back', 'start-rejected-busy-no-fallback'):
+            self.assertNotIn('profile', next(c for c in WRITER['cases'] if c['name'] == name))
 
     def test_oracle_reproduces_every_case(self):
         self.assertEqual(failing(load()), set())
@@ -99,7 +122,8 @@ class RefusalTests(unittest.TestCase):
                               'start-rejected-busy-no-fallback', 'start-rejected-then-mic-refused',
                               'start-rejected-and-both-native-refused', 'cap-keeps-first-15-and-latest',
                               'message-cut-at-200-code-points', 'others-unavailable-me-keeps-recording',
-                              'start-rejected-without-code-falls-back', 'empty-message-is-omitted'}, names)
+                              'start-rejected-without-code-falls-back', 'empty-message-is-omitted',
+                              'start-rejected-and-mic-refused-without-fallback'}, names)
         for case in WRITER['cases']:
             self.assertIn('opened', case['expected'], case['name'])
             self.assertIn('selection', case['expected'], case['name'])
@@ -144,9 +168,9 @@ class RefusalTests(unittest.TestCase):
                 'cap-keeps-first-15-and-latest'),
             'no cap': ('if len(stored) < CAP:', 'if True:', 'cap-keeps-first-15-and-latest'),
             'notSelected printed next to a refusal line': (
-                ' if SOURCES[side] not in refused]', ']', 'refusal-replaces-not-selected-and-empty'),
+                ' if ROLE[side] not in refused]', ']', 'refusal-replaces-not-selected-and-empty'),
             'empty printed next to a refusal line': (
-                'if not sources and not shown:', 'if not sources:', 'refusal-replaces-not-selected-and-empty'),
+                'if not sources and not result:', 'if not sources:', 'refusal-replaces-not-selected-and-empty'),
             # Beyond R79's list: the refused turn-on and wire rules.
             'a refused turn-on changes the selection': (
                 '                    continue  # a refused turn-on leaves the selection unchanged', '                    pass',
@@ -202,6 +226,36 @@ class RefusalTests(unittest.TestCase):
                 'null-detail-and-message-are-absent'),
             'identical lines are repeated': ('        if line not in shown:  # one line per distinct line, in first-occurrence order',
                                              '        if True:', 'identical-lines-are-shown-once'),
+            # Mac review of #35: the cut around 200 code points, as read back.
+            'the reader counts UTF-16 units': (
+                'and len(message) <= MESSAGE', "and len(message.encode('utf-16-le')) // 2 <= MESSAGE",
+                'copy-details-keeps-messages-exactly-as-stored'),
+            'the reader counts UTF-8 bytes': (
+                'and len(message) <= MESSAGE', 'and len(message.encode()) <= MESSAGE', 'copy-details-keeps-messages-exactly-as-stored'),
+            'the reader counts graphemes': (
+                'and len(message) <= MESSAGE',
+                "and len([c for c in message if not __import__('unicodedata').combining(c)]) <= MESSAGE",
+                'copy-details-keeps-messages-exactly-as-stored'),
+            'Copy details normalizes to NFC': (
+                'return [item for item in stored if well_formed(item)] if isinstance(stored, list) else []',
+                "return [dict(item, message=__import__('unicodedata').normalize('NFC', item['message'])) if isinstance(item.get('message'), str) "
+                "else item for item in stored if well_formed(item)] if isinstance(stored, list) else []",
+                'copy-details-keeps-messages-exactly-as-stored'),
+            'Copy details re-cuts at UTF-16 units': (
+                'return [item for item in stored if well_formed(item)] if isinstance(stored, list) else []',
+                "return [dict(item, message=item['message'].encode('utf-16-le')[:2 * MESSAGE].decode('utf-16-le', 'ignore')) "
+                "if isinstance(item.get('message'), str) else item for item in stored if well_formed(item)] if isinstance(stored, list) else []",
+                'copy-details-keeps-messages-exactly-as-stored'),
+            'Copy details keeps a malformed entry': (
+                'return [item for item in stored if well_formed(item)] if isinstance(stored, list) else []',
+                'return list(stored) if isinstance(stored, list) else []', 'copy-details-keeps-messages-exactly-as-stored'),
+            # Mac review of #35: two reader rules (flagged for the coordinator).
+            'a browser refusal keeps notSelected for The others': (
+                "ROLE = {'me': 'me', 'others': 'others', 'browser': 'others'}",
+                "ROLE = {'me': 'me', 'others': 'others', 'browser': 'browser'}",
+                'browser-refusal-replaces-not-selected-for-the-others'),
+            'empty printed next to notSelected lines': (
+                'if not sources and not result:', 'if not sources and not shown:', 'not-selected-alone-hides-empty'),
             'a stored startFailed gets a refused line': (
                 "REFUSED = ('permissionDenied', 'deviceUnavailable', 'startRejected')",
                 "REFUSED = ('permissionDenied', 'deviceUnavailable', 'startRejected', 'startFailed')",
