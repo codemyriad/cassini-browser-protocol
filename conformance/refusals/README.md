@@ -13,6 +13,8 @@ path, session writer and Details reader.
 
 - `profile` is `fallback` (GNOME: a rejected browser Start falls back to computer sound) or
   `noFallback` (Mac). A case without `profile` applies to both and has the same result on both.
+  Where the profiles differ, a case is split into two with explicit profiles (for example
+  `start-rejected-and-both-native-refused` and `start-rejected-and-mic-refused-without-fallback`).
 - `companion` is the browser connection state when the case starts, for example
   `failed/buildMissing`. Setup and connection states are never refusals; the oracle ignores it.
 - `request` is `{me, others: "system" | "browser" | false}`. Apps always start with both
@@ -28,7 +30,10 @@ path, session writer and Details reader.
 A `refuse` at atMs 0 refuses a start side. A refused turn-on is a `refuse` immediately after
 the `select` that turns that side on, at the same atMs (several sides may follow one select).
 A `refuse` with atMs > 0 and no such `select` makes the case invalid. For `others`, a turn-on
-refusal names `others` (the system tap) or `browser`.
+refusal names `others` (the system tap) or `browser`. A start refusal must name a side the
+profile really tries to open: a requested side, or `others` (the system tap) when a rejected
+browser Start falls back. Anything else, such as `others` next to a browser refusal on
+`noFallback`, makes the case invalid for that profile.
 
 `expected` is `{folder, opened, selection, othersFrom, state, problemKind, refusals, banner}`.
 A key left out is not checked. `opened` lists the sides that opened and got a track, at start
@@ -82,7 +87,8 @@ ECMA-262, where `$` does not match before a final newline, but Python's `re.matc
 
 ## readers.json
 
-`{version: 1, readers[]}`. A reader case is `{name, stored, sources?, notSelected?, expectedLines}`.
+`{version: 1, readers[]}`. A reader case is
+`{name, note?, stored, sources?, notSelected?, expectedLines, expectedCopy?}`.
 `stored` is the session or captureRecord `refusals` value as read; `sources` are the
 captureRecord source rows (default none); `notSelected` lists the sides for which the reader
 would print `details.sources.notSelected`. `expectedLines` lists, in order, the Audio sources
@@ -94,8 +100,16 @@ lines that follow the source rows, which render as today and are not listed:
    Repeated entries for the same side and code, and several unknown codes for one side, print
    one line; Copy details still lists every entry. `{source}` is filled by side: me → `details.source.microphone`, others →
    `details.source.system`, browser → `details.source.browser`.
-2. `details.sources.notSelected` for each listed side without a refusal line.
-3. `details.sources.empty` only when there are no source rows and no refusal lines.
+2. `details.sources.notSelected` for each listed side without a refusal line for that role. A
+   `browser` refusal counts for The others, since both are the others' audio: it also hides
+   `notSelected` for `others`.
+3. `details.sources.empty` only when no other Audio sources line is shown at all: no source
+   rows, no refusal lines and no `notSelected` lines.
+
+`expectedCopy`, when given, lists the entries Copy details keeps: every well-formed entry, in
+stored order, exactly as stored. Copy details never merges entries, re-cuts a message or
+normalizes Unicode (combining and precomposed letters stay as stored); a malformed entry, such
+as a 201-code-point message, is left out there too.
 
 Reading is lenient: a `refusals` value that is not a list is ignored as a whole, and a
 malformed entry is skipped. An entry is malformed exactly when the session schema's item
@@ -104,7 +118,9 @@ not a number (a boolean is not a number) or outside 0..86460000; `side` or `code
 does not match `^[A-Za-z]{1,32}$`; `detail` is present, not null and does not match; or
 `message` is present, not null and not a string of at most 200 code points. A null `detail` or
 `message` means absent. A well-formed entry with an unknown side is not shown; `detail`,
-`message` and unknown members never change the lines. Everything stays in Copy details.
+`message` and unknown members never change the lines; every well-formed entry stays in Copy
+details. Counting is in Unicode code points throughout: an emoji counts once (not as two UTF-16
+units), and a combining mark counts as its own code point.
 
 `tests/test_refusals.py` checks the oracle against every literal case and validates every
 expected stored and banner list against `schemas/session.schema.json`. It also checks that each
@@ -118,5 +134,8 @@ missing; a refused turn-on (of Me or The others) that changes the selection or w
 selection event; a malformed or newline-terminated result `code` kept; `notSelected` or `empty`
 printed next to a refusal line; an unknown side shown; an unknown code or a stored
 `startFailed` without the `failed` line; repeated lines; a reader that keeps entries with a bad
-`atMs`, pattern-invalid fields, a bad detail or message, or rejects a null detail. It also
+`atMs`, pattern-invalid fields, a bad detail or message, or rejects a null detail; a reader
+that counts a message in UTF-16 units, UTF-8 bytes or graphemes; Copy details that normalizes
+to NFC, re-cuts at UTF-16 units or keeps a malformed entry; a `browser` refusal that leaves
+`notSelected` for The others; `empty` printed next to `notSelected` lines. It also
 checks that the reader's malformed rule agrees with the schema on every reader entry. The `resume` op and `resumeRefused` vectors come with #169.

@@ -273,8 +273,12 @@ object; `atMs` missing, not a number or out of range; `side` or `code` missing o
 matching; `detail` or `message` present, not null and invalid (a null one means absent).
 Details prints one line per distinct line, in first-occurrence order, so repeated entries
 show once. An unknown code, and a stored `startFailed`, show `details.sources.failed` for
-that side; an unknown side is not shown and an unknown detail is ignored. Copy details keeps
-every entry. `recordingDetails.captureRecord.refusals` in
+that side; an unknown side is not shown and an unknown detail is ignored. A refusal line
+replaces `details.sources.notSelected` for its role; a `browser` refusal counts for The
+others, so it also hides `notSelected` for `others`. `details.sources.empty` is printed only
+when no other Audio sources line is shown at all (no source rows, no refusal lines, no
+`notSelected` lines). Copy details keeps every well-formed entry, in stored order, exactly as
+stored: no merging, no re-cut and no Unicode normalization, counting code points throughout. `recordingDetails.captureRecord.refusals` in
 meeting.json is a verbatim copy. Session version stays 1. Shared cases, oracle and reader
 lines: `conformance/refusals/`.
 
@@ -563,7 +567,14 @@ relay that keeps the transport open but silent. Times are monotonic.
   last status that still reported the old generation are retired; a retired
   span's PCM is still recorded but never re-arms it, and a span declared after
   those points, even before its own documentGeneration is reported, stays
-  armed (`documentChanged` frames). Literal cases with an independent oracle:
+  armed (`documentChanged` frames). The first documentGeneration reported for
+  the recording, with no earlier one to compare, counts as new: it closes an
+  open departing window (unless it arrives with pageState `navigating`) and
+  retires nothing. The app applies these rules in its own receipt order across
+  the control connection and the audio transport: a status and an audio frame
+  are ordered by when the app received them, never by extension timestamps or
+  by reordering one socket against the other; the vectors' frame order is that
+  receipt order. Literal cases with an independent oracle:
   `conformance/multistream/stale-watchdog.json` (`stale_watchdog.py`).
   Closing uses the app's existing EOF path, so
   the recording keeps running and falls back to computer sound with
