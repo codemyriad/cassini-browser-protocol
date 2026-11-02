@@ -27,6 +27,14 @@ function setPageState(tabId, value) {
 // refusal (SPEC-CONTROL "Result codes"). It travels as `resultCode`, never as
 // `code`, which already holds the closed audio-plane code of a native error.
 const refused = (message, resultCode) => Object.assign(new Error(message), { resultCode });
+// D58 #11: an app Start for a tab that is already recording or starting is `busy`,
+// before any other check (noSources, limit, invalid, ...). An app falls back to
+// computer sound on other refusals, which would record that meeting twice.
+function startBusy(command) {
+  return command?.action === "start" && Number.isSafeInteger(command.tabId) && command.tabId >= 0 &&
+    ((command.independent !== true && (sessions.size > 0 || pendingStarts.size > 0)) ||
+     sessions.has(command.tabId) || pendingStarts.has(command.tabId));
+}
 const sessions = new Map();
 const pendingStarts = new Map();
 const callGenerations = new Map();
@@ -650,7 +658,7 @@ async function controlCommand(command, intent = {}) {
   await recovery;
   if (intent.cancelled) throw new Error("Recording could not start.");
   if (command.action === "start") {
-    if (!command.independent && (sessions.size || pendingStarts.size)) throw refused("A recording is already running. Stop it before starting another.", "busy");
+    if (startBusy(command)) throw refused("A recording is already running. Stop it before starting another.", "busy");
     if (![...frames].some(frame => frame.tabId === command.tabId && frame.sourceCount > 0))
       throw refused("No audio is available from that meeting yet.", "noSources");
     await start("tracks", command.tabId, { independent: command.independent === true,
@@ -675,7 +683,7 @@ function cancelPendingStart(command) {
 }
 function notifyControl() { appControl.publish(); }
 const appControl = new AppControl({
-  runtime: chrome.runtime, alarms: chrome.alarms, capabilities: ["independent-sessions-v1", "call-evidence-v1", "page-state-v1", "multi-stream-v1", "resume-capture-v1", "heartbeat-v1"], cancelPending: cancelPendingStart,
+  runtime: chrome.runtime, alarms: chrome.alarms, busy: startBusy, capabilities: ["independent-sessions-v1", "call-evidence-v1", "page-state-v1", "multi-stream-v1", "resume-capture-v1", "heartbeat-v1"], cancelPending: cancelPendingStart,
   connected: async () => {
     await recovery;
     const tabs = await chrome.tabs.query({});

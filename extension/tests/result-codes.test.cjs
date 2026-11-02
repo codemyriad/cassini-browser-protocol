@@ -216,3 +216,40 @@ test('result codes: losing the native host during Start carries no code', async 
     assert.equal(result.ok, false); assert.equal('code' in result, false, `unexpected code ${result.code}`);
   } finally { app.close(); }
 });
+
+// Codex review of #35: an active same-tab recording must answer busy, never noSources,
+// or an app that falls back on noSources records the meeting twice (D58 #11).
+test('result codes: a Start for a recording tab whose discovery dropped to zero is busy, not noSources', async () => {
+  const app = await setup();
+  try {
+    assert.equal((await app.command(start('record', { independent: true }))).ok, true);
+    app.pages[0].onMessage.emit({ type: 'discovery', sourceCount: 0 });
+    assert.equal((await app.api.meetings()).meetings[0].sourceCount, 0);
+    await refusal(app, start('again', { independent: true }), 'busy', BUSY);
+    await refusal(app, start('legacy-again'), 'busy', BUSY);
+    await refusal(app, start('resume-again', { independent: true, callGeneration: app.api.callInfo(2).generation,
+      resumeCapture: { captureId: 'stand-in', timelineOriginMs: 1000 } }), 'busy', BUSY);
+    await refusal(app, start('bad-options', { independent: true, captureLocal: 'yes' }), 'busy', BUSY);
+    assert.equal(app.api.controlStatus(2).recording, true, 'the first recording is still active');
+    assert.equal(app.audio.length, 1);
+  } finally { app.close(); }
+});
+
+test('result codes: a full command table still answers busy for a busy tab', async () => {
+  const ports = [];
+  const runtime = { connectNative() { const port = { sent: [], onMessage: event(), onDisconnect: event(), postMessage(m) { this.sent.push(m); }, disconnect() {} }; ports.push(port); return port; } };
+  const alarms = { onAlarm: event(), async create() {}, async clear() {} };
+  const context = vm.createContext({ setTimeout, clearTimeout });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../app-control.js'), 'utf8').replace('export class AppControl', 'class AppControl') + '\nglobalThis.Control=AppControl;', context);
+  const control = new context.Control({ runtime, alarms, snapshot: async () => [], command: () => new Promise(() => {}), later: () => 0, cancel: () => {},
+    busy: message => message.action === 'start' && message.tabId === 2 });
+  try {
+    control.start();
+    for (let index = 0; index < 128; index++) ports[0].onMessage.emit(start('pending-' + index, { tabId: 3 }));
+    ports[0].onMessage.emit(start('busy-tab'));
+    ports[0].onMessage.emit(start('other-tab', { tabId: 4 }));
+    const result = id => ({ ...ports[0].sent.find(m => m.type === 'result' && m.requestId === id) });
+    assert.equal(result('busy-tab').code, 'busy'); assert.equal(result('busy-tab').error, BUSY);
+    assert.equal(result('other-tab').code, 'limit');
+  } finally { control.close(); }
+});

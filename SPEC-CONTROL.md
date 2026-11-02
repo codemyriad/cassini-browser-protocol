@@ -658,7 +658,7 @@ know locally and record a code-less `startRejected` otherwise.
 
 | code | Extension 0.2.10 sets it when |
 | --- | --- |
-| `busy` | a recording is already running, in that tab or (legacy) anywhere; also a legacy Stop for another tab |
+| `busy` | a recording is already running or starting, in that tab or (legacy) anywhere; also a legacy Stop for another tab |
 | `limit` | 128 requests are pending, or 100 recordings are running or starting |
 | `noSources` | the tab has no discovered meeting audio |
 | `gone` | the tab no longer exists or closes during Start, the call generation changed before or during Start, or a Stop names a capture that is no longer active |
@@ -668,6 +668,11 @@ know locally and record a code-less `startRejected` otherwise.
 | `resumeRefused` | the host's answer to a resume did not confirm the original capture |
 | `workletBlocked` | the page blocked the AudioWorklet (capture.js) |
 | `audioBlocked` | the browser kept the page's audio suspended or refused playback (capture.js) |
+
+`busy` comes first: a Start for a tab that is already recording or starting (or, for a
+legacy Start, any recording) answers `busy` before any other check, including `noSources`,
+`limit` and `invalid`, so an app that falls back on other refusals never records that
+meeting twice (D58 #11; wire case `same-tab-busy-result-is-detail-busy`).
 
 Only a Start the app cancelled itself (`Recording could not start.`: its own Stop or
 cancel) and a failure reported by the native host, or the loss of that host, carry no code. `workletBlocked` and `audioBlocked` are set where capture.js

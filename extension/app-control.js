@@ -2,8 +2,8 @@
 // Persistent app management, independent of the per-recording PCM connection.
 export class AppControl {
   constructor({ runtime, alarms, snapshot, command, capabilities = [], cancelPending = () => {}, connected = async () => {},
-                later = (fn, ms) => setTimeout(fn, ms), cancel = id => clearTimeout(id) }) {
-    Object.assign(this, { runtime, alarms, snapshot, command, capabilities, cancelPending, connected, later, cancel });
+                later = (fn, ms) => setTimeout(fn, ms), cancel = id => clearTimeout(id), busy = () => false }) {
+    Object.assign(this, { runtime, alarms, snapshot, command, capabilities, cancelPending, connected, later, cancel, busy });
     this.port = null;
     this.ready = false;
     this.retry = null;
@@ -118,7 +118,10 @@ export class AppControl {
       }
       if (this.requests.size >= 128) {
         // Never evict an in-flight command and accidentally execute its retry twice.
-        this.send(port, { type: 'result', requestId: id, ok: false, error: 'Cassini has received too many commands. Reconnect and try again.', code: 'limit' });
+        // D58 #11: a Start for a busy tab says so even when the table is full.
+        this.send(port, this.busy(message)
+          ? { type: 'result', requestId: id, ok: false, error: 'A recording is already running. Stop it before starting another.', code: 'busy' }
+          : { type: 'result', requestId: id, ok: false, error: 'Cassini has received too many commands. Reconnect and try again.', code: 'limit' });
         return;
       }
       const resume = message.resumeCapture;
@@ -152,6 +155,8 @@ export class AppControl {
       const execute = async () => {
         if (port !== this.port) return null;
         try {
+          // D58 #11: `busy` wins over every other refusal of a Start for that tab.
+          if (this.busy(message)) throw Object.assign(new Error('A recording is already running. Stop it before starting another.'), { resultCode: 'busy' });
           if (!['start', 'stop'].includes(message.action) || !Number.isSafeInteger(message.tabId) || message.tabId < 0)
             throw invalid('Choose a meeting to record.');
           if (message.action === 'start' && message.mode !== 'tracks')

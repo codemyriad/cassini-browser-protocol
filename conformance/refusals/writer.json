@@ -1132,6 +1132,23 @@
    }
   },
   {
+   "name": "same-tab-busy-result-is-detail-busy",
+   "note": "The extension answers busy before any other check for a tab that is recording or starting; with detail busy no app falls back (D58 #11).",
+   "result": {
+    "type": "result",
+    "requestId": "r9",
+    "ok": false,
+    "error": "A recording is already running. Stop it before starting another.",
+    "code": "busy"
+   },
+   "expected": {
+    "side": "browser",
+    "code": "startRejected",
+    "detail": "busy",
+    "message": "A recording is already running. Stop it before starting another."
+   }
+  },
+  {
    "name": "empty-error-is-omitted",
    "result": {
     "type": "result",
