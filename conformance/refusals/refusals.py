@@ -1,8 +1,9 @@
 """Independent D58 (R79) refusals oracle. Apps replay the literal vectors through their own
 start path, writer and Details reader. This is not production code for either app.
 
-Writer: replays abstract start/selection steps and returns the folder decision, the stored
-`refusals` member, othersFrom, state/problemKind and the start banner. Wire: turns an
+Writer: replays abstract start/selection steps and returns the folder decision, the sides
+that opened, the selection events, the stored `refusals` member, othersFrom,
+state/problemKind and the start banner. Wire: turns an
 ok:false control result into the browser refusal it records. Readers: turns a stored list
 into the Audio sources lines.
 """
@@ -11,9 +12,11 @@ import re
 WORD = re.compile(r'[A-Za-z]{1,32}')  # always fullmatch: `$` also matches before a final newline
 CAP = 16
 MESSAGE = 200
+MAX_MS = 86460000
 BANNER = 'errors.recordFailed.line'
 PROFILES = ('fallback', 'noFallback')
 NATIVE = ('me', 'others')
+SIDES = ('me', 'others', 'browser')
 
 
 def word(value):
@@ -29,7 +32,7 @@ def entry(step):
     item = {'atMs': step['atMs'], 'side': step['side'], 'code': step['code']}
     if word(step.get('detail')):
         item['detail'] = step['detail']
-    if isinstance(step.get('message'), str) and step['message']:
+    if isinstance(step.get('message'), str) and step['message']:  # an empty message is omitted
         item['message'] = cut(step['message'])
     return item
 
@@ -99,6 +102,8 @@ def replay(case, profile):
     opened, source = _start(case, profile)
     folder = bool(opened)
     selected = {'me': True, 'others': request['others'] is not False}
+    # The start selection and othersSource record the request, not what opened.
+    selection = [dict(atMs=0, me=True, others=selected['others'], reason='start')]
     others_from = source if selected['others'] else None
     stored, failed = [], False
     for index, step in enumerate(steps):
@@ -106,6 +111,7 @@ def replay(case, profile):
         if op == 'refuse':
             append(stored, entry(step))
         elif op == 'select':
+            changed = False
             for side in NATIVE:
                 if side not in step or step[side] == selected[side]:
                     continue
@@ -113,9 +119,13 @@ def replay(case, profile):
                               for i, s in enumerate(steps[index + 1:], index + 1))
                 if refused:
                     continue  # a refused turn-on leaves the selection unchanged
-                selected[side] = step[side]
+                selected[side], changed = step[side], True
+                if step[side]:
+                    opened.add('me' if side == 'me' else 'others' if source == 'system' else 'browser')
                 if side == 'others':
                     others_from = source if step[side] else None
+            if changed:
+                selection.append(dict(atMs=step['atMs'], me=selected['me'], others=selected['others'], reason='user'))
         elif op == 'fail':
             failed = True  # a mid-call failure is never a refusal (P10)
         elif op == 'stop':
@@ -123,10 +133,11 @@ def replay(case, profile):
         else:
             raise ValueError('unknown op ' + op)
     if not folder:
-        return dict(folder=False, othersFrom=None, state=None, problemKind=None, refusals=None,
-                    banner=dict(id=BANNER, refusals=stored))
+        return dict(folder=False, opened=[], selection=None, othersFrom=None, state=None, problemKind=None,
+                    refusals=None, banner=dict(id=BANNER, refusals=stored))
     state = 'interrupted' if failed else 'completed'
-    return dict(folder=True, othersFrom=others_from if selected['others'] else None, state=state,
+    return dict(folder=True, opened=[side for side in SIDES if side in opened], selection=selection,
+                othersFrom=others_from if selected['others'] else None, state=state,
                 problemKind='capture' if failed else None, refusals=stored or None, banner=None)
 
 
@@ -135,7 +146,7 @@ def from_result(result):
     item = {'side': 'browser', 'code': 'startRejected'}
     if word(result.get('code')):
         item['detail'] = result['code']
-    if isinstance(result.get('error'), str) and result['error']:
+    if isinstance(result.get('error'), str) and result['error']:  # an empty error is omitted
         item['message'] = cut(result['error'])
     return item
 
@@ -144,17 +155,34 @@ SOURCES = {'me': 'details.source.microphone', 'others': 'details.source.system',
 REFUSED = ('permissionDenied', 'deviceUnavailable', 'startRejected')
 
 
+def well_formed(item):
+    """An entry the session schema accepts. A null detail or message means absent."""
+    if not isinstance(item, dict):
+        return False
+    at = item.get('atMs')
+    if isinstance(at, bool) or not isinstance(at, (int, float)) or not 0 <= at <= MAX_MS:
+        return False
+    if not word(item.get('side')) or not word(item.get('code')):
+        return False
+    if item.get('detail') is not None and not word(item['detail']):
+        return False
+    message = item.get('message')
+    return message is None or isinstance(message, str) and len(message) <= MESSAGE
+
+
 def lines(stored, sources=(), not_selected=()):
     """Audio sources lines after the source rows, which render as today."""
     shown = []
     for item in stored if isinstance(stored, list) else []:  # a non-list member is ignored whole
-        if not isinstance(item, dict) or not isinstance(item.get('side'), str) or not isinstance(item.get('code'), str):
-            continue  # a bad entry is skipped
+        if not well_formed(item):
+            continue  # a malformed entry is skipped
         if item['side'] not in SOURCES:
             continue  # an unknown side is not shown
-        known = item['code'] in REFUSED
-        shown.append({'id': 'details.sources.refused.' + item['code'] if known else 'details.sources.failed',
-                      'source': SOURCES[item['side']]})
+        known = item['code'] in REFUSED  # anything else, startFailed included, is shown as failed
+        line = {'id': 'details.sources.refused.' + item['code'] if known else 'details.sources.failed',
+                'source': SOURCES[item['side']]}
+        if line not in shown:  # one line per distinct line, in first-occurrence order
+            shown.append(line)
     refused = {line['source'] for line in shown}
     result = shown + [{'id': 'details.sources.notSelected', 'source': SOURCES[side]}
                       for side in not_selected if SOURCES[side] not in refused]

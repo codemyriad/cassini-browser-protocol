@@ -180,3 +180,39 @@ test('result codes: capture tags a blocked worklet and blocked audio at the poin
   assert.equal(error.resultCode, 'audioBlocked');
   assert.equal(error.code, undefined, 'resultCode never replaces the audio-plane code');
 });
+
+for (const abort of ['callChanged', 'tabClosed', 'stop']) test('result codes: a Start aborted in flight by ' + abort + (abort === 'stop' ? ' carries no code' : ' is gone'), async () => {
+  const app = await setup(); let release;
+  try {
+    const gate = new Promise(resolve => { release = resolve; }); let entered = false;
+    app.chrome.tabs.sendMessage = async () => { entered = true; await gate; return {}; };
+    const pending = app.command(start('in-flight', { independent: true, callGeneration: app.api.callInfo(2).generation }));
+    await until(() => entered);
+    let stopped;
+    if (abort === 'callChanged') app.chrome.tabs.onUpdated.emit(2, { url: 'https://meet.example/another-call' });
+    else if (abort === 'tabClosed') { app.tabs.delete(2); app.chrome.tabs.onRemoved.emit(2); }
+    else stopped = app.command({ type: 'command', requestId: 'stop', action: 'stop', tabId: 2, independent: true });
+    release();
+    const expected = { callChanged: ['That call is no longer active.', 'gone'], tabClosed: ['That meeting is no longer available.', 'gone'],
+      stop: ['Recording could not start.', undefined] }[abort];
+    const result = await pending;
+    assert.equal(result.ok, false); assert.equal(result.error, expected[0]);
+    if (expected[1] === undefined) assert.equal('code' in result, false); else assert.equal(result.code, expected[1]);
+    assert.equal(app.audio.length, 0, 'no native folder was requested');
+    if (stopped) assert.equal((await stopped).ok, true);
+  } finally { release?.(); app.close(); }
+});
+
+test('result codes: losing the native host during Start carries no code', async () => {
+  const app = await setup(3, {}, [], () => ({ sent: [], closed: false, onMessage: event(), onDisconnect: event(),
+    disconnect() { this.closed = true; },
+    postMessage(packet) {
+      if (this.gone) throw new Error('Attempting to use a disconnected port object.');
+      this.sent.push(packet);
+      if (packet.type === 'start') { this.gone = true; queueMicrotask(() => this.onDisconnect.emit()); }
+    } }));
+  try {
+    const result = await app.command(start('host-lost', { independent: true }));
+    assert.equal(result.ok, false); assert.equal('code' in result, false, `unexpected code ${result.code}`);
+  } finally { app.close(); }
+});

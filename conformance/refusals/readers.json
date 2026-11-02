@@ -169,6 +169,183 @@
      "source": "details.source.system"
     }
    ]
+  },
+  {
+   "name": "an-entry-without-a-valid-atMs-is-skipped",
+   "stored": [
+    {
+     "side": "me",
+     "code": "deviceUnavailable"
+    },
+    {
+     "atMs": "0",
+     "side": "me",
+     "code": "deviceUnavailable"
+    },
+    {
+     "atMs": true,
+     "side": "me",
+     "code": "deviceUnavailable"
+    },
+    {
+     "atMs": -1,
+     "side": "me",
+     "code": "deviceUnavailable"
+    },
+    {
+     "atMs": 86460001,
+     "side": "me",
+     "code": "deviceUnavailable"
+    },
+    {
+     "atMs": null,
+     "side": "me",
+     "code": "deviceUnavailable"
+    }
+   ],
+   "expectedLines": [
+    {
+     "id": "details.sources.empty"
+    }
+   ]
+  },
+  {
+   "name": "an-entry-with-a-pattern-invalid-field-is-skipped",
+   "stored": [
+    {
+     "atMs": 0,
+     "side": "me",
+     "code": "device unavailable"
+    },
+    {
+     "atMs": 0,
+     "side": "me",
+     "code": "deviceUnavailable\n"
+    },
+    {
+     "atMs": 0,
+     "side": "me",
+     "code": "deviceUnavailable",
+     "detail": "not a code!"
+    },
+    {
+     "atMs": 0,
+     "side": "me",
+     "code": "deviceUnavailable",
+     "detail": 7
+    },
+    {
+     "atMs": 0,
+     "side": "me",
+     "code": "deviceUnavailable",
+     "message": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    },
+    {
+     "atMs": 0,
+     "side": "me",
+     "code": "deviceUnavailable",
+     "message": 7
+    }
+   ],
+   "expectedLines": [
+    {
+     "id": "details.sources.empty"
+    }
+   ]
+  },
+  {
+   "name": "null-detail-and-message-are-absent",
+   "stored": [
+    {
+     "atMs": 86460000,
+     "side": "me",
+     "code": "deviceUnavailable",
+     "detail": null,
+     "message": null
+    }
+   ],
+   "expectedLines": [
+    {
+     "id": "details.sources.refused.deviceUnavailable",
+     "source": "details.source.microphone"
+    }
+   ]
+  },
+  {
+   "name": "identical-lines-are-shown-once",
+   "stored": [
+    {
+     "atMs": 0,
+     "side": "me",
+     "code": "deviceUnavailable"
+    },
+    {
+     "atMs": 0,
+     "side": "browser",
+     "code": "quotaExceeded"
+    },
+    {
+     "atMs": 2000,
+     "side": "me",
+     "code": "deviceUnavailable",
+     "message": "second"
+    },
+    {
+     "atMs": 3000,
+     "side": "others",
+     "code": "deviceUnavailable"
+    },
+    {
+     "atMs": 3000,
+     "side": "browser",
+     "code": "otherUnknown"
+    },
+    {
+     "atMs": 4000,
+     "side": "me",
+     "code": "permissionDenied"
+    },
+    {
+     "atMs": 5000,
+     "side": "me",
+     "code": "deviceUnavailable"
+    }
+   ],
+   "expectedLines": [
+    {
+     "id": "details.sources.refused.deviceUnavailable",
+     "source": "details.source.microphone"
+    },
+    {
+     "id": "details.sources.failed",
+     "source": "details.source.browser"
+    },
+    {
+     "id": "details.sources.refused.deviceUnavailable",
+     "source": "details.source.system"
+    },
+    {
+     "id": "details.sources.refused.permissionDenied",
+     "source": "details.source.microphone"
+    }
+   ]
+  },
+  {
+   "name": "a-stored-start-failed-uses-sources-failed",
+   "stored": [
+    {
+     "atMs": 0,
+     "side": "browser",
+     "code": "startFailed",
+     "detail": "timeout"
+    }
+   ],
+   "expectedLines": [
+    {
+     "id": "details.sources.failed",
+     "source": "details.source.browser"
+    }
+   ]
   }
  ]
 }

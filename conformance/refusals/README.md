@@ -30,10 +30,16 @@ the `select` that turns that side on, at the same atMs (several sides may follow
 A `refuse` with atMs > 0 and no such `select` makes the case invalid. For `others`, a turn-on
 refusal names `others` (the system tap) or `browser`.
 
-`expected` is `{folder, othersFrom, state, problemKind, refusals, banner}`. A key left out is
-not checked. `refusals: null` means the member is absent. `banner` is null or `{id, refusals}`.
+`expected` is `{folder, opened, selection, othersFrom, state, problemKind, refusals, banner}`.
+A key left out is not checked. `opened` lists the sides that opened and got a track, at start
+or at a later turn-on, in the order me, others, browser (`others` is the system tap, also on a
+fallback); `[]` without a folder. `selection` lists the `selection` events written, as
+`{atMs, me, others, reason}`, starting with the start event at 0; null without a folder.
+`refusals: null` means the member is absent. `banner` is null or `{id, refusals}`.
 `othersFrom` is the source of the last `othersSource` event if The others is selected at stop,
-and null otherwise or without a folder. `state`/`problemKind` are the saved session's; cases
+and null otherwise or without a folder. The start `selection` and `othersSource` record what
+was requested, not what opened, so a system side refused at start still gives `othersFrom`
+`system` (`others-unavailable-me-keeps-recording`). `state`/`problemKind` are the saved session's; cases
 with a `fail` step leave them out, because mid-call loss is platform-specific (P10).
 
 ### Rules
@@ -51,7 +57,7 @@ with a `fail` step leave them out, because mid-call loss is platform-specific (P
    `errors.recordFailed.line` and `banner.refusals` lists the refusals in step order. With a
    folder, `banner` is null.
 5. Stored `refusals` are the `refuse` steps in step order, with only the fields given, in the
-   order atMs, side, code, detail, message. `detail` is kept only if it matches
+   order atMs, side, code, detail, message. An empty `message` is omitted. `detail` is kept only if it matches
    `^[A-Za-z]{1,32}$` as a whole string. `message` is cut to its first 200 Unicode code points
    (not bytes, UTF-16 units or graphemes). The cap is 16: when the list is full, each newer
    refusal replaces the 16th entry, keeping the first 15 plus the latest. The member is absent
@@ -64,8 +70,15 @@ with a `fail` step leave them out, because mid-call loss is platform-specific (P
 
 `wire` cases turn an `ok:false` Start result into the browser refusal it records (the app adds
 `atMs`): `code` startRejected, `detail` the result `code` if it matches the pattern as a whole
-string (known or not), `message` the result `error` cut as above. A result without a valid
-`code` still records `startRejected`, without `detail`.
+string (known or not), `message` the result `error` cut as above (omitted when empty). A
+result without a valid `code` still records `startRejected`, without `detail`, and on the
+`fallback` profile still falls back (`start-rejected-without-code-falls-back`): that is the
+path an app takes until results carry `code`.
+
+"As a whole string" means the pattern must not match `"invalid\n"`. JSON Schema patterns are
+ECMA-262, where `$` does not match before a final newline, but Python's `re.match`/`re.search`
+(and so Python jsonschema) and ICU/NSRegularExpression do. Use `re.fullmatch` in Python and
+`wholeMatch`, or `\z`, in Swift.
 
 ## readers.json
 
@@ -75,23 +88,35 @@ captureRecord source rows (default none); `notSelected` lists the sides for whic
 would print `details.sources.notSelected`. `expectedLines` lists, in order, the Audio sources
 lines that follow the source rows, which render as today and are not listed:
 
-1. One line per shown refusal, in stored order: `details.sources.refused.<code>` for
-   permissionDenied, deviceUnavailable and startRejected, and `details.sources.failed` for any
-   other code. `{source}` is filled by side: me → `details.source.microphone`, others →
+1. One line per distinct shown line, in first-occurrence order: `details.sources.refused.<code>`
+   for permissionDenied, deviceUnavailable and startRejected, and `details.sources.failed` for
+   any other code, `startFailed` included (it never reaches a file; this is only a fallback).
+   Repeated entries for the same side and code, and several unknown codes for one side, print
+   one line; Copy details still lists every entry. `{source}` is filled by side: me → `details.source.microphone`, others →
    `details.source.system`, browser → `details.source.browser`.
 2. `details.sources.notSelected` for each listed side without a refusal line.
 3. `details.sources.empty` only when there are no source rows and no refusal lines.
 
-Reading is lenient: a `refusals` value that is not a list is ignored as a whole; an entry that
-is not an object, or whose `side` or `code` is not a string, is skipped; an unknown side is not
-shown; `detail` and unknown members never change the lines. Everything stays in Copy details.
+Reading is lenient: a `refusals` value that is not a list is ignored as a whole, and a
+malformed entry is skipped. An entry is malformed exactly when the session schema's item
+rejects it, applying the patterns to the whole string: it is not an object; `atMs` is missing,
+not a number (a boolean is not a number) or outside 0..86460000; `side` or `code` is missing or
+does not match `^[A-Za-z]{1,32}$`; `detail` is present, not null and does not match; or
+`message` is present, not null and not a string of at most 200 code points. A null `detail` or
+`message` means absent. A well-formed entry with an unknown side is not shown; `detail`,
+`message` and unknown members never change the lines. Everything stays in Copy details.
 
 `tests/test_refusals.py` checks the oracle against every literal case and validates every
 expected stored and banner list against `schemas/session.schema.json`. It also checks that each
 of these mutations fails at least one case: a refusal written for a `fail`; a folder kept when
-nothing opened; a refusal that changes `state`; `message` dropped, not cut, or cut at UTF-16
-units, UTF-8 bytes or graphemes; a `noFallback` fallback; a fallback after `startFailed` or
-`startRejected/busy`; the cap dropping the latest entry, keeping the last 16, or missing; a
-refused turn-on that changes the selection; a malformed or newline-terminated result `code`
-kept; `notSelected` or `empty` printed next to a refusal line; an unknown side shown; an
-unknown code without a line. The `resume` op and `resumeRefused` vectors come with #169.
+nothing opened; a refused side that still gets a track; a refusal that changes `state`;
+`message` dropped, not cut, cut at UTF-16 units, UTF-8 bytes or graphemes, or kept when empty
+(writer or wire); a `noFallback` fallback; a fallback after `startFailed` or
+`startRejected/busy`; a fallback that drops Me or needs a detail; an others refusal that ends
+everything or nulls `othersFrom`; the cap dropping the latest entry, keeping the last 16, or
+missing; a refused turn-on (of Me or The others) that changes the selection or writes a
+selection event; a malformed or newline-terminated result `code` kept; `notSelected` or `empty`
+printed next to a refusal line; an unknown side shown; an unknown code or a stored
+`startFailed` without the `failed` line; repeated lines; a reader that keeps entries with a bad
+`atMs`, pattern-invalid fields, a bad detail or message, or rejects a null detail. It also
+checks that the reader's malformed rule agrees with the schema on every reader entry. The `resume` op and `resumeRefused` vectors come with #169.

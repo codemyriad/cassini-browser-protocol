@@ -70,7 +70,7 @@ class RefusalTests(unittest.TestCase):
         for case in WRITER['cases']:
             with self.subTest(case=case['name']):
                 oracle['validate'](case)
-                self.assertLessEqual(set(case['expected']), {'folder', 'othersFrom', 'state', 'problemKind', 'refusals', 'banner'})
+                self.assertLessEqual(set(case['expected']), {'folder', 'opened', 'selection', 'othersFrom', 'state', 'problemKind', 'refusals', 'banner'})
                 for step in case['steps']:
                     if step['op'] == 'refuse':
                         self.assertIn(step['code'], CODES)
@@ -98,7 +98,11 @@ class RefusalTests(unittest.TestCase):
                               'mid-call-failure-is-not-a-refusal', 'host-setup-broken-is-not-a-refusal',
                               'start-rejected-busy-no-fallback', 'start-rejected-then-mic-refused',
                               'start-rejected-and-both-native-refused', 'cap-keeps-first-15-and-latest',
-                              'message-cut-at-200-code-points'}, names)
+                              'message-cut-at-200-code-points', 'others-unavailable-me-keeps-recording',
+                              'start-rejected-without-code-falls-back', 'empty-message-is-omitted'}, names)
+        for case in WRITER['cases']:
+            self.assertIn('opened', case['expected'], case['name'])
+            self.assertIn('selection', case['expected'], case['name'])
 
     def test_literal_cap_and_message_cases(self):
         case = next(c for c in WRITER['cases'] if c['name'] == 'cap-keeps-first-15-and-latest')
@@ -157,6 +161,51 @@ class RefusalTests(unittest.TestCase):
                                          "            item = dict(item, side='browser')", 'unknown-side-is-not-shown'),
             'an unknown code has no line': ("if known else 'details.sources.failed'", "if known else None",
                                             'unknown-code-uses-sources-failed'),
+            # Review of #35 (59015e8).
+            'the fallback drops me': ("                opened.add('others')\n",
+                                      "                opened.add('others')\n            opened.discard('me')\n",
+                                      'start-rejected-falls-back-to-computer-sound'),
+            'a refused side still gets a track': ('    opened = requested - set(start)\n', '    opened = set(requested)\n',
+                                                  'mic-denied-others-keep-recording'),
+            'an others refusal ends everything': (
+                '    opened = requested - set(start)\n', "    opened = requested - set(start)\n    if 'others' in start: opened = set()\n",
+                'others-unavailable-me-keeps-recording'),
+            'othersFrom null when others is refused': (
+                "    source = request['others'] or None", "    source = None if 'others' in start else (request['others'] or None)",
+                'others-unavailable-me-keeps-recording'),
+            'the fallback needs a detail': (
+                " and browser.get('detail') != 'busy')", " and browser.get('detail') not in (None, 'busy'))",
+                'start-rejected-without-code-falls-back'),
+            'an empty message is kept': (
+                "if isinstance(step.get('message'), str) and step['message']:", "if isinstance(step.get('message'), str):",
+                'empty-message-is-omitted'),
+            'an empty error is kept': (
+                "if isinstance(result.get('error'), str) and result['error']:", "if isinstance(result.get('error'), str):",
+                'empty-error-is-omitted'),
+            'a refused me turn-on changes the selection': (
+                '                    continue  # a refused turn-on leaves the selection unchanged',
+                "                    if side == 'others': continue", 'cap-keeps-first-15-and-latest'),
+            'a refused turn-on writes a selection event': (
+                '            if changed:\n', '            if True:\n', 'late-turn-on-refused-is-appended'),
+            'the reader keeps an entry without a valid atMs': (
+                'if isinstance(at, bool) or not isinstance(at, (int, float)) or not 0 <= at <= MAX_MS:', 'if False:',
+                'an-entry-without-a-valid-atMs-is-skipped'),
+            'the reader only checks that side and code are strings': (
+                "if not word(item.get('side')) or not word(item.get('code')):",
+                "if not isinstance(item.get('side'), str) or not isinstance(item.get('code'), str):",
+                'an-entry-with-a-pattern-invalid-field-is-skipped'),
+            'the reader ignores detail and message': (
+                "    return message is None or isinstance(message, str) and len(message) <= MESSAGE", '    return True',
+                'an-entry-with-a-pattern-invalid-field-is-skipped'),
+            'the reader treats a null detail as malformed': (
+                "if item.get('detail') is not None and not word(item['detail']):", "if 'detail' in item and not word(item['detail']):",
+                'null-detail-and-message-are-absent'),
+            'identical lines are repeated': ('        if line not in shown:  # one line per distinct line, in first-occurrence order',
+                                             '        if True:', 'identical-lines-are-shown-once'),
+            'a stored startFailed gets a refused line': (
+                "REFUSED = ('permissionDenied', 'deviceUnavailable', 'startRejected')",
+                "REFUSED = ('permissionDenied', 'deviceUnavailable', 'startRejected', 'startFailed')",
+                'a-stored-start-failed-uses-sources-failed'),
         }
         for name, (old, new, case) in mutants.items():
             with self.subTest(mutant=name):
@@ -181,6 +230,21 @@ class RefusalTests(unittest.TestCase):
                     dict(item, code=''), dict(item, side='me too'), {'atMs': 0, 'side': 'me'}, dict(item, message=7)):
             with self.subTest(bad=bad):
                 self.assertFalse(valid([bad]))
+        self.assertTrue(valid([dict(item, detail=None, message=None)]))  # S-6: null means absent
+        # The reader's malformed rule is the item schema (a final newline aside: see SPEC).
+        well_formed = load()['well_formed']
+        for case in READERS['readers']:
+            for entry in case['stored'] if isinstance(case['stored'], list) else []:
+                if isinstance(entry, dict) and any(isinstance(v, str) and v.endswith('\n') for v in entry.values()):
+                    continue
+                with self.subTest(reader=case['name'], entry=entry):
+                    self.assertEqual(well_formed(entry), valid([entry]))
+        # Expected selection lists are valid session selection events.
+        for case in WRITER['cases']:
+            if case['expected'].get('selection'):
+                events = [dict(type='selection', **event) for event in case['expected']['selection']]
+                with self.subTest(selection=case['name']):
+                    validator.validate(dict(copy.deepcopy(base), events=events))
         # Refusals never change the session's existing rules.
         self.assertFalse(validator.is_valid(dict(copy.deepcopy(base), state='completed', problem='refused', refusals=[item])))
 

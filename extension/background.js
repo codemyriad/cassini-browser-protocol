@@ -305,9 +305,14 @@ async function start(mode, tabId = null, options = {}) {
     sessions.set(tab.id, session);
     notifyControl();
     const checkStarting = () => {
-      if (session.stopping || sessions.get(session.tabId) !== session) throw new Error("Recording could not start.");
-      if (options.expectedCallGeneration !== undefined && callInfo(session.tabId).generation !== session.callGeneration)
-        throw refused("That call is no longer active.", "gone");
+      // A call change or a closed tab stops the starting session; classify those
+      // aborts (D58 `gone`). Only an explicit Stop or cancel stays unclassified.
+      // callChanged() is the only place a live tab's generation changes.
+      if (session.callChanged) throw refused("That call is no longer active.", "gone");
+      if (session.stopping || sessions.get(session.tabId) !== session) {
+        if (pageState(session.tabId) === "closed") throw refused("That meeting is no longer available.", "gone");
+        throw new Error("Recording could not start.");
+      }
     };
     session.starting = (async () => {
       let streamId;

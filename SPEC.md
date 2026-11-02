@@ -226,10 +226,14 @@ Record, and setup or connection states (`temporary`, `noBrowser`, `unwritable`, 
 
 Each entry is `{atMs, side, code, detail?, message?}`:
 - `atMs`: milliseconds on the session timeline, 0 to 86460000 as for `gaps.atMs`. A start
-  refusal uses 0, also when it happened before the folder existed; a refused turn-on uses
-  its real, possibly fractional, time.
-- `side`, `code` and `detail` are open strings matching `^[A-Za-z]{1,32}$` as a whole string
-  (in Python, `re.fullmatch`; `$` alone also accepts a final newline). Known sides: `me`,
+  refusal uses 0, also when it happened before the folder existed. A refused turn-on, and a
+  refused resume in an existing folder (`startRejected`/`resumeRefused`, D58 #10), use their
+  real, possibly fractional, time.
+- `side`, `code` and `detail` are open strings matching `^[A-Za-z]{1,32}$`. Implementers MUST
+  apply the pattern to the whole string. JSON Schema patterns are ECMA-262, where `$` does
+  not match before a final newline, but Python `re.match`/`re.search` (and so Python
+  jsonschema) and ICU/NSRegularExpression do: use `re.fullmatch` in Python and `wholeMatch`,
+  or a pattern ending in `\z`, in Swift, so `"busy\n"` is rejected. Known sides: `me`,
   `others`, `browser`. Writers use only four codes: `permissionDenied` (me, others; the OS
   reports the permission denied at that moment, never inferred from silence),
   `deviceUnavailable` (me, others; any other open failure), `startRejected` (browser: Start
@@ -243,14 +247,16 @@ Each entry is `{atMs, side, code, detail?, message?}`:
 - `message`: optional raw text from whoever refused (the extension's `error`, a GStreamer
   error's domain, code and debug string, an OS status such as
   `AudioHardwareCreateProcessTap: -50`), never catalog copy, cut to its first 200 Unicode
-  code points (not bytes, UTF-16 units or graphemes). No message for a TCC denial.
+  code points (not bytes, UTF-16 units or graphemes). An empty text is omitted, as is the
+  message for a TCC denial.
 
 The list is in the order things happened, with at most 16 entries: when it is full, each
 newer refusal replaces the 16th entry, so the list keeps the first 15 plus the latest. It is
 omitted when empty. Checkpoint each entry atomically with any event or track change it
-explains. A refused side gets no track. The start `selection` records what was requested,
-not what opened; a refused turn-on writes no `selection` event and leaves the selection
-unchanged.
+explains. A refused side gets no track. The start `selection` and `othersSource` record what
+was requested, not what opened: a system side refused at start still has `othersSource`
+system/start and stays selected. A refused turn-on writes no `selection` event and leaves the
+selection unchanged.
 
 Writers MUST NOT let refusals change `state`, `problem`, `problemKind`, the `end` reason,
 `othersSource` or `captureOutcome`; these follow their existing rules from what did record,
@@ -261,9 +267,14 @@ refused nothing records: no folder is published (a folder whose title or notes t
 already typed is kept), and the refusals are shown only in the start banner.
 
 Readers are lenient: a `refusals` value that is not a list is ignored as a whole, a
-malformed entry is skipped, and unknown members are preserved. An unknown code shows
-`details.sources.failed` for that side, an unknown side is not shown and an unknown detail
-is ignored; all stay in Copy details. `recordingDetails.captureRecord.refusals` in
+malformed entry is skipped, and unknown members are preserved. An entry is malformed exactly
+when the schema's item rejects it with the patterns applied to the whole string: not an
+object; `atMs` missing, not a number or out of range; `side` or `code` missing or not
+matching; `detail` or `message` present, not null and invalid (a null one means absent).
+Details prints one line per distinct line, in first-occurrence order, so repeated entries
+show once. An unknown code, and a stored `startFailed`, show `details.sources.failed` for
+that side; an unknown side is not shown and an unknown detail is ignored. Copy details keeps
+every entry. `recordingDetails.captureRecord.refusals` in
 meeting.json is a verbatim copy. Session version stays 1. Shared cases, oracle and reader
 lines: `conformance/refusals/`.
 

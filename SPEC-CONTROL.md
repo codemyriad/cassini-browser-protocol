@@ -641,7 +641,7 @@ returns, or restoration once it returns with a new audio transport.
 ## Result codes (D58 / R79; extension 0.2.10)
 
 An `ok:false` result MAY carry `code`, a string matching `^[A-Za-z]{1,32}$` as a whole
-string, that classifies the refusal:
+string (not before a final newline: see SPEC.md, "Refusals"), that classifies the refusal:
 
 ```json
 {"type":"result","requestId":"record-1","ok":false,"error":"No audio is available from that meeting yet.","code":"noSources"}
@@ -661,7 +661,7 @@ know locally and record a code-less `startRejected` otherwise.
 | `busy` | a recording is already running, in that tab or (legacy) anywhere; also a legacy Stop for another tab |
 | `limit` | 128 requests are pending, or 100 recordings are running or starting |
 | `noSources` | the tab has no discovered meeting audio |
-| `gone` | the tab no longer exists, the call generation changed, or a Stop names a capture that is no longer active |
+| `gone` | the tab no longer exists or closes during Start, the call generation changed before or during Start, or a Stop names a capture that is no longer active |
 | `notWebPage` | the tab is not an http(s) page |
 | `pageUnreachable` | no page frame of the tab connected in time |
 | `invalid` | the command or its options are malformed, or ask for whole-tab capture |
@@ -669,8 +669,8 @@ know locally and record a code-less `startRejected` otherwise.
 | `workletBlocked` | the page blocked the AudioWorklet (capture.js) |
 | `audioBlocked` | the browser kept the page's audio suspended or refused playback (capture.js) |
 
-A Start the app cancelled itself (`Recording could not start.`) and a failure reported by
-the native host carry no code. `workletBlocked` and `audioBlocked` are set where capture.js
+Only a Start the app cancelled itself (`Recording could not start.`: its own Stop or
+cancel) and a failure reported by the native host, or the loss of that host, carry no code. `workletBlocked` and `audioBlocked` are set where capture.js
 raises the error; a tracks Start answers before the page's capture begins, so today these
 reach the app as a later source failure (`captureOutcome failed`, P10), not on a result.
 Shared wire cases: the `wire` list in `conformance/refusals/writer.json`.
