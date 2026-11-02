@@ -107,14 +107,16 @@ class SchemaTests(unittest.TestCase):
             self.assertEqual(expect, {'type': 'ack'})
             for key in CLOCK_FACTS:
                 valid = request.is_valid(dict(type='track', id='x', kind='remote', sampleRate=48000, channels=1, **{key: track[key]}))
+                # JSON Schema reads 9.0 and 1e3 as integers; the SPEC allows integer literals only.
+                valid = valid and (key == 'clockMethod' or type(track[key]) is int)
                 if valid and track[key] is not None:
                     kept[key].append(track[key])
                     self.assertEqual(case['tracks'][track['id']][key], track[key], (track['id'], key))
                 else:
                     invalid[key].append(track[key])
                     self.assertIsNone(case['tracks'][track['id']][key], (track['id'], key))
-        self.assertEqual(invalid, {'clockMethod': ['sampleClock', 123, None], 'clockUncertaintyMs': [-1, 1.5, 86400001, '9'],
-                                   'clockClampMs': [0, -3, 1.5, 86400001]})
+        self.assertEqual(invalid, {'clockMethod': ['sampleClock', 123, None], 'clockUncertaintyMs': [-1, 1.5, 86400001, '9', 9.0],
+                                   'clockClampMs': [0, -3, 1.5, 86400001, 1000.0]})
         self.assertTrue(all(kept.values()), 'every fact has a kept valid value next to invalid ones')
         cross = cases['track-clock-facts-are-not-cross-checked']
         declared = json.loads(cross['requests'][1])

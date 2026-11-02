@@ -2208,17 +2208,25 @@
       "{\"type\":\"track\",\"id\":\"d\",\"kind\":\"remote\",\"sampleRate\":48000,\"channels\":1,\"clockMethod\":null,\"clockUncertaintyMs\":86400000,\"clockClampMs\":1.5}",
       "{\"type\":\"track\",\"id\":\"e\",\"kind\":\"remote\",\"sampleRate\":48000,\"channels\":1,\"clockMethod\":\"roundTrip\",\"clockUncertaintyMs\":86400001,\"clockClampMs\":86400001}",
       "{\"type\":\"track\",\"id\":\"f\",\"kind\":\"remote\",\"sampleRate\":48000,\"channels\":1,\"clockMethod\":\"roundTrip\",\"clockUncertaintyMs\":\"9\",\"clockClampMs\":1}",
+      "{\"type\":\"track\",\"id\":\"g\",\"kind\":\"remote\",\"sampleRate\":48000,\"channels\":1,\"clockMethod\":\"outputTimestamp\",\"clockUncertaintyMs\":9.0,\"clockClampMs\":1e3}",
       "{\"type\":\"audio\",\"id\":\"a\",\"sequence\":0,\"offsetMs\":250,\"pcm\":\"AQACAA==\"}",
       "{\"type\":\"audio\",\"id\":\"b\",\"sequence\":0,\"offsetMs\":250,\"pcm\":\"AQACAA==\"}",
       "{\"type\":\"audio\",\"id\":\"c\",\"sequence\":0,\"offsetMs\":250,\"pcm\":\"AQACAA==\"}",
       "{\"type\":\"audio\",\"id\":\"d\",\"sequence\":0,\"offsetMs\":250,\"pcm\":\"AQACAA==\"}",
       "{\"type\":\"audio\",\"id\":\"e\",\"sequence\":0,\"offsetMs\":250,\"pcm\":\"AQACAA==\"}",
       "{\"type\":\"audio\",\"id\":\"f\",\"sequence\":0,\"offsetMs\":250,\"pcm\":\"AQACAA==\"}",
+      "{\"type\":\"audio\",\"id\":\"g\",\"sequence\":0,\"offsetMs\":250,\"pcm\":\"AQACAA==\"}",
       "{\"type\":\"stop\"}"
     ],
     "expect": [
       {
         "type": "started"
+      },
+      {
+        "type": "ack"
+      },
+      {
+        "type": "ack"
       },
       {
         "type": "ack"
@@ -2297,6 +2305,12 @@
         "clockMethod": "roundTrip",
         "clockUncertaintyMs": null,
         "clockClampMs": 1
+      },
+      "g": {
+        "kind": "remote",
+        "clockMethod": "outputTimestamp",
+        "clockUncertaintyMs": null,
+        "clockClampMs": null
       }
     }
   },

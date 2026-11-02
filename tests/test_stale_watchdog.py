@@ -160,7 +160,7 @@ class StaleWatchdogTests(unittest.TestCase):
             'a change departs the new generation too': (
                 'departed.update(g for g in documents.values() if g != document)', 'departed.update(documents.values())', {new_document}),
             # Mac review of #39: the 200 limit counts UTF-8 bytes, and a reused span
-            # id is refused, so it keeps its first declaration, open or ended.
+            # id changes no span, so it keeps its first declaration, open or ended.
             'a generation counts characters': ('0 < len(document.encode()) <= 200', '0 < len(document) <= 200', {over_bytes}),
             'a re-declaration is accepted': ("if kind == 'track' and frame['id'] in seen:", 'if False:', {reused}),
             'a re-declaration without a generation is accepted': (

@@ -26,9 +26,9 @@ rules above apply only to spans without one, and a generation that is not 1 to
 200 UTF-8 bytes counts as absent. A first generation still retires nothing, and
 none ever leaves the set.
 
-Track IDs are unique for the session, ended spans included: the host refuses a
-repeated declaration (error code source) and the extension fences one for an
-ended span locally. A
+Track IDs are unique for the session, ended spans included: the host acks an
+identical repeat of an open id and refuses a repeat of an ended one, and the
+extension fences a repeat of an ended span locally. Either way, a
 `track` for an id already declared on this transport therefore changes no span,
 open or ended, and keeps its first generation; like every frame it is activity.
 """
