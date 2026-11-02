@@ -18,11 +18,13 @@ generation is reported, stays armed. A retired span never arms the watchdog.
 
 A `track` may carry the documentGeneration the extension stamped (D61,
 extension 0.2.12). The app keeps the set of generations it has seen leave:
-navigating adds the current one, and a change from a known generation adds the
-old one and the generation of every open span other than the new one. A span
-with a generation is dormant exactly when its generation is in that set,
-checked at every evaluation; the declaration-order rules above apply only to
-spans without one. A first generation still retires nothing.
+navigating adds the current one and the generation of every open span, and a
+change from a known generation adds the old one and the generation of every open
+span other than the new one. A span with a generation is dormant exactly when its
+generation is in that set, checked at every evaluation; the declaration-order
+rules above apply only to spans without one, and a generation that is not 1 to
+200 UTF-8 bytes counts as absent. A first generation still retires nothing, and
+none ever leaves the set.
 """
 PCM_STALE_AFTER = 45000
 AUDIO_TRANSPORT = {'track', 'audio', 'sources', 'trackEnd', 'stop'}
@@ -30,6 +32,10 @@ AUDIO_TRANSPORT = {'track', 'audio', 'sources', 'trackEnd', 'stop'}
 
 def expired(now, last):
     return now - last >= PCM_STALE_AFTER
+
+
+def valid(document):
+    return isinstance(document, str) and 0 < len(document.encode()) <= 200
 
 
 def closed(frames, now):
@@ -64,6 +70,7 @@ def closed(frames, now):
             if page == 'navigating':
                 if generation is not None:
                     departed.add(generation)
+                departed.update(documents.values())  # every open span's document is gone
                 open_spans.clear()
                 departing = True
             elif page == 'present' or changed:
@@ -72,7 +79,7 @@ def closed(frames, now):
         if frame['frame'] not in AUDIO_TRANSPORT:
             continue  # control frames (ping/pong/meetings/status/...) never count
         last, kind = frame['atMs'], frame['frame']
-        if kind == 'track' and frame.get('documentGeneration') is not None:
+        if kind == 'track' and valid(frame.get('documentGeneration')):
             documents[frame['id']] = frame['documentGeneration']
         elif kind == 'track':
             declared.append(frame['id'])

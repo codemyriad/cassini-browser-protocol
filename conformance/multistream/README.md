@@ -14,7 +14,7 @@
   time out; track/sources keepalives, armed vs unarmed spans, the exact
   boundary and control frames that do not count; D57 document retirement, and
   since D61 tracks that carry a documentGeneration (dormant exactly when that
-  generation departed). Frames are in the app's own
+  generation departed; an invalid one counts as absent). Frames are in the app's own
   receipt order across the control connection and the audio transport.
   The Python policy is an independent oracle, not production code for either app.
 - `ownership.json`: literal half-open D49 and lost/restored seams. Desktop

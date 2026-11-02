@@ -621,12 +621,15 @@ relay that keeps the transport open but silent. Times are monotonic.
   open departing window (unless it arrives with pageState `navigating`) and
   retires nothing. Since extension 0.2.12 a span may carry its documentGeneration
   on `track` (D61). The app keeps the set of departed generations: on
-  navigating, the current documentGeneration joins it; when the
-  documentGeneration changes from a known one, the old one joins it, and so
-  does the generation of every open span other than the new one. A span with a
-  documentGeneration is dormant exactly when its generation is in that set,
-  evaluated at every check; the declaration-order rules above apply only to
-  spans without one, and an invalid generation counts as absent. A track's
+  navigating, the current documentGeneration joins it, and so does the
+  generation of every open span; when the documentGeneration changes from a
+  known one, the old one joins it, and so does the generation of every open
+  span other than the new one. A span with a documentGeneration is dormant
+  exactly when its generation is in that set, evaluated at every check; the
+  declaration-order rules above apply only to spans without one, and a
+  generation that is not 1 to 200 UTF-8 bytes counts as absent. No generation
+  ever leaves the set, so the spans of a document restored from the
+  back/forward cache stay dormant: that only delays stale detection. A track's
   generation is not news about the document: only status and meetings rows
   move the current one. A status that arrives after a newer document's span
   can retire that span; its PCM is still recorded. The app applies these
