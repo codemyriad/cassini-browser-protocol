@@ -47,6 +47,22 @@
       ]
     },
     {
+      "name": "a-fractional-start-offset-compares-in-session-samples",
+      "note": "Convert the ranges with the session origin, never track-relative: subtracting startOffsetMs (16000.48 samples) before the ceil keeps [2000, 2001] and drops [3000, 3001].",
+      "track": {"startOffsetMs": 1000.03, "sampleRate": 48000, "frames": 192000,
+                "gaps": [{"atMs": 2000.5, "durationMs": 1000, "frames": 48000, "kind": "jump"}]},
+      "words": [
+        {"ms": [1000, 1000], "keep": false},
+        {"ms": [1000, 1001], "keep": true},
+        {"ms": [1999, 2001], "keep": true},
+        {"ms": [2000, 2001], "keep": false},
+        {"ms": [3000, 3000], "keep": false},
+        {"ms": [3000, 3001], "keep": true},
+        {"ms": [5000, 5000], "keep": true},
+        {"ms": [5000, 5001], "keep": false}
+      ]
+    },
+    {
       "name": "prefix-padding-is-absence",
       "track": {"startOffsetMs": 8000, "sampleRate": 48000, "frames": 96000,
                 "gaps": [{"atMs": 8000, "durationMs": 500, "frames": 24000, "kind": "prefix"}]},

@@ -203,10 +203,11 @@ The R71 active rule, as `activity.py` implements it on the stored 48 kHz PCM:
 - A window is decoded when it holds at least 16 active frames, counting the partial frames at
   its edges.
 
-`activeSeconds` and `personActiveSeconds` are bands: the oracle at threshold
-+ACTIVE_TOLERANCE_DB, floored to 0.1 s, and at -ACTIVE_TOLERANCE_DB, ceiled to 0.1 s. They
-cover the D11.2 16 kHz FIR, whole-dB level codes and other meter details. An app's own
-values must fall inside. No person's band straddles MIN_ACTIVE_SECONDS, so `fallback` is
+`activeSeconds` is a band per track: the oracle at threshold +ACTIVE_TOLERANCE_DB, floored
+to 0.1 s, and at -ACTIVE_TOLERANCE_DB, ceiled to 0.1 s. It covers the D11.2 16 kHz FIR,
+whole-dB level codes and other meter details. `personActiveSeconds` is the sum of its
+tracks' bands, so an app whose track values lie in their bands lies in the pooled band too.
+An app's own values must fall inside. No person's band straddles MIN_ACTIVE_SECONDS, so `fallback` is
 exact, and the windows do not change across the band, so `fallbackWindowsMs` is exact too.
 In session 3 source-d falls back only when pooled. In session 1 only the mic falls back.
 
@@ -219,30 +220,35 @@ integer session ms, and its midpoint is M = 8 × (startMs + endMs) in 16 kHz ses
 A speaker's gap ranges are the non-overflow gap ranges of its tracks (prefix included), as
 [G0, G1) with the presence conversion. Two consecutive words of one speaker are in different
 turns when G0 < max(M1, M2) and min(M1, M2) < G1 for one of them. This applies to every way
-words join, including the 400 ms seam rejoin. Pauses inside presence still join. So do the
+words join, including the 400 ms seam rejoin, where the two words are the last word of the
+open turn and the first word of the fragment that would join it. Pauses inside presence still join. So do the
 time between two spans of one speaker and non-owned time, since neither is a gap range.
 An overflow marker never splits. Turn grouping stays presentation (D47).
 
 **3. Words outside a track's presence are not written.** On every path (VAD and fallback),
 a word is written only when its M lies in one of its track's present-or-unknown ranges
-[a, b) (gaps.presence with that track's ownership). A track without `gaps` is unknown and
-keeps its words, and so does the time after an overflow marker. At a seam, every word is
+[a, b) (gaps.presence with that track's ownership), compared in session samples: never
+subtract a fractional startOffsetMs before rounding. A track without `gaps` is unknown, and
+so is the time after an overflow marker: words there are kept, still only inside the span
+extent and ownership. At a seam, every word is
 written by exactly one of the two tracks that carry the call. Use the exact M: rounding the
 midpoint to whole ms, half up, gets `[40999, 41000]` and `[47999, 48000]` on a-long wrong.
 A word clamped to zero length at the end of presence (G11) is not written. It is a
 write-time rule, not a display filter (D47).
 
 `writedown.json` adds synthetic tracks for what the corpus does not have: no `gaps`, an
-overflow marker, ownership over unknown presence, fractional gap edges, a prefix, a 300 ms
-gap inside the seam rejoin, and words that overlap or straddle a gap.
+overflow marker, ownership over unknown presence, fractional gap edges, a fractional
+startOffsetMs, a prefix, a 300 ms gap inside the seam rejoin, and words that overlap or
+straddle a gap.
 
 **Tests.** `tests/test_fallback_corpus.py` checks every literal against the oracles, the
 seam property, and a guard that some person falls back only when pooled while another
 multi-track person does not, with one failing data mutation per guard message. Code mutants
 of the oracles must fail the same literals: pooling per track, presence, ownership or gap
 ranges ignored, no run-length filter, no floor margin, no 10 s floor minimum, a midpoint
-rounded half up, a closed range, unknown presence dropped, turns split on word edges or on
-an overflow, and a margin pooled or without its minimum. Rules the corpus cannot show
+rounded half up, a closed range, unknown presence dropped, presence compared track-relative,
+turns split on word edges, on an overflow or on a gap range closed at its end, and a margin
+pooled or without its minimum. Rules the corpus cannot show
 (near-silence and the floor, mean removal) have synthetic checks.
 
 ## Adoption and browser tests

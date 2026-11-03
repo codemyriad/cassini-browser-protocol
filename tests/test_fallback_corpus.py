@@ -40,6 +40,7 @@ def pooling(data, C):
     """Literal-level guard: the corpus must exercise pooling, with no undecided person."""
     least = C['MIN_ACTIVE_SECONDS']
     pooled_only = negative = False
+    unsummed = []
     for case in data['sessions']:
         literal = data['expected']['sessions'][case['id']]
         bands = {}
@@ -51,12 +52,16 @@ def pooling(data, C):
             low, high = literal['personActiveSeconds'][person]
             assert low >= least or high < least, 'D63 straddle: a pooled band straddles MIN_ACTIVE_SECONDS: ' + person
             assert literal['fallback'][person] is (low >= least), 'D63 fallback literal disagrees with its band: ' + person
+            # An app whose track values lie in their bands must lie in the pooled band too.
+            if [round(10 * low), round(10 * high)] != [sum(round(10 * v[0]) for v in spans), sum(round(10 * v[1]) for v in spans)]:
+                unsummed.append(person)
             if len(spans) >= 2 and all(h < least for _, h in spans) and low >= least:
                 pooled_only = True
             if len(spans) >= 2 and high < least:
                 negative = True
     assert pooled_only, 'D63 pooling: no person with two or more spans falls back only when pooled'
     assert negative, 'D63 pooling: no person with two or more spans stays under MIN_ACTIVE_SECONDS pooled'
+    assert not unsummed, "D63 pooled band: personActiveSeconds is not the sum of its tracks' activeSeconds bands: " + repr(unsummed)
 
 
 class Measured:
@@ -100,8 +105,9 @@ def check_activity(data, folders, C):
         for person, (strict, loose) in people.items():
             low, high = (_ms(v) for v in literal['personActiveSeconds'][person])
             strict, loose = activity.person(strict), activity.person(loose)
-            assert low <= strict * activity.FRAME_MS < low + STEP_MS, ('personActiveSeconds low', person, strict)
-            assert high - STEP_MS < loose * activity.FRAME_MS <= high, ('personActiveSeconds high', person, loose)
+            # The band is the sum of the track bands (pooling guard), so it holds the oracle's pooled values.
+            assert low <= strict * activity.FRAME_MS, ('personActiveSeconds low', person, strict)
+            assert loose * activity.FRAME_MS <= high, ('personActiveSeconds high', person, loose)
             # VAD rejecting everything: zero words on every track.
             assert activity.fires(strict, 0) == activity.fires(loose, 0) == literal['fallback'][person], ('fallback', person)
 
@@ -266,6 +272,7 @@ def _pooling_mutations():
         ('D63 straddle', literal(first, ['personActiveSeconds', 'source-b'], [9.6, 15.1])),
         ('D63 fallback literal', literal(first, ['fallback', 'me'], False)),
         ('D63 people', lambda d: d['expected']['sessions'][third]['fallback'].pop('me')),
+        ('D63 pooled band', literal(third, ['personActiveSeconds', 'source-d'], [19.2, 21.7])),
         ('D63 pooling: no person with two or more spans stays under',
          lambda d: [d['expected']['sessions'][first]['personActiveSeconds'].update({k: [15.0, 16.0]}) or
                     d['expected']['sessions'][first]['fallback'].update({k: True}) for k in ('others', 'source-a', 'source-b')]),
@@ -319,6 +326,21 @@ class VectorTests(unittest.TestCase):
             m = writedown.midpoint(word)
             return any(a <= m < b for a, b in writedown.gaps.presence(track, ownership)['present'])
 
+        def keep_track_relative(track, word, ownership=None):  # ranges converted after subtracting the origin
+            origin = writedown.Fraction(str(track['startOffsetMs']))
+            shifted = dict(track, startOffsetMs=0)
+            if track.get('gaps') is not None:
+                shifted['gaps'] = [dict(g, atMs=writedown.Fraction(str(g['atMs'])) - origin) for g in track['gaps']]
+            owned = None if ownership is None else [[writedown.Fraction(str(a)) - origin, writedown.Fraction(str(b)) - origin]
+                                                    for a, b in ownership]
+            found = writedown.gaps.presence(shifted, owned)
+            m = writedown.midpoint(word) - 16 * origin
+            return any(a <= m < b for a, b in found['present'] + found['unknown'])
+
+        def split_closed(ranges, first, second):
+            m1, m2 = writedown.midpoint(first), writedown.midpoint(second)
+            return any(g0 <= max(m1, m2) and min(m1, m2) <= g1 for g0, g1 in ranges)
+
         def split_on_edges(ranges, first, second):
             return any(g0 < 16 * second[0] and 16 * first[1] < g1 for g0, g1 in ranges)
 
@@ -331,9 +353,11 @@ class VectorTests(unittest.TestCase):
             'closed presence range': ('keep', keep_closed),
             'unknown presence dropped': ('keep', keep_present_only),
             'ownership ignored': ('keep', lambda track, word, ownership=None: keep(track, word)),
+            'presence compared track-relative': ('keep', keep_track_relative),
             'gap ranges ignored': ('keep', lambda track, word, ownership=None: keep(dict(track, gaps=[]), word, ownership)),
             'turns never split': ('split', lambda ranges, first, second: False),
             'turns split on word edges': ('split', split_on_edges),
+            'gap range closed at its end': ('split', split_closed),
             'overflow splits': ('breaks', breaks_with_overflow),
             'other speakers gaps split': ('breaks', lambda tracks: breaks(tracks) + [[656000, 768000], [1120000, 1152000], [864000, 888000]]),
         }

@@ -49,12 +49,13 @@
           {"ms": [62000, 68000], "people": ["me", "source-b"]}
         ],
         "personFloorDb": {"me": [-71, -65], "others": [-70, -64], "source-a": [-58, -52], "source-b": [-83, -77]},
-        "personActiveSeconds": {"me": [18.0, 21.6], "others": [5.2, 6.0], "source-a": [5.0, 5.5], "source-b": [9.6, 14.1]},
+        "personActiveSeconds": {"me": [18.0, 21.6], "others": [5.1, 6.0], "source-a": [4.9, 5.5], "source-b": [9.5, 14.1]},
         "fallback": {"me": true, "others": false, "source-a": false, "source-b": false},
         "turnBreaksMs": {"me": [], "others": [[54000, 55500]], "source-a": [[41000, 48000]], "source-b": [[70000, 72000]]},
         "turnCases": [
           {"speaker": "source-a", "words": [[40240, 40500], [40530, 41010], [48440, 48700], [48730, 49690]], "turns": [2, 2]},
           {"speaker": "source-a", "words": [[40500, 40900], [47990, 48300]], "turns": [1, 1]},
+          {"speaker": "source-a", "words": [[47995, 48005], [48440, 48700]], "turns": [2]},
           {"speaker": "source-b", "words": [[67000, 67500], [69500, 69990], [72000, 72400], [72500, 73000]], "turns": [2, 2]},
           {"speaker": "source-b", "words": [[60000, 60500], [61200, 61700], [64000, 64400]], "turns": [3]},
           {"speaker": "others", "words": [[53500, 53900], [55600, 56000]], "turns": [1, 1]},
@@ -138,7 +139,7 @@
         "speechMs": {"me": 6000, "source-d": 30000},
         "overlaps": [],
         "personFloorDb": {"me": [-67, -61], "source-d": [-65, -59]},
-        "personActiveSeconds": {"me": [3.0, 3.8], "source-d": [19.2, 21.7]},
+        "personActiveSeconds": {"me": [3.0, 3.8], "source-d": [19.1, 21.7]},
         "fallback": {"me": false, "source-d": true},
         "turnBreaksMs": {"me": [], "source-d": [[34000, 36000]]},
         "turnCases": [
