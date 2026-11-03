@@ -115,20 +115,35 @@ remote track carries A. It overlaps session 1 in wall time from 12:00:20 to 12:0
 
 **Tests.**
 - `shape()` asserts one requirement per message.
-- The self-test applies one data mutation per requirement. Each must fail with its own
-  message. These include the audit probes: a-short moved to 0, the mic's 60–68 s speech
-  removed, and a-long shortened by 1 ms.
+  - **R4 D49 and seams.** A system/browser pair only counts when both tracks carry the
+    same call over the overlap: the same voice and phase, noise bed and bleeds. The D49
+    overlap must carry that call on both sides of callConnected.
+  - **R6 bleeds.** Every bleed has windows where its source speaks and the target is
+    present. Each direction needs a BLEED_DB bleed that is audible somewhere the target
+    itself is quiet.
+  - **R6 voices.** Each person speaks with one pinned voice.
+- The self-test applies at least one data mutation per requirement. Each must fail with
+  that requirement's message. These include the audit probes (a-short moved to 0, the
+  mic's 60–68 s speech removed, a-long shortened by 1 ms) and the review probes: a wrong
+  seam partner, out-of-phase or reseeded overlaps, a system track that stops at
+  callConnected, empty or silent bleed windows, an echo masked by the target's own
+  speech, and two voices for one person.
 - `tests/test_corpus_oracles.py` patches `gaps.presence` (ignoring gap ranges, or
   ignoring ownership), `floor.person` (pooled by max or by mean) and `floor.span`
-  (ignoring presence). Under each mutant, the same `expected` check must fail.
+  (ignoring presence, or ignoring ownership). Under each mutant, the same `expected`
+  check must fail. Stored gaps are zero-filled and the corpus has no DC offset, so the
+  span mutant that ignores gap ranges only and a level without mean removal must fail
+  synthetic oracle checks instead.
 - The materialized checks cover:
   - stored lengths and zero-filled gaps
-  - both bleed directions at BLEED_DB ±0.1 dB
+  - every expected bleed at BLEED_DB ±0.1 dB, the target minus its own pinned carrier
+    (so b-return into the mic is checked under my speech)
   - the three-voice residue at 60–62 s after subtracting the pinned A and C carriers
-  - identical D49 and seam overlaps
+  - byte-identical D49 and seam overlaps, for the pairs `shape()` finds
   - the noise level
   - the oracle floors inside their bands
-  - the pinned digests
+  - the pinned digests. Without the repo's Python test deps, `/usr/bin/python3 make.py
+    DEST && (cd DEST && shasum -a 256 -c PATH/TO/materialized.sha256)` checks the same pin.
 
 ## Adoption and browser tests
 

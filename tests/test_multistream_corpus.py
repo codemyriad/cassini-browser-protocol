@@ -1,8 +1,10 @@
 """D52 corpus v2 guard: shape(), hand-written expected literals and the stored WAVs.
 
 Every threshold comes from corpus.json `constants`; every expected value is a
-literal in corpus.json `expected`, checked here against the independent oracles
-(ownership.py, ../gaps/gaps.py, floor.py), never against make.py.
+literal in corpus.json `expected`. Ownership, presence, gaps, speech, overlaps and
+floors are checked against the independent oracles (ownership.py, ../gaps/gaps.py,
+floor.py), never against make.py; only the written session.json facts
+(captureOutcome, droppedFrames) come from make.metadata(), the document under test.
 """
 from array import array
 import copy
@@ -32,7 +34,6 @@ corpus = _module('corpus', MULTISTREAM / 'make.py')
 floor = _module('floor', MULTISTREAM / 'floor.py')
 gaps = floor.gaps  # one module object, so a patched gaps.presence reaches floor.span too
 ownership = _module('ownership', MULTISTREAM / 'ownership.py')
-annotations = _module('annotations', ROOT / 'conformance/check-session-events.py')
 
 
 # Half-open millisecond ranges.
@@ -105,17 +106,49 @@ def overlaps(people):
     return result
 
 
+def presence_windows(track):
+    return track.get('presenceWindows', extent(track))
+
+
+def spoken(track):
+    """Where a track's own voice plays: its speech windows inside its presence."""
+    return intersect([w[:2] for w in track['speechWindows']], presence_windows(track))
+
+
+def carried(track, span):
+    """What a track itself carries over `span`, by content key: voice and phase
+    (phaseMs defaults to the track start), noise bed, and bleeds, each clipped to
+    its presence. Two tracks with equal maps over a span hold the same call there."""
+    present = intersect(span, presence_windows(track))
+    items = {}
+    for w in track['speechWindows']:
+        key = ('speech', track['speech'], w[2] if len(w) > 2 else track['startMs'])
+        items.setdefault(key, []).extend(intersect([w[:2]], present))
+    if track.get('noise'):
+        bed = track['noise']
+        items.setdefault(('noise', bed['seed'], bed['originMs'], bed['dbfs']), []).extend(intersect(bed['windows'], present))
+    for bleed in track.get('bleeds', []):
+        items.setdefault(('bleed', bleed['from'], bleed['db']), []).extend(intersect(bleed['windows'], present))
+    return {key: union(ranges) for key, ranges in items.items() if union(ranges)}
+
+
 def seam(case, at, minimum):
-    """Physical system/browser overlaps around `at` of at least `minimum` ms with speech on both."""
+    """System/browser pairs that physically overlap around `at` and carry the same call
+    there (same voice, phase, noise and bleeds), with at least `minimum` ms of that
+    call's speech. Returns (system id, browser id, overlap, shared speech ranges)."""
     result = []
     for system in (t for t in case['tracks'] if t['kind'] == 'system'):
         for browser in (t for t in case['tracks'] if 'sourceTrackId' in t):
             both = intersect(extent(system), extent(browser))
             if not both or not both[0][0] <= at <= both[0][1] or total(both) < minimum:
                 continue
-            if all(total(intersect(t['speechWindows'], both)) >= minimum for t in (system, browser)):
-                result.append(both[0])
-    return union(result)
+            call = carried(system, both)
+            if call != carried(browser, both):
+                continue
+            talk = union([r for key, ranges in call.items() if key[0] == 'speech' for r in ranges])
+            if total(talk) >= minimum:
+                result.append((system['id'], browser['id'], both[0], talk))
+    return result
 
 
 def wall(case):
@@ -148,12 +181,15 @@ def shape(data, C):
     sources = iter(e['source'] for e in case['events'] if e['type'] == 'othersSource')
     assert all(wanted in sources for wanted in ('browser', 'system', 'browser')), \
         'R4 source switch: no browser -> system -> browser sequence'
-    connected = [e['atMs'] for e in case['events'] if e.get('reason') == 'callConnected']
-    assert connected and all(seam(case, at, C['D49_OVERLAP_MS']) for at in connected), \
-        'R4 D49: callConnected has no system/browser physical overlap of D49_OVERLAP_MS with speech on both'
+    connected = {e['atMs']: seam(case, e['atMs'], C['D49_OVERLAP_MS']) for e in case['events'] if e.get('reason') == 'callConnected'}
+    assert connected and all(connected.values()), \
+        'R4 D49 overlap: callConnected has no system/browser physical overlap carrying one call with D49_OVERLAP_MS of speech'
+    assert all(any(total(intersect(talk, [[both[0], at]])) and total(intersect(talk, [[at, both[1]]]))
+                   for _, _, both, talk in pairs) for at, pairs in connected.items()), \
+        'R4 D49 straddle: no D49 overlap carries the call on both sides of callConnected'
     seams = [e['atMs'] for e in case['events'] if e.get('reason') in ('lost', 'restored')]
     assert seams and all(seam(case, at, C['SEAM_OVERLAP_MS']) for at in seams), \
-        'R4 seams: a lost/restored seam has no physical overlap of SEAM_OVERLAP_MS with speech on both'
+        'R4 seams: a lost/restored seam has no physical overlap carrying one call with SEAM_OVERLAP_MS of speech'
 
     assert any(g['kind'] == 'jump' and g['frames'] >= data['rate'] and g['durationMs'] > 0 for t in tracks for g in t.get('gaps', [])), \
         'R5 counted gap: no jump gap range of at least one second of frames'
@@ -166,8 +202,15 @@ def shape(data, C):
             'R5 stored gaps disagree with presence: ' + track['id']
     assert any(t.get('droppedFrames', 0) > 0 for t in tracks), 'R5 droppedFrames: no track carries a producer drop count'
 
+    for track in tracks:
+        for b in track.get('bleeds', []):
+            assert b['windows'] and not subtract(b['windows'], intersect(spoken(by_id[b['from']]), presence_windows(track))), \
+                'R6 bleed windows: a bleed has no windows, or one where its source is silent or the target absent: ' + track['id']
+
     def bled(into, source):
-        return any(b['db'] == C['BLEED_DB'] and into(t) and source(by_id[b['from']]) for t in tracks for b in t.get('bleeds', []))
+        """A BLEED_DB bleed between those kinds, audible somewhere the target itself is quiet."""
+        return any(b['db'] == C['BLEED_DB'] and into(t) and source(by_id[b['from']]) and total(subtract(b['windows'], spoken(t)))
+                   for t in tracks for b in t.get('bleeds', []))
     mic = lambda t: t['kind'] in ('microphone', 'local')
     remote = lambda t: 'sourceTrackId' in t
     assert bled(remote, mic), 'R6 bleed mic into a remote: no BLEED_DB bleed of the microphone into a browser track'
@@ -175,7 +218,11 @@ def shape(data, C):
     people = speech(case)
     assert any(total(intersect(people['me'], ranges)) >= C['OVERLAP_MIN_MS'] for key, ranges in people.items() if key != 'me'), \
         'R6 double-talk: my speech overlaps no other person by OVERLAP_MIN_MS'
-    voice = {speaker(t): data['speech'][t['speech']]['sha256'] for t in tracks}
+    voices = {}
+    for track in tracks:
+        voices.setdefault(speaker(track), set()).add(data['speech'][track['speech']]['sha256'])
+    assert all(len(v) == 1 for v in voices.values()), 'R6 one voice per person: a person speaks with two pinned voices'
+    voice = {key: min(v) for key, v in voices.items()}
     remotes = [key for key in people if key != 'me']
     assert any(total(intersect(people[x], people[y])) >= C['OVERLAP_MIN_MS'] and voice[x] != voice[y]
                for x in remotes for y in remotes if x < y), \
@@ -205,10 +252,11 @@ def check_expected(data):
         people = speech(case)
         assert {key: total(ranges) for key, ranges in people.items()} == literal['speechMs'], ('speechMs', case['id'])
         assert overlaps(people) == literal['overlaps'], ('overlaps', case['id'])
-        assert {speaker(t): t['speech'] for t in case['tracks']} == literal['voices'], ('voices', case['id'])
-        connected = [seam(case, e['atMs'], 1) for e in case['events'] if e.get('reason') == 'callConnected']
-        assert (connected[0][0] if connected else None) == literal['d49Overlap'], ('d49Overlap', case['id'])
-        seams = [r for e in case['events'] if e.get('reason') in ('lost', 'restored') for r in seam(case, e['atMs'], 1)]
+        assert {speaker(t) for t in case['tracks']} == set(literal['voices']) and \
+            all(t['speech'] == literal['voices'][speaker(t)] for t in case['tracks']), ('voices', case['id'])
+        connected = [union(p[2] for p in seam(case, e['atMs'], 1)) for e in case['events'] if e.get('reason') == 'callConnected']
+        assert (connected[0][0] if connected and connected[0] else None) == literal['d49Overlap'], ('d49Overlap', case['id'])
+        seams = [r for e in case['events'] if e.get('reason') in ('lost', 'restored') for r in union(p[2] for p in seam(case, e['atMs'], 1))]
         assert seams == literal['seamOverlaps'], ('seamOverlaps', case['id'])
         assert sorted([b['from'], t['id'], w] for t in case['tracks'] for b in t.get('bleeds', []) for w in b['windows']) == \
             sorted([b['from'], b['into'], b['ms']] for b in literal['bleeds']), ('bleeds', case['id'])
@@ -284,6 +332,25 @@ def _mutations():
         mic = _track(first(data), 'mic')
         mic['speechWindows'] = [w for w in mic['speechWindows'] if w[0] != 60000]
 
+    def b_ends_before_the_lost_seam(data):  # adversarial M1a: only a-long (C) still overlaps system-fallback
+        _track(first(data), 'b').update(endMs=49000, speechWindows=[[18000, 28000, 17500]], presenceWindows=[[18000, 49000]])
+
+    def b_return_starts_after_the_restored_seam(data):  # adversarial M1b: only a-return (C) still overlaps
+        track = _track(first(data), 'b-return')
+        track.update(startMs=61000, presenceWindows=[[61000, 70000], [72000, 90000]],
+                     speechWindows=[[61000, 68000, 20000], [72000, 84000, 20000]])
+        track['noise']['windows'] = [[61000, 70000], [72000, 90000]]
+        _track(first(data), 'mic')['bleeds'][1]['windows'] = [[61000, 68000]]
+
+    def phase(identifier, index, value):  # adversarial M4, M4b, M14, M21: one track out of phase
+        return lambda data: _track(first(data), identifier)['speechWindows'][index].__setitem__(2, value)
+
+    def bleed_windows(identifier, windows):  # adversarial M2, M3, M3b
+        def mutate(data):
+            for bleed in _track(first(data), identifier)['bleeds']:
+                bleed['windows'] = windows
+        return mutate
+
     def short_jumps(data):
         for track in first(data)['tracks']:
             for gap in track.get('gaps', []):
@@ -295,16 +362,31 @@ def _mutations():
         ('R2 sparse span', lambda d: _track(first(d), 'a-long').update(presenceWindows=[[40000, 50000]])),
         ('R3 unequal spans', lambda d: _track(first(d), 'a-long').update(endMs=49999)),  # audit probe: 1 ms shorter
         ('R4 source switch', drop_restored),
-        ('R4 D49', lambda d: _track(first(d), 'system').update(endMs=19000)),
+        ('R4 D49 overlap', lambda d: _track(first(d), 'system').update(endMs=19000)),
+        ('R4 D49 overlap', phase('system', 0, 17000)),
+        ('R4 D49 overlap', phase('b', 0, 18000)),
+        ('R4 D49 straddle', lambda d: _track(first(d), 'system').update(endMs=20000)),  # adversarial M5
         ('R4 seams', lambda d: _track(first(d), 'system-fallback').update(startMs=50000)),
+        ('R4 seams', b_ends_before_the_lost_seam),
+        ('R4 seams', b_return_starts_after_the_restored_seam),
+        ('R4 seams', phase('system-fallback', 0, 48000)),
+        ('R4 seams', phase('b-return', 0, 21000)),
+        ('R4 seams', lambda d: _track(first(d), 'system-fallback')['noise'].update(seed='system-fallback')),  # M22
         ('R5 counted gap', short_jumps),
         ('R5 presence and gaps disagree', lambda d: _track(first(d), 'a-long').update(gaps=[])),
         ('R5 stored gaps disagree', lambda d: _track(first(d), 'b-return')['gaps'][0].update(atMs=71000)),
         ('R5 droppedFrames', every('droppedFrames')),
+        ('R6 bleed windows', lambda d: [bleed_windows(t['id'], [])(d) for t in first(d)['tracks'] if t.get('bleeds')]),
+        ('R6 bleed windows', bleed_windows('b', [[24000, 28000]])),  # my echo where I am silent (M3)
+        ('R6 bleed windows', bleed_windows('b', [[38000, 46000]])),
+        ('R6 bleed windows', lambda d: _track(first(d), 'mic')['bleeds'][0].update(windows=[[38000, 46000]])),  # b silent
         ('R6 bleed mic into a remote', lambda d: _track(first(d), 'b').pop('bleeds')),
+        ('R6 bleed mic into a remote', lambda d: _track(first(d), 'b')['speechWindows'].append([32000, 38000])),  # echo masked
+        ('R6 bleed remote into the mic', lambda d: _track(first(d), 'mic')['speechWindows'].append([20000, 28000])),
         ('R6 bleed remote into the mic', lambda d: [b.update(db=-30) for b in _track(first(d), 'mic')['bleeds']]),
         ('R6 double-talk', no_mic_overlap),  # audit probe: the mic's 60-68 s speech removed
-        ('R6 overlapping remotes', lambda d: _track(first(d), 'a-return').update(speech='B')),
+        ('R6 one voice per person', lambda d: _track(first(d), 'a-long').update(speech='B')),  # adversarial M9
+        ('R6 overlapping remotes', lambda d: [t.update(speech='B') for t in first(d)['tracks'] if t.get('sourceTrackId') == 'source-a']),
         ('R6 voices', lambda d: [t.update(speech='A') for t in first(d)['tracks'] if t.get('sourceTrackId') == 'source-a']),
         ('R7 sessions', lambda d: d['sessions'][1].update(id=d['sessions'][0]['id'])),
         ('R7 concurrent folders', lambda d: d['sessions'][1].update(createdAt='2026-10-31T12:01:20Z')),
@@ -318,6 +400,9 @@ class CorpusTests(unittest.TestCase):
 
     def test_shape_and_real_pinned_speech(self):
         shape(self.data, self.C)
+        # Loaded here so the rest of the guard (the digest pin included) runs on a bare
+        # /usr/bin/python3; the session schema check needs jsonschema.
+        annotations = _module('annotations', ROOT / 'conformance/check-session-events.py')
         for session in self.data['sessions']:
             annotations.validate(corpus.metadata(session))
         document = corpus.metadata(self.data['sessions'][0])
@@ -333,8 +418,8 @@ class CorpusTests(unittest.TestCase):
         self.assertTrue(all(any(samples) for samples in self.speech.values()))
 
     def test_every_shape_requirement_has_a_failing_mutation(self):
-        for message, mutate in _mutations():
-            with self.subTest(message):
+        for index, (message, mutate) in enumerate(_mutations()):
+            with self.subTest(message, index=index):
                 data = copy.deepcopy(self.data)
                 mutate(data)
                 with self.assertRaisesRegex(AssertionError, '^' + message):
@@ -411,15 +496,32 @@ class MaterializedCorpusTests(unittest.TestCase):
         self.assertEqual(mic, self.read(self.second, 'independent', 12000, 13000))
         self.assertTrue(any(mic))
 
-    def test_bleed_in_both_directions(self):
-        C = self.C
-        for into, source, (left, right) in (('mic', 'b', (20000, 28000)), ('b', 'mic', (32000, 38000))):
+    def own(self, case, identifier, left_ms, right_ms):
+        """A track's own pinned voice over [left_ms, right_ms), from the carrier rule alone."""
+        track = _track(case, identifier)
+        self.assertFalse(track.get('noise'), identifier)
+        out = [0.0] * ((right_ms - left_ms) * 48)
+        for w in track['speechWindows']:
+            for a, b in intersect(intersect([w[:2]], presence_windows(track)), [[left_ms, right_ms]]):
+                out[(a - left_ms) * 48:(b - left_ms) * 48] = self.carrier(track['speech'], a, b, w[2] if len(w) > 2 else track['startMs'])
+        return out
+
+    def test_every_expected_bleed_is_stored(self):
+        # Each expected bleed, including b-return into the mic under my own speech:
+        # the stored target minus its own carrier is the stored source at BLEED_DB.
+        C, case = self.C, self.data['sessions'][0]
+        bleeds = self.data['expected']['sessions'][case['id']]['bleeds']
+        self.assertEqual({(_track(case, b['from'])['kind'] == 'microphone', _track(case, b['into'])['kind'] == 'microphone')
+                          for b in bleeds}, {(True, False), (False, True)})
+        gain = 10 ** (C['BLEED_DB'] / 20)
+        for bleed in bleeds:
+            (left, right), into, source = bleed['ms'], bleed['into'], bleed['from']
             with self.subTest(into=into, source=source):
-                bled, original = self.read(self.first, into, left, right), self.read(self.first, source, left, right)
-                ratio = sum(x * x for x in bled) / sum(x * x for x in original)
+                echo = [x - o for x, o in zip(self.read(self.first, into, left, right), self.own(case, into, left, right))]
+                original = self.read(self.first, source, left, right)
+                ratio = sum(x * x for x in echo) / sum(x * x for x in original)
                 self.assertAlmostEqual(10 * math.log10(ratio), C['BLEED_DB'], delta=0.1)
-                gain = 10 ** (C['BLEED_DB'] / 20)
-                self.assertLessEqual(max(abs(x - y * gain) for x, y in zip(bled, original)), 1)
+                self.assertLessEqual(max(abs(x - y * gain) for x, y in zip(echo, original)), 1)
 
     def test_three_voice_overlap_residue(self):
         # Mix the three physical tracks at 60-62 s, then subtract the pinned A (mic)
@@ -441,8 +543,10 @@ class MaterializedCorpusTests(unittest.TestCase):
         literal = self.data['expected']['sessions'][self.data['sessions'][0]['id']]
         left, right = literal['d49Overlap']
         self.assertGreaterEqual(right - left, self.C['D49_OVERLAP_MS'])
-        pairs = [('system', 'b', literal['d49Overlap'])] + list(zip(('b', 'system-fallback'), ('system-fallback', 'b-return'),
-                                                                   literal['seamOverlaps']))
+        case = self.data['sessions'][0]
+        pairs = [(one, other, both) for e in case['events'] if e.get('reason') in ('callConnected', 'lost', 'restored')
+                 for one, other, both, _ in seam(case, e['atMs'], 1)]
+        self.assertEqual([both for _, _, both in pairs], [literal['d49Overlap']] + literal['seamOverlaps'])
         for one, other, (left, right) in pairs:
             with self.subTest(one=one, other=other):
                 samples = self.read(self.first, one, left, right)

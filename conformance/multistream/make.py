@@ -77,6 +77,7 @@ class Noise:
 
     def held(self, seed, origin, first, last):
         """16 kHz uniform words [first, last) of the bed `seed`, counted from origin."""
+        assert 0 <= first <= last, ('noise window before its originMs', seed, origin, first, last)
         stream = self.streams.setdefault((seed, origin), [])
         state = stream[-1] if stream else int.from_bytes(hashlib.sha256(seed.encode()).digest()[:4], 'little') or 1
         while len(stream) < last:

@@ -81,12 +81,16 @@ lifecycle, outcome and half-open ownership vectors, actual generated public-spee
 WAVs, per-source refusals, UTF-8 identity bounds and schema/pinning integrity.
 The corpus v2 tests (`test_multistream_corpus.py`, `test_corpus_oracles.py`) run
 `shape()`, with one assert per requirement and the thresholds read from
-`corpus.json` `constants`. One data mutation per requirement must fail with that
-requirement's message. The hand-written `expected` literals are checked against
-`ownership.py`, `gaps.py` and `floor.py`. Patching `gaps.presence`, `floor.span`
-or `floor.person` must make that same check fail. The stored WAVs are checked
-for bleed in both directions, the three-voice residue, identical D49 and seam
-overlaps, the noise bed, the floors, and the pinned digests.
+`corpus.json` `constants`. At least one data mutation per requirement must fail
+with that requirement's message. The hand-written `expected` literals are checked
+against `ownership.py`, `gaps.py` and `floor.py`. Patching `gaps.presence`,
+`floor.span` or `floor.person` must make that same check fail; the floor rules the
+corpus cannot show (gap masking over non-zero samples, mean removal) have mutants
+that must fail synthetic checks. The stored WAVs are checked for every expected
+bleed (target minus its own carrier), the three-voice residue, byte-identical D49
+and seam overlaps for the pairs `shape()` finds, the noise bed, the floors, and the
+pinned digests. Only the schema check needs jsonschema; the rest of the guard runs
+on a bare `/usr/bin/python3`.
 
 `npm test` includes injected-clock retry/long-suspension cases and real Chromium
 pre-join, source-switch, call-generation, worker-recovery and independent-session
