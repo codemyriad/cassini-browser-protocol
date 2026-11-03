@@ -559,6 +559,10 @@ only to that exact active native stand-in. It must not create a folder, reset
 its clock or alter its selection/microphone. Unknown/refused resume requests
 fail before any file is created. A stopped/changed target is an error, never a
 fresh Start. The handler's target validation and Stop share one transaction.
+The host joins only a committed fallback: its othersSource system/lost is written
+once the fallback device delivers audio, not when the transport closes. An app MUST
+wait for that commit before it sends the resume; one sent earlier is refused and
+uses up that connection's only ask.
 Explicit successful proof is a `started` response with resumed:true, the exact
 captureId/timelineOriginMs/callGeneration, path and resume-capture-v1 feature.
 See SPEC-CONTROL.md and conformance/control/RESUME-CAPTURE.md for cancellation,

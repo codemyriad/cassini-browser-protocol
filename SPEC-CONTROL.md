@@ -491,6 +491,10 @@ after the recording's audio transport closed (D52.4). It
 attaches the new transport to that recording. It never creates another folder,
 resets its clock or replaces its microphone/selection. Title/microphone defaults
 from a fresh Start do not modify the target. A refused resume has no side effect.
+The host joins only a committed fallback: its othersSource system/lost is written
+once the fallback device delivers audio, not when the transport closes. An app MUST
+wait for that commit before it sends the resume; one sent earlier is refused and
+uses up that connection's only ask (D52.5, below).
 
 ```json
 {"type":"started","path":"/Library/.sessions/Recording-example","features":["source-outcomes-v1","resume-capture-v1"],"resumed":true,"captureId":"stand-in-F","timelineOriginMs":1793500000000,"callGeneration":"call-A"}
@@ -601,6 +605,10 @@ These are app-side rules; the extension and the wire are unchanged.
   callGeneration (another call's heard never counts, and it never arms this
   recording's restore or OTHERS_GONE_GRACE either).
   The app asks to resume only after the extension's status no longer reports a session for that tab.
+  The host joins only a committed fallback: its othersSource system/lost is written
+  once the fallback device delivers audio, not when the transport closes. The app MUST
+  wait for that commit before it sends the resume; one sent earlier is refused and
+  uses up that connection's only ask.
   After that resume is
   refused or fails (error result, refused native resume, missing or
   mismatched proof), and while it is still pending, the app MUST NOT ask

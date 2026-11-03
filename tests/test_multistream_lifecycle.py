@@ -55,7 +55,7 @@ class LifecycleTests(unittest.TestCase):
 D52_5={'D52.5-transport-lost-asks-resume-once-then-restores','D52.5-refused-resume-is-not-retried-on-a-timer-only-on-a-new-hello',
     'D52.5-frozen-companion-asks-once-per-new-control-connection','D52.5-ask-waits-for-control-present-page-row-known-positive-count-and-same-call',
     'D52.5-ask-needs-heard-in-the-same-call-generation','D52.5-a-new-loss-after-restore-asks-again',
-    'D52.5-other-call-heard-does-not-arm-grace-or-restore'}
+    'D52.5-other-call-heard-does-not-arm-grace-or-restore','D52.5-ask-waits-for-the-committed-fallback'}
 def mutated(old,new):
     source=(ROOT/'conformance/multistream/lifecycle.py').read_text()
     assert source.count(old)==1,old
@@ -128,6 +128,17 @@ class ResumeOnceTests(unittest.TestCase):
                 if 'askResume' in actions: self.ever.add(connection)
                 return actions
         self.assertIn('D52.5-a-new-loss-after-restore-asks-again',failing_cases(OncePerRecording))
+    def test_an_ask_before_the_fallback_commits_fails(self):
+        # Mac #113: the host joins only a committed system/lost, so an ask in the
+        # fallback's own tick is refused and spends the connection's only ask.
+        cases={c['name']:c for c in json.loads((ROOT/'conformance/multistream/lifecycle.json').read_text())['cases']}
+        for name,case in cases.items():
+            for step in case['steps']:
+                if step.get('fallbackCommitted') is False:
+                    self.assertTrue(case.get('resumeCapture') and step.get('transportAlive') is False,(name,step))
+                    self.assertNotIn('askResume',step['expect'],(name,step))
+        early=mutated("                    and row.get('fallbackCommitted', True)\n","")
+        self.assertEqual(failing_cases(early),{'D52.5-ask-waits-for-the-committed-fallback'})
 class StaleAfterTests(unittest.TestCase):
     def test_transport_stale_cases_close_at_pcm_stale_after_45_seconds(self):
         # D52.5 amendment: PCM_STALE_AFTER is 45 s (40 s = 30 s retry + 10 s ACK left
@@ -139,6 +150,7 @@ class StaleAfterTests(unittest.TestCase):
                 'transport-lost-with-present-page-stays-on-fallback','transport-lost-then-new-transport-restores',
                 'transport-lost-with-unknown-count-falls-back-at-once','D52.5-transport-lost-asks-resume-once-then-restores',
                 'D52.5-refused-resume-is-not-retried-on-a-timer-only-on-a-new-hello','D52.5-frozen-companion-asks-once-per-new-control-connection',
-                'D52.5-ask-needs-heard-in-the-same-call-generation','D52.5-a-new-loss-after-restore-asks-again']:
+                'D52.5-ask-needs-heard-in-the-same-call-generation','D52.5-a-new-loss-after-restore-asks-again',
+                'D52.5-ask-waits-for-the-committed-fallback']:
             with self.subTest(case=name):
                 self.assertEqual(next(s['atMs'] for s in cases[name]['steps'] if s.get('transportAlive') is False),45000)
