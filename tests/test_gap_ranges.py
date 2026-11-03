@@ -144,6 +144,12 @@ class GapTests(unittest.TestCase):
         self.assertFalse(valid([dict(empty, durationMs=-1)]))
         self.assertFalse(valid([dict(empty, frames=-1)]))
         self.assertFalse(valid([dict(empty, durationMs=-1e-9, frames=0)]))
+        # Both zero or both positive: a mixed entry is a writer bug, not a range.
+        self.assertTrue(valid([dict(empty, durationMs=50, frames=2400)]))
+        self.assertFalse(valid([dict(empty, durationMs=50, frames=0)]))
+        self.assertFalse(valid([dict(empty, durationMs=0, frames=480)]))
+        self.assertFalse(valid([dict(empty, durationMs=1e-9, frames=0)]))
+        self.assertFalse(valid([dict(atMs=1000, kind='overflow', durationMs=0, frames=0)]))
         writedown = json.loads((ROOT / 'conformance/multistream/writedown.json').read_text())
         stored = [c['track']['gaps'] for c in PRESENCE + writedown['keep'] if c['track'].get('gaps')]
         stored += [c['gaps'] for c in writedown['turns'] if c.get('gaps')]

@@ -421,7 +421,8 @@ New writers always write the key, so `gaps: []` means no gaps and a missing key 
   anchors use the host time at which the gap began (the next buffer's stamp minus the gap), which
   the anchor mapping approximates. `frames` is the exact integer padding at the track rate.
 - An empty entry (`durationMs` 0, `frames` 0) is valid and is no range: it marks no absence,
-  splits no turn and drops no word. Negative values are invalid.
+  splits no turn and drops no word. Any other entry has both positive (`durationMs` > 0,
+  `frames` >= 1): a mixed entry (one of them 0) and negative values are invalid.
 - Ranges are half-open, sorted and never coalesced: one entry per padding write, even when
   only a little received audio separates two of them.
 - `kind` is diagnostic and open. Host-derived kinds: `jump` (browser offset jump; overflow,
