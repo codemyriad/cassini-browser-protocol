@@ -32,8 +32,9 @@ def validate(document):
         if event['type'] == 'selection':
             others = event['others']
         elif event['type'] == 'othersSource':
-            # A fallback that committed (system/missing, system/lost), or one asked for after a
-            # browser loss that never committed because the call returned first (none/lost).
+            # A fallback that committed (system/missing, system/lost), or a browser loss whose
+            # fallback never committed (not asked yet, or still starting) because the call
+            # returned first (none/lost).
             fallback = source is not None and (
                 source['source'] == 'system' and source['reason'] in ('missing', 'lost') or
                 source['source'] == 'none' and source['reason'] == 'lost')

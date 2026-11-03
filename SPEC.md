@@ -228,9 +228,10 @@ recording ends under the ordinary lifecycle rules. D33 permits
 same-tab browser return before the120s deadline: append browser/restored and start
 new browser spans, checkpointed together, before consuming their PCM. Restored
 is legal only while The others is selected, after system/missing or system/lost,
-or after none/lost: a browser loss whose fallback was asked for but never
-committed, because the call returned first (SPEC-CONTROL "Return before the
-fallback commits"); no system track lies between those two events.
+or after none/lost: a browser loss whose fallback never committed (not asked
+for yet, or still starting) because the call returned first (SPEC-CONTROL
+"Return before the fallback commits"); no system track lies between those two
+events.
 The folder, original capture clock and microphone choice remain unchanged. Reuse
 sourceTrackId only where the browser actually reports the same opaque source ID;
 labels, titles and URLs never establish identity. See SPEC-CONTROL call lifecycle.

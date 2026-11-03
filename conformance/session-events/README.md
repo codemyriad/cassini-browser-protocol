@@ -33,7 +33,8 @@ state with end. Policy deadlines live in `control/call-lifecycle-vectors.json`.
 
 `--case uncommitted-return` is the same call returning before its fallback
 committed: the browser loss writes none/lost at 1000 ms, no system track starts
-(the fallback was still waiting, for instance on the OS permission prompt), and
+(the fallback was not asked for yet, or was still waiting, for instance on the OS
+permission prompt), and
 browser/restored with a new span of the same opaque source follows at 3500 ms
 (SPEC-CONTROL "Return before the fallback commits"). Restored is legal after
 none/lost as after system/missing or system/lost; none/user is not a fallback.
