@@ -12,7 +12,8 @@ subtracting a fractional startOffsetMs before rounding moves the edges. This is 
 breaks() and turns() (D63 #2): the gap ranges of a speaker are the non-overflow
 gap ranges of that speaker's tracks, as 16 kHz samples [G0, G1) with the presence
 conversion. Two consecutive words of one speaker never share a turn when a gap
-range lies between their midpoints: G0 < max(M1, M2) and min(M1, M2) < G1. Pauses
+range lies between their midpoints: G0 < G1, G0 < max(M1, M2) and min(M1, M2) < G1.
+An empty gap (durationMs 0) is no range: it splits no turn and drops no word. Pauses
 inside presence, rejoins and non-owned time are not gap ranges, so they still join.
 """
 from fractions import Fraction
@@ -52,7 +53,7 @@ def breaks(tracks):
 def split(ranges, first, second):
     m1, m2 = midpoint(first), midpoint(second)
     low, high = min(m1, m2), max(m1, m2)
-    return any(g0 < high and low < g1 for g0, g1 in ranges)
+    return any(g0 < g1 and g0 < high and low < g1 for g0, g1 in ranges)
 
 
 def turns(ranges, words):

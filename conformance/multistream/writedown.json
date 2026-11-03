@@ -70,6 +70,17 @@
         {"ms": [8100, 8300], "keep": false},
         {"ms": [8490, 8510], "keep": true}
       ]
+    },
+    {
+      "name": "an-empty-gap-drops-no-word",
+      "track": {"startOffsetMs": 0, "sampleRate": 48000, "frames": 96000,
+                "gaps": [{"atMs": 1000, "durationMs": 0, "frames": 0, "kind": "jump"}]},
+      "words": [
+        {"ms": [800, 900], "keep": true},
+        {"ms": [995, 1005], "keep": true},
+        {"ms": [1000, 1000], "keep": true},
+        {"ms": [1100, 1200], "keep": true}
+      ]
     }
   ],
   "turns": [
@@ -114,6 +125,12 @@
       "gaps": [],
       "words": [[1000, 1500], [9000, 9500], [9600, 9900]],
       "turns": [3]
+    },
+    {
+      "name": "an-empty-gap-never-splits",
+      "gaps": [{"atMs": 1000, "durationMs": 0, "frames": 0, "kind": "jump"}],
+      "words": [[800, 900], [1100, 1200]],
+      "turns": [2]
     }
   ]
 }

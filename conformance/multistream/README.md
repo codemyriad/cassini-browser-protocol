@@ -219,7 +219,8 @@ In session 3 source-d falls back only when pooled. In session 1 only the mic fal
 integer session ms, and its midpoint is M = 8 × (startMs + endMs) in 16 kHz session samples.
 A speaker's gap ranges are the non-overflow gap ranges of its tracks (prefix included), as
 [G0, G1) with the presence conversion. Two consecutive words of one speaker are in different
-turns when G0 < max(M1, M2) and min(M1, M2) < G1 for one of them. This applies to every way
+turns when G0 < G1, G0 < max(M1, M2) and min(M1, M2) < G1 for one of them; an empty gap
+(durationMs 0) is no range, so it splits no turn and drops no word. This applies to every way
 words join, including the 400 ms seam rejoin, where the two words are the last word of the
 open turn and the first word of the fragment that would join it. Pauses inside presence still join. So do the
 time between two spans of one speaker and non-owned time, since neither is a gap range.

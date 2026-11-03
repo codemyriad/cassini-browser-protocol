@@ -358,6 +358,9 @@ class VectorTests(unittest.TestCase):
             'turns never split': ('split', lambda ranges, first, second: False),
             'turns split on word edges': ('split', split_on_edges),
             'gap range closed at its end': ('split', split_closed),
+            'an empty gap splits': ('split', lambda ranges, first, second: any(
+                g0 < max(writedown.midpoint(first), writedown.midpoint(second))
+                and min(writedown.midpoint(first), writedown.midpoint(second)) < g1 for g0, g1 in ranges)),
             'overflow splits': ('breaks', breaks_with_overflow),
             'other speakers gaps split': ('breaks', lambda tracks: breaks(tracks) + [[656000, 768000], [1120000, 1152000], [864000, 888000]]),
         }
