@@ -49,7 +49,7 @@ class Policy:
                 return [action]
             connection = row.get('controlConnection', 0)
             # The host joins only a committed system/lost: an earlier ask is refused
-            # and spends this connection's only ask.
+            # and spends this loss's only ask on this connection.
             if (self.resume and not transport and self.source == 'system' and self.reason == 'lost'
                     and row.get('fallbackCommitted', True)
                     and generation == self.generation and self.heard and self.asked_on != connection):

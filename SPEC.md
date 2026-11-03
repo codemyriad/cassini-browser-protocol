@@ -219,7 +219,12 @@ tracks are The others. These are recording roles, not verified participant names
 
 A browser path missing at start or lost later may fall back to computer sound:
 append `othersSource` with source=system and reason=missing/lost, and start a new
-system track at that event's atMs. Never fall back to the microphone. D33 permits
+system track at that event's atMs. Never fall back to the microphone. A lost
+fallback commits when the fallback device's first buffer is admitted, not when the
+transport closes: system/lost is appended then, and until then the recording keeps
+its written othersSource. A fallback that fails before it commits writes no
+system/lost, so there is nothing to resume: the app never asks to resume it, and the
+recording ends under the ordinary lifecycle rules. D33 permits
 same-tab browser return before the120s deadline: append browser/restored and start
 new browser spans, checkpointed together, before consuming their PCM. Restored
 is legal only after system/missing or system/lost while The others is selected.
@@ -561,10 +566,11 @@ only to that exact active native stand-in. It must not create a folder, reset
 its clock or alter its selection/microphone. Unknown/refused resume requests
 fail before any file is created. A stopped/changed target is an error, never a
 fresh Start. The handler's target validation and Stop share one transaction.
-The host joins only a committed fallback: its othersSource system/lost is written
-once the fallback device delivers audio, not when the transport closes. An app MUST
-wait for that commit before it sends the resume; one sent earlier is refused and
-uses up that connection's only ask.
+The host joins only a committed fallback: the recording's othersSource system/lost
+is written once the fallback device delivers audio (its first buffer is admitted),
+not when the transport closes. An app MUST wait for that commit before it sends the
+resume; one sent earlier is refused and uses up the only ask for that loss on that
+connection.
 Explicit successful proof is a `started` response with resumed:true, the exact
 captureId/timelineOriginMs/callGeneration, path and resume-capture-v1 feature.
 See SPEC-CONTROL.md and conformance/control/RESUME-CAPTURE.md for cancellation,
