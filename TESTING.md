@@ -79,8 +79,14 @@ late old-document events, subframe bounds and invalid Stop side effects covered.
 `python3 -m unittest discover -s tests -p "test_*.py"` checks the hand-written
 lifecycle, outcome and half-open ownership vectors, actual generated public-speech
 WAVs, per-source refusals, UTF-8 identity bounds and schema/pinning integrity.
-The corpus test mutates presence/gaps and source ownership to prove the guards
-fail; overlap bleed is checked against the independently pinned speech carrier.
+The corpus v2 tests (`test_multistream_corpus.py`, `test_corpus_oracles.py`) run
+`shape()`, with one assert per requirement and the thresholds read from
+`corpus.json` `constants`. One data mutation per requirement must fail with that
+requirement's message. The hand-written `expected` literals are checked against
+`ownership.py`, `gaps.py` and `floor.py`. Patching `gaps.presence`, `floor.span`
+or `floor.person` must make that same check fail. The stored WAVs are checked
+for bleed in both directions, the three-voice residue, identical D49 and seam
+overlaps, the noise bed, the floors, and the pinned digests.
 
 `npm test` includes injected-clock retry/long-suspension cases and real Chromium
 pre-join, source-switch, call-generation, worker-recovery and independent-session
