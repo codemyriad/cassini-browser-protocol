@@ -117,3 +117,17 @@ R79 guard fails a case, and validates every expected list against the session sc
 CI cannot produce a real TCC or device denial: each app injects the refusals through its
 own start path, writer and reader. `extension/tests/result-codes.test.cjs` checks the
 code the extension sets at each `ok:false` site.
+
+## Shared test 9: placement golden (D55)
+
+`conformance/placement/` holds three tone-burst sessions (`make.py`, pinned by
+`materialized.sha256`), the hand-computed D55 rounding literals (`placement.json`)
+and every burst's expected position per consumer (`bursts.json`), which must equal
+the independent oracle `placement.py`. `tests/test_placement.py` checks the
+literals, proves that every wrong rounding seen so far (half-even, floor,
+ns-then-ceil, whole-ms word base, dropped or doubled offset) contradicts one, reads
+the WAVs back through the shared onset detector, validates the sessions, and
+proves the results checker rejects a one-sample shift on the exact tier, a 25 ms
+shift on the 20 ms headline, a missing burst or leg, and a refused or played
+unknown offset. Each app runs its own consumers on the folders and checks its
+results file with `placement.py check`; see the folder's README.
