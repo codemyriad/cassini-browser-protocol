@@ -2,6 +2,7 @@
 """Materialize the shared placement golden (shared test 9): tone-burst sessions.
 
     python3 conformance/placement/make.py OUT
+    python3 conformance/placement/make.py --mutant NAME OUT   # one offset moved (bursts.json "mutants")
 
 Every burst is 250 ms of a 1 kHz square wave of +-8000 that starts with
 +8000 on its first sample; every other sample is exactly 0, so a burst's
@@ -69,9 +70,19 @@ def document(session):
     }
 
 
-def make(destination):
+def sessions(mutant=None):
+    """bursts.json's sessions; with a mutant name, its one track offset moved."""
     golden = json.loads((ROOT / 'bursts.json').read_text())
-    for session in golden['sessions']:
+    if mutant is not None:
+        change = next(m for m in golden['mutants'] if m['name'] == mutant)
+        session = next(s for s in golden['sessions'] if s['id'] == change['session'])
+        track = next(t for t in session['tracks'] if t['id'] == change['track'])
+        track['startOffsetMs'] = change['startOffsetMs']
+    return golden['sessions']
+
+
+def make(destination, mutant=None):
+    for session in sessions(mutant):
         root = destination / ('Recording-' + session['id'])
         root.mkdir(parents=True, exist_ok=False)
         for track in session['tracks']:
@@ -95,5 +106,7 @@ def make(destination):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('--mutant', help='move one offset as bursts.json "mutants" says (app mutant runs)')
     parser.add_argument('destination', type=Path)
-    make(parser.parse_args().destination)
+    args = parser.parse_args()
+    make(args.destination, args.mutant)

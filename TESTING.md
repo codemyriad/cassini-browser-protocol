@@ -125,9 +125,13 @@ code the extension sets at each `ok:false` site.
 and every burst's expected position per consumer (`bursts.json`), which must equal
 the independent oracle `placement.py`. `tests/test_placement.py` checks the
 literals, proves that every wrong rounding seen so far (half-even, floor,
-ns-then-ceil, whole-ms word base, dropped or doubled offset) contradicts one, reads
-the WAVs back through the shared onset detector, validates the sessions, and
-proves the results checker rejects a one-sample shift on the exact tier, a 25 ms
-shift on the 20 ms headline, a missing burst or leg, and a refused or played
-unknown offset. Each app runs its own consumers on the folders and checks its
-results file with `placement.py check`; see the folder's README.
+ns-then-ceil, whole-ms word base, whole microseconds, ms / 1000 * rate in
+doubles, dropped or doubled offset) contradicts one and misplaces a recognized
+burst in the folders, reads the WAVs back through the shared onset detector,
+validates the sessions, and proves the results checker rejects a one-sample
+shift on the exact tier, a 25 ms shift on the 20 ms headline, a missing burst
+or leg, NaN or fractional positions, a missing or wrong `offsetsAssumedZero`,
+and a played session with an unknown offset. Each app runs its own consumers on
+the folders and checks its results file with `placement.py check`, then repeats
+on the three app mutants (`make.py --mutant`, `check --mutant`) so that numbers
+copied from `bursts.json` fail; see the folder's README.

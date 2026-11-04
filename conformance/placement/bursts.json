@@ -59,7 +59,7 @@
           "kind": "microphone",
           "sampleRate": 16000,
           "channels": 1,
-          "startOffsetMs": 1000.09375,
+          "startOffsetMs": 1001.28125,
           "lengthMs": 12000,
           "burstsMs": [
             0,
@@ -132,11 +132,51 @@
       ]
     }
   ],
+  "mutants": [
+    {
+      "name": "a-system-late",
+      "session": "09000000-0000-4000-8000-000000000001",
+      "track": "system",
+      "startOffsetMs": 1234.5312,
+      "why": "one 48 kHz frame later (59257.4976), the same 16 kHz frame (19752.4992)",
+      "fails": [
+        "mix48",
+        "mix48publication",
+        "playback"
+      ]
+    },
+    {
+      "name": "b-mic-25ms",
+      "session": "09000000-0000-4000-8000-000000000002",
+      "track": "microphone",
+      "startOffsetMs": 1026.28125,
+      "why": "25 ms late: past the 20 ms headline in every consumer",
+      "fails": [
+        "rec16",
+        "wordMs",
+        "mix48",
+        "mix48publication",
+        "playback",
+        "opus48"
+      ]
+    },
+    {
+      "name": "c-system-known",
+      "session": "09000000-0000-4000-8000-000000000003",
+      "track": "system",
+      "startOffsetMs": 0,
+      "why": "the unknown offset becomes a known 0: the same placement, but playback plays and nothing is flagged",
+      "fails": [
+        "playback",
+        "offsetsAssumedZero"
+      ]
+    }
+  ],
   "expected": {
     "09000000-0000-4000-8000-000000000001/microphone": {
       "offsetsAssumedZero": false,
       "rec16": {
-        "tolerance": 1,
+        "tolerance": 0,
         "frames": [
           8000,
           40000,
@@ -195,7 +235,7 @@
     "09000000-0000-4000-8000-000000000001/system": {
       "offsetsAssumedZero": false,
       "rec16": {
-        "tolerance": 1,
+        "tolerance": 0,
         "frames": [
           19752,
           51752,
@@ -256,64 +296,64 @@
       "rec16": {
         "tolerance": 0,
         "frames": [
-          16002,
-          48002,
-          80002,
-          112002,
-          144002,
-          176002
+          16021,
+          48021,
+          80021,
+          112021,
+          144021,
+          176021
         ]
       },
       "wordMs": {
         "tolerance": 0,
         "values": [
-          1000,
-          3000,
-          5000,
-          7000,
-          9000,
-          11000
+          1001,
+          3001,
+          5001,
+          7001,
+          9001,
+          11001
         ]
       },
       "mix48": {
         "tolerance": 960,
         "frames": [
-          48005,
-          144005,
-          240005,
-          336005,
-          432005,
-          528005
+          48062,
+          144062,
+          240062,
+          336062,
+          432062,
+          528062
         ]
       },
       "playback": {
         "rate": 16000,
         "tolerance": 320,
         "frames": [
-          16002,
-          48002,
-          80002,
-          112002,
-          144002,
-          176002
+          16021,
+          48021,
+          80021,
+          112021,
+          144021,
+          176021
         ]
       },
       "opus48": {
         "tolerance": 960,
         "frames": [
-          48005,
-          144005,
-          240005,
-          336005,
-          432005,
-          528005
+          48062,
+          144062,
+          240062,
+          336062,
+          432062,
+          528062
         ]
       }
     },
     "09000000-0000-4000-8000-000000000002/system": {
       "offsetsAssumedZero": false,
       "rec16": {
-        "tolerance": 1,
+        "tolerance": 0,
         "frames": [
           528000,
           560000,
@@ -372,7 +412,7 @@
     "09000000-0000-4000-8000-000000000003/microphone": {
       "offsetsAssumedZero": false,
       "rec16": {
-        "tolerance": 1,
+        "tolerance": 0,
         "frames": [
           8000,
           40000,
@@ -404,18 +444,7 @@
           504000
         ]
       },
-      "playback": {
-        "rate": 48000,
-        "tolerance": 0,
-        "frames": [
-          24000,
-          120000,
-          216000,
-          312000,
-          408000,
-          504000
-        ]
-      },
+      "playback": "refused",
       "opus48": {
         "tolerance": 960,
         "frames": [
@@ -431,7 +460,7 @@
     "09000000-0000-4000-8000-000000000003/system": {
       "offsetsAssumedZero": true,
       "rec16": {
-        "tolerance": 1,
+        "tolerance": 0,
         "frames": [
           24000,
           56000,
