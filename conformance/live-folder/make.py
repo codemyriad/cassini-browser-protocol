@@ -44,6 +44,7 @@ ACTIONS = {
     'restore': [96680, 102380], 'stop': [109500, 110310],
 }
 END_MS = 109625
+CAPTURE_ID, ORIGIN = 'live-folder-synthetic', 1793880000000
 
 
 def _sin(x):
@@ -124,12 +125,19 @@ def base():
                        dict(atMs=END_MS, type='end', reason='user'),
                    ])
     evidence = dict(scenario='live-folder/1', app='synthetic', protocolCommit='0' * 40, extensionVersion='0.2.12',
-                    captureId='live-folder-synthetic', timelineOriginMs=1793880000000,
+                    captureId=CAPTURE_ID, timelineOriginMs=ORIGIN,
                     newFolders=[f'Recording-{SESSION}'],
+                    # The app's one ask, read off the control pipe between system/lost and browser/restored.
+                    resumeRequests=[resume_request(97210.5, 'resume-1')],
                     actions={k: dict(requestedAtMs=a, observedAtMs=b) for k, (a, b) in ACTIONS.items()},
                     slotC=dict(connectionState='connected', packetsReceived=0), maxSourceCount=3,
                     nativeTones=dict(microphone=MIC_HZ))
     return session, tracks, evidence
+
+
+def resume_request(at, request_id, capture_id=CAPTURE_ID, connection=1):
+    return dict(atMs=at, via='control-pipe', connection=connection, requestId=request_id, captureId=capture_id,
+                timelineOriginMs=ORIGIN)
 
 
 def _track(plans, identifier):
@@ -158,6 +166,26 @@ def split_mute(session, tracks, evidence):
                   content=[(max(0, a - cut), b - cut, mix) for a, b, mix in a1['content'] if b > cut])
     a1.update(frames=cut, content=[(a, min(b, cut), mix) for a, b, mix in a1['content'] if a < cut])
     tracks.insert(tracks.index(a1) + 1, second)
+
+
+def _move_mute(tracks, evidence, mute, unmute):
+    """The mute requested at mute[0] and the unmute at unmute[0] (brackets [requested, observed]):
+    A's zeros follow both requests by the base run's 140.0625 and 200.0625 ms."""
+    a1 = _track(tracks, 'span-a1')
+    evidence['actions'].update(mute=dict(requestedAtMs=mute[0], observedAtMs=mute[1]),
+                               unmute=dict(requestedAtMs=unmute[0], observedAtMs=unmute[1]))
+    silent, back = frames(a1['startOffsetMs'], mute[0] + 140.0625), frames(a1['startOffsetMs'], unmute[0] + 200.0625)
+    a1['content'] = [(0, silent, TONE_A), (back, a1['frames'], TONE_A)]
+
+
+def short_mute(session, tracks, evidence):
+    # Codex #49: a 50.74 s mute, A's tone back as early, everything else consistent with it.
+    _move_mute(tracks, evidence, (5310, 5320), (56050, 58320))
+
+
+def early_mute(session, tracks, evidence):
+    # The mute asked for at 2.81 s, before F(A) could reach MUTE_START_MS; held a full MUTE_MS.
+    _move_mute(tracks, evidence, (2810, 2820), (63550, 65820))
 
 
 def lost_in_mute(session, tracks, evidence):
@@ -303,6 +331,65 @@ def mic_late_no_prefix(session, tracks, evidence):
     mic['content'] = [(0, mic['frames'], MIC)]
 
 
+def no_resume(session, tracks, evidence):
+    # The folder still shows the restore: only the pipe can tell that the app never asked.
+    evidence['resumeRequests'] = []
+
+
+def duplicate_resume(session, tracks, evidence):
+    # A second ask on the same control connection: D52.5 allows one per loss and connection.
+    evidence['resumeRequests'].append(resume_request(98410.25, 'resume-2'))
+
+
+def wrong_capture_resume(session, tracks, evidence):
+    evidence['resumeRequests'] = [resume_request(97210.5, 'resume-1', 'live-folder-another')]
+
+
+def early_resume(session, tracks, evidence):
+    # Asked after the kill and before the fallback committed system/lost (D52.5: wait for the commit).
+    evidence['resumeRequests'] = [resume_request(95600, 'resume-1')]
+
+
+def rotate(plan, *cuts):
+    """GNOME's RotatingWAV form (rotating_wav.py): the track's frames in several WAVs, cut at these
+    frame counts. The first piece keeps the track's file and start; each later one starts where the
+    frames before it end, on the 48 kHz grid. The track lists them in `spans`."""
+    edges = [0, *cuts, plan['frames']]
+    plan['pieces'] = [dict(file=wav_name(plan) if index == 0 else f"track-{plan['id']}-{index}.wav", frames=last - first,
+                           startOffsetMs=plan['startOffsetMs'] if index == 0 else
+                           (round(plan['startOffsetMs'] * 48) + round(first * 48000 / RATE)) / 48)
+                      for index, (first, last) in enumerate(zip(edges, edges[1:]))]
+    return plan['pieces']
+
+
+def shifted_piece(session, tracks, evidence):
+    # Codex #49: B's second WAV placed 20 s later, ending at 115350 while B's track ends at 95350.
+    rotate(_track(tracks, 'span-b1'), 100000)[1]['startOffsetMs'] += 20000
+
+
+def overlapping_piece(session, tracks, evidence):
+    # B's second WAV placed 1 s early, over the end of its first.
+    rotate(_track(tracks, 'span-b1'), 100000)[1]['startOffsetMs'] -= 1000
+
+
+def rotated_wavs(session, tracks, evidence):
+    # GNOME at a small WAV limit: A in three pieces (cut in the mute and after it), B and the
+    # second microphone span (with its prefix gap) in two.
+    a1 = _track(tracks, 'span-a1')
+    rotate(a1, frames(a1['startOffsetMs'], 30000.0625), frames(a1['startOffsetMs'], 70000.0625))
+    rotate(_track(tracks, 'span-b1'), 100000)
+    rotate(_track(tracks, 'microphone-2'), frames(90250, 100000))
+
+
+def folder_leads(session, tracks, evidence):
+    # The extension stamps a frame when it reaches the output (D61): A's stamps run 20 ms ahead
+    # of the session clock, so F(A) passes each threshold 20 ms early and the driver's waits end
+    # on the session clock instead: the mute asked at exactly MUTE_START_MS, the unmute at
+    # exactly mute + MUTE_MS. A's span, with its mute edges, sits 20 ms later on the timeline.
+    _move_mute(tracks, evidence, (5000, 5010), (65000, 67270))
+    _track(tracks, 'span-a1')['startOffsetMs'] += 20
+
+
 def fractional_mic(session, tracks, evidence):
     # GNOME and Mac write the selection's wall-clock atMs as the span start; this one
     # places 1/50 ms below it on the 16 kHz grid (D55).
@@ -322,7 +409,7 @@ def mac_loss_form(session, tracks, evidence):
 # name: (defect, every rule it must fail, exactly; the first names it). With no
 # jsonschema (macOS /usr/bin/python3) O0.schema reports unavailable and passes.
 MUTANTS = {
-    'drop-restored': (drop_restored, ['O3.restored', 'O3.sequence', 'O3.state', 'O3.system']),
+    'drop-restored': (drop_restored, ['O3.restored', 'O3.sequence', 'O3.state', 'O3.system', 'O3.resumeAt']),
     'mute-gap': (mute_gap, ['O2.gaps', 'O2.present']),
     'split-mute': (split_mute, ['O2.oneSpan', 'O3.spans']),
     'lost-in-mute': (lost_in_mute, ['O2.noEvents', 'O3.sequence']),
@@ -357,12 +444,22 @@ MUTANTS = {
     'system-before-lost': (system_before_lost, ['O3.system']),
     'system-never-ends': (system_never_ends, ['O3.system']),
     'mic-late-no-prefix': (mic_late_no_prefix, ['O5.micOn', 'O5.micAudio']),
+    'short-mute': (short_mute, ['O2.duration']),
+    'early-mute': (early_mute, ['O2.muteStart']),
+    'no-resume': (no_resume, ['O3.resumeOnce', 'O3.resumeAt']),
+    'duplicate-resume': (duplicate_resume, ['O3.resumeOnce']),
+    'wrong-capture-resume': (wrong_capture_resume, ['O3.resumeOnce', 'O3.resumeAt']),
+    'early-resume': (early_resume, ['O3.resumeAt']),
+    'shifted-piece': (shifted_piece, ['O0.pieces']),
+    'overlapping-piece': (overlapping_piece, ['O0.pieces']),
 }
 
 # name: another form a correct writer may produce; each must pass every check.
 VARIANTS = {
+    'folder-leads': folder_leads,
     'fractional-mic': fractional_mic,
     'mac-loss-form': mac_loss_form,
+    'rotated-wavs': rotated_wavs,
 }
 
 
@@ -411,6 +508,9 @@ def document(session, tracks):
             track.update(receivedFrames=plan['frames'], captureOutcome='captured')
         track.update(plan['extra'])
         track['gaps'] = plan.get('gaps', [])
+        if 'pieces' in plan:
+            track['spans'] = [dict(file=p['file'], sampleRate=RATE, channels=plan['channels'], frames=p['frames'],
+                                   startOffsetMs=p['startOffsetMs'], ended=True) for p in plan['pieces']]
         out.append(track)
     sources = {}
     for track in out:
@@ -435,11 +535,15 @@ def write(out, session, tracks, evidence):
         data = samples(plan)[:plan.get('wavFrames', plan['frames']) * plan['channels']]
         if sys.byteorder != 'little':
             data.byteswap()
-        with wave.open(str(folder / wav_name(plan)), 'wb') as writer:
-            writer.setnchannels(plan['channels'])
-            writer.setsampwidth(2)
-            writer.setframerate(RATE)
-            writer.writeframes(data.tobytes())
+        first = 0
+        for piece in plan.get('pieces') or [dict(file=wav_name(plan), frames=len(data) // plan['channels'])]:
+            last = first + piece['frames']
+            with wave.open(str(folder / piece['file']), 'wb') as writer:
+                writer.setnchannels(plan['channels'])
+                writer.setsampwidth(2)
+                writer.setframerate(RATE)
+                writer.writeframes(data[first * plan['channels']:last * plan['channels']].tobytes())
+            first = last
     (folder / 'session.json').write_text(json.dumps(document(session, tracks), indent=1) + '\n')
     (out / 'evidence.json').write_text(json.dumps(evidence, indent=1, sort_keys=True) + '\n')
     return folder

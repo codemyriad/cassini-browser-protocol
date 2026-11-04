@@ -169,10 +169,31 @@ class LiveFolderOracle(unittest.TestCase):
 
     def test_unusable_evidence_is_refused(self):
         for change in (lambda e: e['actions'].pop('kill'), lambda e: e.update(protocolCommit='abc'),
-                       lambda e: e['actions']['mute'].update(observedAtMs=0), lambda e: e.pop('nativeTones')):
+                       lambda e: e['actions']['mute'].update(observedAtMs=0), lambda e: e.pop('nativeTones'),
+                       # The resume requests and the identity they must name are required facts, and
+                       # only the driver's own copy of the control pipe counts as observing a request.
+                       lambda e: e.pop('resumeRequests'), lambda e: e.pop('captureId'),
+                       lambda e: e.update(timelineOriginMs=1793880000000.5),
+                       lambda e: e['resumeRequests'][0].update(via='app-log'),
+                       lambda e: e['resumeRequests'][0].pop('captureId'),
+                       lambda e: e['resumeRequests'][0].pop('connection'),
+                       lambda e: e['resumeRequests'][0].update(connection=0),
+                       lambda e: e['resumeRequests'][0].update(connection=True),
+                       lambda e: e['resumeRequests'][0].update(connection=1.0)):
             process, result = self.evidence_case(change)
             self.assertEqual(process.returncode, 2)
             self.assertIn('unusable input: evidence', process.stderr)
+
+    def test_resume_is_asked_once_per_control_connection(self):
+        # D52.5: a new control connection (a new hello) discards the in-flight resume and asks once
+        # more; a second ask on the same connection is the duplicate O3.resumeOnce exists to catch.
+        def second(connection):
+            return lambda e: e['resumeRequests'].append(dict(e['resumeRequests'][0], atMs=98410.25,
+                                                             requestId='resume-2', connection=connection))
+        for connection, rules in ((2, []), (1, ['O3.resumeOnce'])):
+            with self.subTest(connection=connection):
+                process, result = self.evidence_case(second(connection))
+                self.assertEqual(failed(result)[1], rules, process.stdout)
 
     def test_rotated_wavs_are_read_through_spans(self):
         # GNOME's RotatingWAV keeps one logical track in several WAVs, listed in `spans`.
@@ -197,10 +218,18 @@ class LiveFolderOracle(unittest.TestCase):
         (folder / 'session.json').write_text(json.dumps(document))
         process, result = run_check(folder, evidence, evidence.with_name('spans.result.json'))
         self.assertEqual(process.returncode, 0, process.stdout)
+        # GNOME rounds a later piece's start to its 48 kHz grid: within one session sample passes.
+        for shift, rules in ((1 / 48, []), (-1 / 48, []), (0.1, ['O0.pieces']), (-0.1, ['O0.pieces'])):
+            with self.subTest(shiftMs=shift):
+                rows[1]['startOffsetMs'] = track['startOffsetMs'] + cut * 1000 / track['sampleRate'] + shift
+                (folder / 'session.json').write_text(json.dumps(document))
+                process, result = run_check(folder, evidence, evidence.with_name('shift.result.json'))
+                self.assertEqual(failed(result)[1], rules, process.stdout)
+        rows[1]['startOffsetMs'] = track['startOffsetMs'] + cut * 1000 / track['sampleRate']
         rows[1]['frames'] += 1
         (folder / 'session.json').write_text(json.dumps(document))
         process, result = run_check(folder, evidence, evidence.with_name('bad.result.json'))
-        self.assertEqual(failed(result)[0], ['O0'])
+        self.assertEqual(failed(result), (['O0'], ['O0.files', 'O0.pieces']))
 
     def test_compare_lines_up_two_results(self):
         def result(name):
@@ -231,6 +260,29 @@ class LiveFolderOracle(unittest.TestCase):
         for name in ('protocolCommit', 'extensionVersion'):
             other = dict(base, **{name: 'f' * 40})
             self.assertEqual(oracle.compare(base, other)[0], 2)
+
+    def test_mute_waits_end_on_the_session_clock_too(self):
+        # F(A) can lead the session clock (D61 output stamps), so a wait on F(A) alone could ask
+        # for the mute before MUTE_START_MS or the unmute before mute + MUTE_MS on the session
+        # clock; O2.muteStart and O2.duration hold the requests exactly (variant folder-leads).
+        actions = json.loads((LIVE / 'scenario.json').read_text())['evidence']['actions']
+        self.assertIn('once F(A) >= MUTE_START_MS and the session clock (Date.now() - timelineOriginMs) >= '
+                      'MUTE_START_MS', actions['mute'])
+        self.assertIn('once F(A) >= mute + MUTE_MS and the session clock >= mute + MUTE_MS', actions['unmute'])
+        session, tracks, evidence = make.run('folder-leads')
+        mute, unmute = evidence['actions']['mute'], evidence['actions']['unmute']
+        self.assertEqual([mute['requestedAtMs'], unmute['requestedAtMs'] - mute['requestedAtMs']],
+                         [oracle.C['MUTE_START_MS'], oracle.C['MUTE_MS']])
+
+    def test_resume_observation_keeps_the_host_the_browsers_child(self):
+        # The Mac control host knows its browser only by getppid(): a relay that spawned it would
+        # change the app under test. The host is exec'd by the launcher; only its stdout is relayed.
+        observation = json.loads((LIVE / 'scenario.json').read_text())['evidence']['resumeObservation']
+        self.assertIn("keeps the host the browser's direct child", observation['point'])
+        self.assertIn('then execs the production host', observation['point'])
+        self.assertIn('The browser-to-host direction is not touched', observation['point'])
+        self.assertIn("checks that this pid's parent is the browser process and fails the run otherwise",
+                      observation['process'])
 
     def test_corpus_constants_are_read_not_copied(self):
         scenario = json.loads((LIVE / 'scenario.json').read_text())

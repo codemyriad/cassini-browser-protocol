@@ -57,6 +57,7 @@ ME = ('microphone', 'local')
 NATIVE = ('microphone', 'local', 'system')
 WAV_NAME = re.compile(r'track-[^/\\]+\.wav')
 COMMIT = re.compile(r'[0-9a-f]{40}')
+VIA = SCENARIO['evidence']['resumeObservation']['via']
 
 
 class Unusable(Exception):
@@ -110,6 +111,19 @@ def load_evidence(path):
     tones = value.get('nativeTones')
     if not (isinstance(tones, dict) and _number(tones.get('microphone')) and 20 <= tones['microphone'] <= 20000):
         problems.append('nativeTones.microphone')
+    if not isinstance(value.get('captureId'), str) or not value['captureId']:
+        problems.append('captureId')
+    if type(value.get('timelineOriginMs')) is not int or value['timelineOriginMs'] < 0:
+        problems.append('timelineOriginMs')
+    requests = value.get('resumeRequests')
+    if not isinstance(requests, list):
+        problems.append('resumeRequests')
+    else:
+        for index, request in enumerate(requests):
+            if not (isinstance(request, dict) and _number(request.get('atMs')) and request.get('via') == VIA and
+                    type(request.get('connection')) is int and request['connection'] >= 1 and
+                    {'requestId', 'captureId', 'timelineOriginMs'} <= set(request)):
+                problems.append(f'resumeRequests[{index}]')
     if problems:
         raise Unusable('evidence: missing or invalid ' + ', '.join(problems))
     return value
@@ -118,6 +132,41 @@ def load_evidence(path):
 def pieces(track):
     """A track's physical WAVs: GNOME's RotatingWAV `spans` rows when present, else the track."""
     return track.get('spans') or [track]
+
+
+def piece_problems(track):
+    """Why a rotated track's `spans` rows do not tile its logical extent, else [].
+
+    GNOME's RotatingWAV keeps one logical track in several WAVs: the first row copies the
+    track's startOffsetMs, every later one starts where the frames before it end, rounded
+    to its 48 kHz grid (rotating_wav.py), and padding for a gap is written into the piece
+    (gapFrames, gapMaterialized), so pieces never leave space between them. Each row's
+    stored start must be within one 16 kHz session sample of track start + frames before
+    it / rate, in list order; the last must end at the track's end. That is placement,
+    order, contiguity, coverage and no overlap at once; each piece's extent then starts at
+    its own D55 placement, as everywhere (Folder.window)."""
+    rows = track.get('spans')
+    if not isinstance(rows, list) or not rows or not all(isinstance(r, dict) for r in rows):
+        return ['spans is not a non-empty list of rows']
+    if not _placeable(track):
+        return ['the track has no known start, frames and rate']
+    start, rate, before, problems = track['startOffsetMs'], track['sampleRate'], 0, []
+    for index, row in enumerate(rows):
+        if not (_number(row.get('startOffsetMs')) and type(row.get('frames')) is int and row['frames'] >= 0):
+            return problems + [f'piece {index}: no known start and frames']
+        if (row.get('sampleRate'), row.get('channels')) != (rate, track.get('channels')):
+            problems.append(f'piece {index}: rate or channels differ from the track')
+        want = start + before * 1000 / rate
+        delta = row['startOffsetMs'] - want
+        if abs(delta) > SAMPLE_MS + 1e-9:
+            what = 'starts late, leaving a hole' if delta > 0 else 'starts early, overlapping'
+            problems.append(dict(piece=index, file=row.get('file'), startOffsetMs=row['startOffsetMs'],
+                                 expectedMs=want, deltaMs=round(delta, 4), problem=what))
+        before += row['frames']
+    end, logical = start + before * 1000 / rate, start + track['frames'] * 1000 / rate
+    if abs(end - logical) > SAMPLE_MS + 1e-9:
+        problems.append(dict(piecesEndMs=end, trackEndMs=logical, problem='the pieces do not end at the track end'))
+    return problems
 
 
 def extent(track):
@@ -289,6 +338,24 @@ class Run:
         found = [e for e in self.matching('browser', 'restored') if e['atMs'] >= lost['atMs']]
         return found[0] if len(found) == 1 else None
 
+    def resume_requests(self):
+        """(every observed resume request, those naming this recording): its captureId and
+        timelineOriginMs as the extension holds them, the identity resumeCapture names (SPEC-CONTROL)."""
+        every = self.e['resumeRequests']
+        identity = [self.e['captureId'], self.e['timelineOriginMs']]
+        return every, [r for r in every if [r['captureId'], r['timelineOriginMs']] == identity]
+
+    def resume_seam(self):
+        """[committed loss, restoration]: the first browser/restored and the last system/lost
+        written before it (a none/lost is not the commit: SPEC-CONTROL D52.5), else None."""
+        written = [e for e in self.others_events() if _number(e.get('atMs'))]
+        pairs = [(e.get('source'), e.get('reason')) for e in written]
+        if ('browser', 'restored') not in pairs:
+            return None
+        restored = pairs.index(('browser', 'restored'))
+        lost = [e['atMs'] for e, p in zip(written[:restored], pairs) if p == ('system', 'lost')]
+        return [lost[-1], written[restored]['atMs']] if lost else None
+
     def post_kill(self, key):
         return [t for t in self.keys[key] if extent(t)[0] >= self.actions['kill']['requestedAtMs']]
 
@@ -326,6 +393,10 @@ class Run:
             if total != track.get('frames'):
                 problems.append(f"{track.get('id')}: pieces hold {total} frames, the track says {track.get('frames')}")
         rule('files', not problems, problems[:5] or f'{len(self.tracks)} tracks, every WAV and span reachable')
+        rows = {t.get('id'): piece_problems(t) for t in self.tracks if 'spans' in t}
+        wrong = {str(k): v for k, v in rows.items() if v}
+        rule('pieces', not wrong, dict(wrong=wrong) if wrong else
+             f'{len(rows)} rotated tracks, every piece placed where the frames before it end')
         ids = [t.get('id') for t in self.tracks]
         owner, shared = {}, []
         for track in self.tracks:
@@ -375,9 +446,22 @@ class Run:
 
     # O2 60 s mute ---------------------------------------------------------------------------
     def o2(self, rule):
+        # The window itself comes from the evidence, so it is held to the scenario first. F(A)
+        # can lead the session clock (the extension stamps a frame when it reaches the output,
+        # D61, and GNOME checkpoints right after an append), so the driver waits on both: the
+        # mute once F(A) and the session clock reach MUTE_START_MS, the unmute once both reach
+        # mute.requested + MUTE_MS. The requests are session-clock times, so both lower bounds
+        # hold by construction, exactly.
+        mute, unmute, wait = self.actions['mute'], self.actions['unmute'], SCENARIO['driver']['boundsMs']
+        latest = self.actions['meOff']['observedAtMs'] + C['MUTE_START_MS'] + wait['record'] + C['ACTION_SLACK_MS']
+        rule('muteStart', C['MUTE_START_MS'] <= mute['requestedAtMs'] <= latest,
+             dict(muteRequestedMs=mute['requestedAtMs'], boundsMs=[C['MUTE_START_MS'], latest]))
+        held = unmute['requestedAtMs'] - mute['requestedAtMs']
+        longest = mute['observedAtMs'] + wait['muteHold'] + C['ACTION_SLACK_MS'] - mute['requestedAtMs']
+        rule('duration', C['MUTE_MS'] <= held <= longest, dict(heldMs=held, boundsMs=[C['MUTE_MS'], longest]))
         key = self.key('A')
         spans = self.keys[key]
-        left, right = self.actions['mute']['requestedAtMs'], self.actions['unmute']['requestedAtMs']
+        left, right = mute['requestedAtMs'], unmute['requestedAtMs']
         covering = [t['id'] for t in spans if extent(t)[0] <= left and extent(t)[1] >= right]
         touching = [t['id'] for t in spans if extent(t)[0] < right and extent(t)[1] > left]
         rule('oneSpan', len(covering) == 1 and touching == covering,
@@ -473,6 +557,16 @@ class Run:
         refused = [r for r in refusals if isinstance(r, dict) and
                    (r.get('code') == 'startRejected' or r.get('detail') == 'resumeRefused')]
         rule('refusals', not refused, refused)
+        # D52.5 ask once per loss and control connection (a reconnect's new hello asks once more), from
+        # the driver's own copy of the control pipe (scenario.json resumeObservation). One loss here.
+        every, mine = self.resume_requests()
+        observed = [[r['atMs'], r['connection'], r['requestId'], r['captureId'], r['timelineOriginMs']] for r in every]
+        connections = [r['connection'] for r in every]
+        rule('resumeOnce', bool(every) and len(mine) == len(every) and len(set(connections)) == len(connections),
+             dict(requests=observed, recording=[self.e['captureId'], self.e['timelineOriginMs']]))
+        seam = self.resume_seam()
+        rule('resumeAt', seam is not None and bool(mine) and all(seam[0] <= r['atMs'] <= seam[1] for r in mine),
+             dict(atMs=[r['atMs'] for r in mine], lostAndRestoredMs=seam))
 
     # O4 remote with no packets ---------------------------------------------------------------
     def o4(self, rule):
@@ -564,7 +658,7 @@ class Run:
                 othersSource=self.others_form(),
                 selection=[[e.get('me'), e.get('others'), e.get('reason')] for e in chosen],
                 state=self.doc.get('state'), problemKind=self.doc.get('problemKind'), endReason=end.get('reason'),
-                remoteSources=len(self.keys),
+                remoteSources=len(self.keys), resumeRequests=len(self.resume_requests()[1]),
                 spans=dict(A=[len(self.keys[k]) for k in self.roles['A']], B=[len(self.keys[k]) for k in self.roles['B']],
                            microphone=sum(t.get('kind') in ME for t in self.tracks),
                            system=sum(t.get('kind') == 'system' for t in self.tracks)),

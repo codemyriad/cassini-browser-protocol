@@ -36,9 +36,21 @@ JSON Schema step runs only where jsonschema is importable and `O0.schema` says
 ## Truth sources
 
 The evidence brackets (`actions.<name>.{requestedAtMs, observedAtMs}` on the session
-timeline), the scenario constants and PCM the oracle measures itself. App readers are
-never consulted. A track's extent starts at its D55 placement and lasts frames/rate;
-GNOME's RotatingWAV `spans` rows are read piece by piece, never WAV length alone.
+timeline), the resume requests the driver read off the control pipe, the scenario
+constants and PCM the oracle measures itself. App readers are never consulted. A track's extent starts at its D55 placement and lasts frames/rate;
+GNOME's RotatingWAV `spans` rows are read piece by piece, never WAV length alone, each
+piece from its own D55 placement.
+
+GNOME's `rotating_wav.py` keeps one logical track in several WAVs when one reaches its
+size limit: the first row copies the track's file and `startOffsetMs`, each later row
+starts where the frames before it end (rounded to GNOME's 48 kHz grid, at most 1/48 ms
+off), and padding for a gap is written into the piece (`gapFrames`, `gapMaterialized`) and
+recorded in the track's `gaps`, so the format leaves no space between pieces: a hole
+between them would also contradict the track's own `endOffsetMs` (O0.offsets). O0.pieces
+holds every row to that linear placement. The limit is 4 GiB per WAV, so neither app
+rotates within this scenario (Mac never rotates); a rotated native track whose rows carry
+host-clock `clockAnchors` would be mapped by its clock, not linearly, and needs a
+coordinator decision before this oracle accepts it.
 
 Roles come from PCM: a remote `sourceTrackId` is A (or B) when the first PROOF_MS of
 its earliest span carries tone A, 1540 Hz (or B, 2090 Hz) above SILENT_DBFS and above
@@ -50,6 +62,63 @@ the time comes from an audio clock (span starts and ends, the last frame, none/l
 sample (1/16 ms) of the event's placed `atMs`: both writers store the event's
 fractional `atMs` as the start, and a raw comparison would fail half the runs.
 
+The mute window W comes from the evidence, so O2 first holds it to the scenario. F(A)
+can run ahead of the session clock: the extension stamps each frame at the instant it
+reaches the output (D61), output latency after it is rendered, and GNOME stores those
+stamps unclamped and checkpoints `session.json` right after an append. So the driver
+waits on both clocks: it asks for the mute once F(A) ≥ MUTE_START_MS and the session clock
+(`Date.now() − timelineOriginMs`) ≥ MUTE_START_MS, and for the unmute once both are at
+least mute.requested + MUTE_MS. The requests are session-clock times, so the lower bounds
+of O2.muteStart and O2.duration hold exactly, with no lead band (variant `folder-leads`:
+A's stamps 20 ms ahead). O2.silent then shows at least MUTE_MS − 2 × EDGE_MS of silence
+in A's one span, measured in PCM.
+
+### Resume requests
+
+The folder shows the restore, not how often the app asked for it, so the driver observes
+each resume-capture-v1 request itself (`scenario.json` `evidence.resumeObservation`). The
+app's production control host (`io.codemyriad.cassini.control`) is registered through a
+driver-owned launcher that keeps the host the browser's direct child: the launcher starts
+a detached relay reading a private FIFO and writing to the browser's pipe, then execs the
+host with only its stdout redirected into that FIFO. A sketch in POSIX sh:
+
+```sh
+mkfifo "$dir/out"
+( exec node relay.mjs "$dir/out" </dev/null & )   # detached; stdout is the browser's pipe
+exec /path/to/control-host "$@" >"$dir/out"        # same pid, parent, argv, env and stdin
+```
+
+The relay copies the host-to-browser bytes unchanged and unbuffered, exits at the end of
+its input, and parses them as native messaging frames (4-byte native-endian length, UTF-8
+JSON); the browser-to-host direction is not touched. The host must not be the relay's
+child: the Mac control host identifies its browser only by `getppid()`
+(`BrowserInstance.parentBrowser`), so a spawning relay would run it with no identified
+browser, a configuration production never meets. The launcher records its pid (the
+host's, after exec) and the driver fails the run unless that pid's parent is the browser.
+Every frame with `type: "command"`, `action: "start"` and a `resumeCapture` member becomes
+one entry:
+
+```json
+"captureId": "<the extension's cassiniSessions[] captureId for the meeting tab>",
+"timelineOriginMs": 1793880000000,
+"resumeRequests": [
+  {"atMs": 97210.5, "via": "control-pipe", "connection": 1, "requestId": "resume-1",
+   "captureId": "<resumeCapture.captureId as written>", "timelineOriginMs": 1793880000000}
+]
+```
+
+`atMs` is `Date.now()` when the relay has read the whole frame, before forwarding it, minus
+`timelineOriginMs`. `connection` numbers the control host that wrote it, in launch order
+from 1: each launch is one control connection with its own hello, and D52.5 allows one ask
+per loss and control connection (a reconnect asks once more). The identity a request must name (`captureId`, `timelineOriginMs`) is
+the one the extension's service worker holds for the recording, read at record. This is
+independent of the app under test: they are the bytes its control host wrote, copied by a
+driver process before the extension reads them, so neither the app's own reports nor the
+extension's checks, coalescing or refusal can hide or add one; and the host runs as in
+production, so the observation does not change what it sends. Requests are counted from
+before record until the stop observation, reconnects included; a frame the relay cannot
+read fails the run.
+
 ## Checks
 
 | rule | passes when |
@@ -57,6 +126,7 @@ fractional `atMs` as the start, and a raw comparison would fail half the runs.
 | O0.schema | session.schema.json validates (where jsonschema is importable) |
 | O0.bounds | `bounds()`: S-6 event order, restored/callConnected legality, `end` after every finalized track end, source ID bytes |
 | O0.files | every track's WAVs (its `spans` rows, else the track) are safe regular files in the folder, PCM16 with the track's rate and channels, header frames = row frames, size = 44 + frames × channels × 2; the rows sum to the track's frames |
+| O0.pieces | a track with `spans` lists a non-empty list of rows with the track's rate and channels; in list order each row's stored `startOffsetMs` is within one session sample (1/16 ms) of track start + frames before it / rate, and the last ends at the track's end: placement, order, contiguity, coverage and no overlap |
 | O0.ended | every track has `ended: true` |
 | O0.offsets | every start is known and `endOffsetMs = startOffsetMs + frames/rate × 1000` (±0.001 ms) |
 | O0.oneFolder | evidence `newFolders` is exactly this folder, named `Recording-<id>` |
@@ -68,6 +138,8 @@ fractional `atMs` as the start, and a raw comparison would fail half the runs.
 | O1.late | B's first span starts at or after LATE_REMOTE_MS |
 | O1.bracket | ... and inside the lateRemote bracket ± SLACK |
 | O1.bleed | there, tone A − tone B ≤ BLEED_DB |
+| O2.muteStart | MUTE_START_MS ≤ mute.requested ≤ meOff.observed + MUTE_START_MS + `boundsMs.record` + SLACK (the driver's wait for F(A) and the session clock ≥ MUTE_START_MS, and its bound) |
+| O2.duration | MUTE_MS ≤ unmute.requested − mute.requested ≤ mute.observed + `boundsMs.muteHold` + SLACK − mute.requested (the driver's hold until F(A) and the session clock ≥ mute.requested + MUTE_MS, and its bound) |
 | O2.oneSpan | with W = [mute.requested, unmute.requested]: one A span covers W and no other A span touches it |
 | O2.gaps | A's gap ranges in W: none ≥ 1000 ms, total ≤ MUTE_JITTER_MS, no overflow marker before W ends |
 | O2.silent | A's RMS over [W₀ + EDGE_MS, W₁ − EDGE_MS] ≤ SILENT_DBFS |
@@ -87,6 +159,8 @@ fractional `atMs` as the start, and a raw comparison would fail half the runs.
 | O3.resumedTone | each of those carries its tone in its first PROOF_MS |
 | O3.system | exactly one system track; it starts at lost (SPEC S-6) and ends within EDGE_MS of restored |
 | O3.refusals | no `startRejected` refusal and no `resumeRefused` detail |
+| O3.resumeOnce | the evidence shows at least one resume request, every one names this recording (its `captureId` and `timelineOriginMs` equal the evidence's), and no two come from the same control connection (D52.5: once per loss and control connection; the scenario has one loss) |
+| O3.resumeAt | every request naming this recording is at or after the committed loss (the last system/lost before the first browser/restored) and at or before that browser/restored; there is at least one |
 | O4.keys | every remote track has a `sourceTrackId`, and there are exactly 2 |
 | O4.outcomeRows | exactly 2 `captureOutcome.sources` rows, one per key, each listing exactly that key's track ids, both `captured` (so no `neverAudio`) |
 | O4.evidence | `maxSourceCount` 3, slot C `connected` with 0 packets received |
@@ -121,6 +195,8 @@ Events: browser/start and selection start at 0, me off at 2100, me on at 90250,
 system/lost at 95912.5, browser/restored at 99500, end/user at 109625. Brackets:
 record −180/1350, meOff 2000/2700, mute 5310/5320, unmute 66050/68320, lateRemote
 68400/70950, meOn 90200/92650, kill 95300/96680, restore 96680/102380, stop 109500/110310.
+One resume request, read off the control pipe at 97210.5, names the recording
+(`live-folder-synthetic`, origin 1793880000000).
 
 ## Mutants
 
@@ -131,7 +207,7 @@ that always passes turns the self-test red. Without jsonschema (macOS
 
 | mutant | defect | fails exactly |
 |---|---|---|
-| drop-restored | no browser/restored | O3.restored, O3.sequence, O3.state, O3.system |
+| drop-restored | no browser/restored | O3.restored, O3.sequence, O3.state, O3.system, O3.resumeAt |
 | mute-gap | a 2 s jump gap in the mute | O2.gaps, O2.present |
 | split-mute | A split into two spans during the mute | O2.oneSpan, O3.spans |
 | lost-in-mute | a system/lost at 35 s | O2.noEvents, O3.sequence |
@@ -163,6 +239,14 @@ that always passes turns the self-test red. Without jsonschema (macOS
 | system-before-lost | the system track starts 900 ms before lost | O3.system |
 | system-never-ends | the system track runs on to Stop | O3.system |
 | mic-late-no-prefix | microphone-2 starts 400 ms after M, no prefix gap | O5.micOn, O5.micAudio |
+| short-mute | the mute held 50.74 s (unmute asked at 56050), A's tone back as early | O2.duration |
+| early-mute | the mute asked at 2810, before F(A) can reach MUTE_START_MS, held a full MUTE_MS | O2.muteStart |
+| no-resume | no resume request on the pipe (the folder still shows the restore) | O3.resumeOnce, O3.resumeAt |
+| duplicate-resume | a second request at 98410.25 on the same control connection | O3.resumeOnce |
+| wrong-capture-resume | the one request names captureId `live-folder-another` | O3.resumeOnce, O3.resumeAt |
+| early-resume | the one request at 95600, after the kill and before system/lost committed | O3.resumeAt |
+| shifted-piece | span-b1 in two WAVs, the second placed 20 s late (ends at 115350, the track at 95350) | O0.pieces |
+| overlapping-piece | span-b1 in two WAVs, the second placed 1 s early, over the first | O0.pieces |
 
 ## Variants
 
@@ -173,6 +257,8 @@ equal to the base.
 |---|---|
 | fractional-mic | M = 90250.02 (wall clock), microphone-2 starts there: its D55 placement is 90250.0, below M |
 | mac-loss-form | none/lost at 95400 (the transport loss), then system/lost when the fallback commits |
+| rotated-wavs | GNOME's RotatingWAV form: span-a1 in three WAVs (cut at 30000.0625 in the mute and at 70000.0625), span-b1 and microphone-2 in two |
+| folder-leads | A's stamps 20 ms ahead of the session clock (D61 output time) and the driver's waits ending on the session clock: mute asked at exactly 5000, unmute at exactly 65000 |
 
 ## compare
 
