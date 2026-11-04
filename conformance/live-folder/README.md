@@ -137,7 +137,7 @@ read fails the run.
 | O0.files | every track's WAVs (its `spans` rows, else the track) are safe regular files in the folder, PCM16 with the track's rate and channels, header frames = row frames, size = 44 + frames × channels × 2; the rows sum to the track's frames |
 | O0.pieces | a track with `spans` lists a non-empty list of rows with the track's rate and channels; in list order each row's stored `startOffsetMs` is within one session sample (1/16 ms) of track start + frames before it / rate, and the last ends at the track's end: placement, order, contiguity, coverage and no overlap |
 | O0.ended | every track has `ended: true` |
-| O0.offsets | every start is known and `endOffsetMs = startOffsetMs + frames/rate × 1000` (±0.001 ms); strict: a SPEC-legal track with no start fails it here, while every other rule leaves it out |
+| O0.offsets | every start is known and `endOffsetMs = startOffsetMs + frames/rate × 1000` (±0.001 ms); strict: a SPEC-legal track with no start fails it here, and every rule but O4.outcomeRows leaves it out |
 | O0.oneFolder | evidence `newFolders` is exactly this folder, named `Recording-<UUID>` where that UUID equals session.json's `id` as a value: both canonical 8-4-4-4-12 hex, in either case (Mac names the folder lowercase, its id is uppercase); a malformed one fails |
 | O0.unique | no track id repeats, and no WAV belongs to two tracks or twice to one (SPEC S-6: each span its own id and WAV); stdlib, so it holds where O0.schema is unavailable |
 | O0.kinds | track kinds ⊆ {remote, microphone, system} |
@@ -166,7 +166,7 @@ read fails the run.
 | O3.labels | all spans of a key carry one label (no "(resumed)") |
 | O3.resumedStart | A and B each have a span starting after kill.requested, and every such span starts at or after lost |
 | O3.resumedTone | each of those carries its tone in its first PROOF_MS |
-| O3.system | exactly one system track; it starts at lost (SPEC S-6) and ends within EDGE_MS of restored |
+| O3.system | exactly one placed system track (a system track with no start is left out); it starts at lost (SPEC S-6) and ends within EDGE_MS of restored |
 | O3.refusals | no `startRejected` refusal and no `resumeRefused` detail |
 | O3.resumeOnce | the evidence shows at least one resume request, every one names this recording (its `captureId` and `timelineOriginMs` equal the evidence's), and no two come from the same control connection (D52.5: once per loss and control connection; the scenario has one loss) |
 | O3.resumeAt | every request naming this recording is at or after the committed loss (the last system/lost before the first browser/restored) and at or before that browser/restored; there is at least one |

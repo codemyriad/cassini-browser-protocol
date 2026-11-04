@@ -277,6 +277,30 @@ class LiveFolderOracle(unittest.TestCase):
         self.assertEqual(failed(result), (['O0', 'O4'], ['O0.offsets', 'O4.outcomeRows']))
         self.assertEqual(events.others_presence(document),
                          events.others_presence(json.loads((self.base / 'session.json').read_text())))
+        # The same holds for a system declaration: O3.system counts placed system tracks only, so a
+        # 0-frame system track with no start (missing or null) fails O0.offsets alone.
+        for null in (False, True):
+            with self.subTest(system_declaration=null and 'null start' or 'missing start'):
+                folder, evidence = self.copy()
+                document = json.loads((folder / 'session.json').read_text())
+                system = next(t for t in document['tracks'] if t['kind'] == 'system')
+                declared = {k: v for k, v in system.items() if k not in ('startOffsetMs', 'endOffsetMs', 'spans')}
+                declared.update(id='declared-system', file='track-declared-system.wav', frames=0, ended=True)
+                if null:
+                    declared.update(startOffsetMs=None, endOffsetMs=None)
+                with wave.open(str(folder / declared['file']), 'wb') as writer:
+                    writer.setnchannels(declared['channels'])
+                    writer.setsampwidth(2)
+                    writer.setframerate(declared['sampleRate'])
+                document['tracks'].append(declared)
+                events.validate(document)
+                (folder / 'session.json').write_text(json.dumps(document))
+                process, result = run_check(folder, evidence, evidence.with_name('system.result.json'))
+                rules = [rule for check in result['checks'] for rule in check['measured']]
+                self.assertEqual([rule for rule in rules if rule.endswith('.error')], [])
+                self.assertEqual(failed(result), (['O0'], ['O0.offsets']), process.stdout)
+                base = oracle.check(self.base, oracle.load_evidence(self.root / 'base/evidence.json'))
+                self.assertEqual(result['facts']['categorical']['spans'], base['facts']['categorical']['spans'])
 
     def test_compare_lines_up_two_results(self):
         def result(name):

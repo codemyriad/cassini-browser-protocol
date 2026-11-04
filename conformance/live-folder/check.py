@@ -568,10 +568,11 @@ class Run:
             hz = C['TONE_' + role + '_HZ']
             tones[role] = [self.f.tone([t], extent(t)[0], extent(t)[0] + C['PROOF_MS'], hz) for t in self.post_kill(key)]
         rule('resumedTone', all(tones.values()) and all(_audible(v) for t in tones.values() for v in t), tones)
-        system = [list(extent(t)) if _placeable(t) else None for t in self.tracks if t.get('kind') == 'system']
+        # Placed system tracks only: a SPEC-legal declaration with no start has no extent (O0.offsets).
+        system = [list(extent(t)) for t in self.tracks if t.get('kind') == 'system' and _placeable(t)]
         rule('system', lost is not None and restored is not None and len(system) == 1 and all(
-            s is not None and at_event(s[0], lost['atMs']) and abs(s[1] - restored['atMs']) <= C['EDGE_MS']
-            for s in system), dict(systemMs=system))
+            at_event(s, lost['atMs']) and abs(e - restored['atMs']) <= C['EDGE_MS']
+            for s, e in system), dict(systemMs=system))
         refusals = self.doc.get('refusals') if isinstance(self.doc.get('refusals'), list) else []
         refused = [r for r in refusals if isinstance(r, dict) and
                    (r.get('code') == 'startRejected' or r.get('detail') == 'resumeRefused')]
@@ -680,8 +681,8 @@ class Run:
                 state=self.doc.get('state'), problemKind=self.doc.get('problemKind'), endReason=end.get('reason'),
                 remoteSources=len(self.keys), resumeRequests=len(self.resume_requests()[1]),
                 spans=dict(A=[len(self.keys[k]) for k in self.roles['A']], B=[len(self.keys[k]) for k in self.roles['B']],
-                           microphone=sum(t.get('kind') in ME for t in self.tracks),
-                           system=sum(t.get('kind') == 'system' for t in self.tracks)),
+                           microphone=sum(t.get('kind') in ME and _placeable(t) for t in self.tracks),
+                           system=sum(t.get('kind') == 'system' and _placeable(t) for t in self.tracks)),
                 outcomes=sorted([role.get(k, 'other'), v] for k, v in outcomes.items()),
             ),
             numeric=dict(
