@@ -162,7 +162,7 @@ needs only the standard library. See the folder's README for every rule.
 
 `runLiveFolder({meeting, remote, app, worker, out})` runs the scenario through an app
 adapter (`record`, `selectMe`, `snapshot`, `meetingRow`, `stop`, `audioHostPids`,
-`folders`, optional `saved`; the header of the file lists the contract), writes
+`folders`, `controlHost`, `browserPid`, optional `saved`; the header of the file lists the contract), writes
 `evidence.json` and runs `check.py` before the app quits. It needs no Playwright of its
 own: the adapter passes the pages and the extension's service worker.
 
@@ -178,18 +178,36 @@ own: the adapter passes the pages and the extension's service worker.
   half-written file) for S, the latest track end, and F(source), one source's. Every
   step waits on the folder or the app with a bound from `scenario.json` and fails with
   the step's name (E1). Times are `Date.now()` minus the session origin the extension
-  holds (`chrome.storage.session` `cassiniSessions[].startedAt`), so they are app-neutral.
+  holds, so they are app-neutral: the `chrome.storage.session` `cassiniSessions[]` entry of
+  the meeting tab gives the evidence's `captureId` and integer `timelineOriginMs`.
+- Mute: asked once F(A) and the session clock both reach `MUTE_START_MS`, unmuted once both
+  reach `mute.requested + MUTE_MS` (O2.muteStart, O2.duration).
 - Forced resume: `scenarios/native-launcher.mjs` registers the app's production hosts
   through a POSIX `sh` launcher that writes its pid to `<pids>/<name>-<pid>.pid` and execs
   the host, so the test kills exactly the session's audio host. The driver waits for
   `system/lost` before `browser/restored` (a restore with no committed loss fails at once).
+- Resume requests (`scenario.json` `resumeObservation`): the adapter registers its control
+  host with `writeNativeHost({..., observe})`. That launcher takes the first free
+  `<observe>/<n>` (mkdir, so connections count from 1 in launch order), records `$$ $PPID`
+  there, makes a FIFO in it, starts `scenarios/control-relay.mjs` detached (stdin
+  `/dev/null`, stdout the browser's pipe) and execs the host with only its stdout into the
+  FIFO. The relay copies the FIFO to the browser byte for byte, one blocking write per read,
+  logs each native-messaging frame (`Date.now()` once the frame is whole, before
+  forwarding) and exits at the end of its input; an unreadable frame is logged and still
+  forwarded. At setup, record, kill, restore and stop the driver fails the run if a control
+  host's launch parent or live parent is not `browserPid()`, or a relay logged an
+  unparsable frame; after the stop observation it writes `resumeRequests` in pipe order.
 - The mute is held until A's own frames cover `MUTE_MS`; on every poll A must keep one
   span, stay open and see no `othersSource` event. Me on waits for the microphone span
   that starts at the `me:true` selection's `atMs`.
 
 `node --test tests/live-folder-driver.test.mjs` checks the folder clock against
 `make.py`'s synthetic folder, its tolerant reads and labelled bounds, the launcher
-(pid, arguments, exec, host-name prefixes) and the constants the driver reads; protocol
-CI runs it with `node --check` of every scenario. There is no Playwright run of the
+(pid, arguments, exec, host-name prefixes) and the constants the driver reads;
+`node --test tests/control-relay.test.mjs` checks the frame reader across chunk
+boundaries, the relay's byte-exact passthrough, unparsable and cut-off frames, and the
+observing launcher (the host stays the spawner's child, connections in launch order, the
+parent check, resume requests in pipe order, stuck relays stopped) with no browser.
+Protocol CI runs both with `node --check` of every scenario. There is no Playwright run of the
 driver here (no protocol host can resume or select): GNOME's `live-folder` job and the
 Mac self-test run it against the real writers.
