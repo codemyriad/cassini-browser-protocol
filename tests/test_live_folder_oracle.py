@@ -203,10 +203,18 @@ class LiveFolderOracle(unittest.TestCase):
         (folder / 'session.json').write_text(json.dumps(document))
         process, result = run_check(folder, evidence, evidence.with_name('spans.result.json'))
         self.assertEqual(process.returncode, 0, process.stdout)
+        # GNOME rounds a later piece's start to its 48 kHz grid: within one session sample passes.
+        for shift, rules in ((1 / 48, []), (-1 / 48, []), (0.1, ['O0.pieces']), (-0.1, ['O0.pieces'])):
+            with self.subTest(shiftMs=shift):
+                rows[1]['startOffsetMs'] = track['startOffsetMs'] + cut * 1000 / track['sampleRate'] + shift
+                (folder / 'session.json').write_text(json.dumps(document))
+                process, result = run_check(folder, evidence, evidence.with_name('shift.result.json'))
+                self.assertEqual(failed(result)[1], rules, process.stdout)
+        rows[1]['startOffsetMs'] = track['startOffsetMs'] + cut * 1000 / track['sampleRate']
         rows[1]['frames'] += 1
         (folder / 'session.json').write_text(json.dumps(document))
         process, result = run_check(folder, evidence, evidence.with_name('bad.result.json'))
-        self.assertEqual(failed(result)[0], ['O0'])
+        self.assertEqual(failed(result), (['O0'], ['O0.files', 'O0.pieces']))
 
     def test_compare_lines_up_two_results(self):
         def result(name):

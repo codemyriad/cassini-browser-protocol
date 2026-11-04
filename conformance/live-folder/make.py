@@ -348,6 +348,37 @@ def early_resume(session, tracks, evidence):
     evidence['resumeRequests'] = [resume_request(95600, 'resume-1')]
 
 
+def rotate(plan, *cuts):
+    """GNOME's RotatingWAV form (rotating_wav.py): the track's frames in several WAVs, cut at these
+    frame counts. The first piece keeps the track's file and start; each later one starts where the
+    frames before it end, on the 48 kHz grid. The track lists them in `spans`."""
+    edges = [0, *cuts, plan['frames']]
+    plan['pieces'] = [dict(file=wav_name(plan) if index == 0 else f"track-{plan['id']}-{index}.wav", frames=last - first,
+                           startOffsetMs=plan['startOffsetMs'] if index == 0 else
+                           (round(plan['startOffsetMs'] * 48) + round(first * 48000 / RATE)) / 48)
+                      for index, (first, last) in enumerate(zip(edges, edges[1:]))]
+    return plan['pieces']
+
+
+def shifted_piece(session, tracks, evidence):
+    # Codex #49: B's second WAV placed 20 s later, ending at 115350 while B's track ends at 95350.
+    rotate(_track(tracks, 'span-b1'), 100000)[1]['startOffsetMs'] += 20000
+
+
+def overlapping_piece(session, tracks, evidence):
+    # B's second WAV placed 1 s early, over the end of its first.
+    rotate(_track(tracks, 'span-b1'), 100000)[1]['startOffsetMs'] -= 1000
+
+
+def rotated_wavs(session, tracks, evidence):
+    # GNOME at a small WAV limit: A in three pieces (cut in the mute and after it), B and the
+    # second microphone span (with its prefix gap) in two.
+    a1 = _track(tracks, 'span-a1')
+    rotate(a1, frames(a1['startOffsetMs'], 30000.0625), frames(a1['startOffsetMs'], 70000.0625))
+    rotate(_track(tracks, 'span-b1'), 100000)
+    rotate(_track(tracks, 'microphone-2'), frames(90250, 100000))
+
+
 def fractional_mic(session, tracks, evidence):
     # GNOME and Mac write the selection's wall-clock atMs as the span start; this one
     # places 1/50 ms below it on the 16 kHz grid (D55).
@@ -408,12 +439,15 @@ MUTANTS = {
     'duplicate-resume': (duplicate_resume, ['O3.resumeOnce']),
     'wrong-capture-resume': (wrong_capture_resume, ['O3.resumeOnce', 'O3.resumeAt']),
     'early-resume': (early_resume, ['O3.resumeAt']),
+    'shifted-piece': (shifted_piece, ['O0.pieces']),
+    'overlapping-piece': (overlapping_piece, ['O0.pieces']),
 }
 
 # name: another form a correct writer may produce; each must pass every check.
 VARIANTS = {
     'fractional-mic': fractional_mic,
     'mac-loss-form': mac_loss_form,
+    'rotated-wavs': rotated_wavs,
 }
 
 
@@ -462,6 +496,9 @@ def document(session, tracks):
             track.update(receivedFrames=plan['frames'], captureOutcome='captured')
         track.update(plan['extra'])
         track['gaps'] = plan.get('gaps', [])
+        if 'pieces' in plan:
+            track['spans'] = [dict(file=p['file'], sampleRate=RATE, channels=plan['channels'], frames=p['frames'],
+                                   startOffsetMs=p['startOffsetMs'], ended=True) for p in plan['pieces']]
         out.append(track)
     sources = {}
     for track in out:
@@ -486,11 +523,15 @@ def write(out, session, tracks, evidence):
         data = samples(plan)[:plan.get('wavFrames', plan['frames']) * plan['channels']]
         if sys.byteorder != 'little':
             data.byteswap()
-        with wave.open(str(folder / wav_name(plan)), 'wb') as writer:
-            writer.setnchannels(plan['channels'])
-            writer.setsampwidth(2)
-            writer.setframerate(RATE)
-            writer.writeframes(data.tobytes())
+        first = 0
+        for piece in plan.get('pieces') or [dict(file=wav_name(plan), frames=len(data) // plan['channels'])]:
+            last = first + piece['frames']
+            with wave.open(str(folder / piece['file']), 'wb') as writer:
+                writer.setnchannels(plan['channels'])
+                writer.setsampwidth(2)
+                writer.setframerate(RATE)
+                writer.writeframes(data[first * plan['channels']:last * plan['channels']].tobytes())
+            first = last
     (folder / 'session.json').write_text(json.dumps(document(session, tracks), indent=1) + '\n')
     (out / 'evidence.json').write_text(json.dumps(evidence, indent=1, sort_keys=True) + '\n')
     return folder

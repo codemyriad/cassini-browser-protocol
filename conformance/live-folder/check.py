@@ -133,6 +133,41 @@ def pieces(track):
     return track.get('spans') or [track]
 
 
+def piece_problems(track):
+    """Why a rotated track's `spans` rows do not tile its logical extent, else [].
+
+    GNOME's RotatingWAV keeps one logical track in several WAVs: the first row copies the
+    track's startOffsetMs, every later one starts where the frames before it end, rounded
+    to its 48 kHz grid (rotating_wav.py), and padding for a gap is written into the piece
+    (gapFrames, gapMaterialized), so pieces never leave space between them. Each row's
+    stored start must be within one 16 kHz session sample of track start + frames before
+    it / rate, in list order; the last must end at the track's end. That is placement,
+    order, contiguity, coverage and no overlap at once; each piece's extent then starts at
+    its own D55 placement, as everywhere (Folder.window)."""
+    rows = track.get('spans')
+    if not isinstance(rows, list) or not rows or not all(isinstance(r, dict) for r in rows):
+        return ['spans is not a non-empty list of rows']
+    if not _placeable(track):
+        return ['the track has no known start, frames and rate']
+    start, rate, before, problems = track['startOffsetMs'], track['sampleRate'], 0, []
+    for index, row in enumerate(rows):
+        if not (_number(row.get('startOffsetMs')) and type(row.get('frames')) is int and row['frames'] >= 0):
+            return problems + [f'piece {index}: no known start and frames']
+        if (row.get('sampleRate'), row.get('channels')) != (rate, track.get('channels')):
+            problems.append(f'piece {index}: rate or channels differ from the track')
+        want = start + before * 1000 / rate
+        delta = row['startOffsetMs'] - want
+        if abs(delta) > SAMPLE_MS + 1e-9:
+            what = 'starts late, leaving a hole' if delta > 0 else 'starts early, overlapping'
+            problems.append(dict(piece=index, file=row.get('file'), startOffsetMs=row['startOffsetMs'],
+                                 expectedMs=want, deltaMs=round(delta, 4), problem=what))
+        before += row['frames']
+    end, logical = start + before * 1000 / rate, start + track['frames'] * 1000 / rate
+    if abs(end - logical) > SAMPLE_MS + 1e-9:
+        problems.append(dict(piecesEndMs=end, trackEndMs=logical, problem='the pieces do not end at the track end'))
+    return problems
+
+
 def extent(track):
     """[start, end) session ms: the D55 placement plus frames/rate (R88)."""
     start = events.placed_ms(track['startOffsetMs'])
@@ -357,6 +392,10 @@ class Run:
             if total != track.get('frames'):
                 problems.append(f"{track.get('id')}: pieces hold {total} frames, the track says {track.get('frames')}")
         rule('files', not problems, problems[:5] or f'{len(self.tracks)} tracks, every WAV and span reachable')
+        rows = {t.get('id'): piece_problems(t) for t in self.tracks if 'spans' in t}
+        wrong = {str(k): v for k, v in rows.items() if v}
+        rule('pieces', not wrong, dict(wrong=wrong) if wrong else
+             f'{len(rows)} rotated tracks, every piece placed where the frames before it end')
         ids = [t.get('id') for t in self.tracks]
         owner, shared = {}, []
         for track in self.tracks:

@@ -38,7 +38,19 @@ JSON Schema step runs only where jsonschema is importable and `O0.schema` says
 The evidence brackets (`actions.<name>.{requestedAtMs, observedAtMs}` on the session
 timeline), the resume requests the driver read off the control pipe, the scenario
 constants and PCM the oracle measures itself. App readers are never consulted. A track's extent starts at its D55 placement and lasts frames/rate;
-GNOME's RotatingWAV `spans` rows are read piece by piece, never WAV length alone.
+GNOME's RotatingWAV `spans` rows are read piece by piece, never WAV length alone, each
+piece from its own D55 placement.
+
+GNOME's `rotating_wav.py` keeps one logical track in several WAVs when one reaches its
+size limit: the first row copies the track's file and `startOffsetMs`, each later row
+starts where the frames before it end (rounded to GNOME's 48 kHz grid, at most 1/48 ms
+off), and padding for a gap is written into the piece (`gapFrames`, `gapMaterialized`) and
+recorded in the track's `gaps`, so the format leaves no space between pieces: a hole
+between them would also contradict the track's own `endOffsetMs` (O0.offsets). O0.pieces
+holds every row to that linear placement. The limit is 4 GiB per WAV, so neither app
+rotates within this scenario (Mac never rotates); a rotated native track whose rows carry
+host-clock `clockAnchors` would be mapped by its clock, not linearly, and needs a
+coordinator decision before this oracle accepts it.
 
 Roles come from PCM: a remote `sourceTrackId` is A (or B) when the first PROOF_MS of
 its earliest span carries tone A, 1540 Hz (or B, 2090 Hz) above SILENT_DBFS and above
@@ -90,6 +102,7 @@ read fails the run.
 | O0.schema | session.schema.json validates (where jsonschema is importable) |
 | O0.bounds | `bounds()`: S-6 event order, restored/callConnected legality, `end` after every finalized track end, source ID bytes |
 | O0.files | every track's WAVs (its `spans` rows, else the track) are safe regular files in the folder, PCM16 with the track's rate and channels, header frames = row frames, size = 44 + frames × channels × 2; the rows sum to the track's frames |
+| O0.pieces | a track with `spans` lists a non-empty list of rows with the track's rate and channels; in list order each row's stored `startOffsetMs` is within one session sample (1/16 ms) of track start + frames before it / rate, and the last ends at the track's end: placement, order, contiguity, coverage and no overlap |
 | O0.ended | every track has `ended: true` |
 | O0.offsets | every start is known and `endOffsetMs = startOffsetMs + frames/rate × 1000` (±0.001 ms) |
 | O0.oneFolder | evidence `newFolders` is exactly this folder, named `Recording-<id>` |
@@ -158,6 +171,8 @@ Events: browser/start and selection start at 0, me off at 2100, me on at 90250,
 system/lost at 95912.5, browser/restored at 99500, end/user at 109625. Brackets:
 record −180/1350, meOff 2000/2700, mute 5310/5320, unmute 66050/68320, lateRemote
 68400/70950, meOn 90200/92650, kill 95300/96680, restore 96680/102380, stop 109500/110310.
+One resume request, read off the control pipe at 97210.5, names the recording
+(`live-folder-synthetic`, origin 1793880000000).
 
 ## Mutants
 
@@ -206,6 +221,8 @@ that always passes turns the self-test red. Without jsonschema (macOS
 | duplicate-resume | a second request at 98410.25 | O3.resumeOnce |
 | wrong-capture-resume | the one request names captureId `live-folder-another` | O3.resumeOnce, O3.resumeAt |
 | early-resume | the one request at 95600, after the kill and before system/lost committed | O3.resumeAt |
+| shifted-piece | span-b1 in two WAVs, the second placed 20 s late (ends at 115350, the track at 95350) | O0.pieces |
+| overlapping-piece | span-b1 in two WAVs, the second placed 1 s early, over the first | O0.pieces |
 
 ## Variants
 
@@ -216,6 +233,7 @@ equal to the base.
 |---|---|
 | fractional-mic | M = 90250.02 (wall clock), microphone-2 starts there: its D55 placement is 90250.0, below M |
 | mac-loss-form | none/lost at 95400 (the transport loss), then system/lost when the fallback commits |
+| rotated-wavs | GNOME's RotatingWAV form: span-a1 in three WAVs (cut at 30000.0625 in the mute and at 70000.0625), span-b1 and microphone-2 in two |
 
 ## compare
 
