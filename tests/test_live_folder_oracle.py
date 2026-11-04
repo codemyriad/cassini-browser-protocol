@@ -231,6 +231,53 @@ class LiveFolderOracle(unittest.TestCase):
         process, result = run_check(folder, evidence, evidence.with_name('bad.result.json'))
         self.assertEqual(failed(result), (['O0'], ['O0.files', 'O0.pieces']))
 
+    def test_folder_and_id_are_compared_as_uuid_values(self):
+        # SPEC says only Recording-<UUID>: Mac writes the folder lowercase and the id uppercase
+        # (variant uuid-case). Another UUID, or a name or id that is not a canonical UUID, fails
+        # O0.oneFolder alone and never aborts O0. -S: no jsonschema, so O0.schema stays out of it.
+        for change, folder in ((dict(id='02000000-0000-4000-8000-00000000000A'), None),
+                               (dict(id='not-a-uuid'), None), (dict(id=None), None),
+                               ({}, 'Recording-not-a-uuid'),
+                               ({}, 'Recording-02000000000040008000000000000002'),
+                               ({}, 'Recording-{02000000-0000-4000-8000-000000000002}')):
+            with self.subTest(change=change, folder=folder):
+                path, evidence = self.copy()
+                document = json.loads((path / 'session.json').read_text())
+                document.update(change)
+                (path / 'session.json').write_text(json.dumps(document))
+                if folder:
+                    path = path.rename(path.with_name(folder))
+                    value = json.loads(evidence.read_text())
+                    value['newFolders'] = [folder]
+                    evidence.write_text(json.dumps(value))
+                process, result = run_check(path, evidence, evidence.with_name('uuid.result.json'), '-S')
+                self.assertEqual(process.returncode, 1, process.stderr)
+                self.assertEqual(failed(result), (['O0'], ['O0.oneFolder']))
+        folder = next((self.root / 'uuid-case').glob('Recording-*'))
+        document = json.loads((folder / 'session.json').read_text())
+        self.assertNotEqual(folder.name, f"Recording-{document['id']}")
+        self.assertEqual(folder.name.lower(), f"Recording-{document['id']}".lower())
+        self.assertRegex(document['id'], '[A-F]')
+
+    def test_a_track_with_no_start_never_aborts_a_rule_group(self):
+        # Mac commits a declaration made before its restore as an ended 0-frame track with no
+        # start (SPEC: startOffsetMs is optional). Extents and presence are taken over placeable
+        # tracks only, so O2, O3 and O6 still measure; O0.offsets and O4.outcomeRows stay strict.
+        folder = next((self.root / 'pre-restore-declaration').glob('Recording-*'))
+        document = json.loads((folder / 'session.json').read_text())
+        events.validate(document)
+        declared = [t for t in document['tracks'] if 'startOffsetMs' not in t]
+        self.assertEqual([(t['frames'], t['ended'], t['sourceTrackId']) for t in declared],
+                         [(0, True, make.A_KEY), (0, True, make.B_KEY)])
+        self.assertNotIn('endOffsetMs', declared[0])
+        process, result = run_check(folder, self.root / 'pre-restore-declaration/evidence.json',
+                                    self.work / 'declared.result.json')
+        rules = [rule for check in result['checks'] for rule in check['measured']]
+        self.assertEqual([rule for rule in rules if rule.endswith('.error')], [])
+        self.assertEqual(failed(result), (['O0', 'O4'], ['O0.offsets', 'O4.outcomeRows']))
+        self.assertEqual(events.others_presence(document),
+                         events.others_presence(json.loads((self.base / 'session.json').read_text())))
+
     def test_compare_lines_up_two_results(self):
         def result(name):
             folder = next((self.root / name).glob('Recording-*'))

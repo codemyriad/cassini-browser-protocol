@@ -41,6 +41,15 @@ constants and PCM the oracle measures itself. App readers are never consulted. A
 GNOME's RotatingWAV `spans` rows are read piece by piece, never WAV length alone, each
 piece from its own D55 placement.
 
+Extents, presence and the last frame are taken only over placeable tracks (a known
+`startOffsetMs`, integer frames and rate). SPEC lets a track omit its start, and Mac today
+commits a browser declaration made before its restore as an ended 0-frame track with no
+`startOffsetMs`/`endOffsetMs`, bound to its key (mutant `pre-restore-declaration`). Such a
+track has no extent: it is never placed at an invented time and never aborts a rule group
+(no `.error`). The scenario still holds it strictly: O0.offsets wants every start known and
+O4.outcomeRows wants each key's row to list exactly its placed spans, so both fail it, and a
+correct run writes no such track (Mac stops writing it before restore).
+
 GNOME's `rotating_wav.py` keeps one logical track in several WAVs when one reaches its
 size limit: the first row copies the track's file and `startOffsetMs`, each later row
 starts where the frames before it end (rounded to GNOME's 48 kHz grid, at most 1/48 ms
@@ -128,8 +137,8 @@ read fails the run.
 | O0.files | every track's WAVs (its `spans` rows, else the track) are safe regular files in the folder, PCM16 with the track's rate and channels, header frames = row frames, size = 44 + frames × channels × 2; the rows sum to the track's frames |
 | O0.pieces | a track with `spans` lists a non-empty list of rows with the track's rate and channels; in list order each row's stored `startOffsetMs` is within one session sample (1/16 ms) of track start + frames before it / rate, and the last ends at the track's end: placement, order, contiguity, coverage and no overlap |
 | O0.ended | every track has `ended: true` |
-| O0.offsets | every start is known and `endOffsetMs = startOffsetMs + frames/rate × 1000` (±0.001 ms) |
-| O0.oneFolder | evidence `newFolders` is exactly this folder, named `Recording-<id>` |
+| O0.offsets | every start is known and `endOffsetMs = startOffsetMs + frames/rate × 1000` (±0.001 ms); strict: a SPEC-legal track with no start fails it here, while every other rule leaves it out |
+| O0.oneFolder | evidence `newFolders` is exactly this folder, named `Recording-<UUID>` where that UUID equals session.json's `id` as a value: both canonical 8-4-4-4-12 hex, in either case (Mac names the folder lowercase, its id is uppercase); a malformed one fails |
 | O0.unique | no track id repeats, and no WAV belongs to two tracks or twice to one (SPEC S-6: each span its own id and WAV); stdlib, so it holds where O0.schema is unavailable |
 | O0.kinds | track kinds ⊆ {remote, microphone, system} |
 | O0.state | `completed`, no problem, no problemKind (D68 item 5) |
@@ -162,7 +171,7 @@ read fails the run.
 | O3.resumeOnce | the evidence shows at least one resume request, every one names this recording (its `captureId` and `timelineOriginMs` equal the evidence's), and no two come from the same control connection (D52.5: once per loss and control connection; the scenario has one loss) |
 | O3.resumeAt | every request naming this recording is at or after the committed loss (the last system/lost before the first browser/restored) and at or before that browser/restored; there is at least one |
 | O4.keys | every remote track has a `sourceTrackId`, and there are exactly 2 |
-| O4.outcomeRows | exactly 2 `captureOutcome.sources` rows, one per key, each listing exactly that key's track ids, both `captured` (so no `neverAudio`) |
+| O4.outcomeRows | exactly 2 `captureOutcome.sources` rows, one per key, each listing exactly that key's placed track ids, both `captured` (so no `neverAudio`); strict: a row that also lists a track with no start fails |
 | O4.evidence | `maxSourceCount` 3, slot C `connected` with 0 packets received |
 | O5.selection | the last selection is me:true others:true reason user at M ≥ MIC_ON_MS inside the meOn bracket; the one before has me:false (a user one inside the meOff bracket) |
 | O5.micOff | no microphone extent starting before M intersects (meOff + SLACK, M) |
@@ -247,6 +256,7 @@ that always passes turns the self-test red. Without jsonschema (macOS
 | early-resume | the one request at 95600, after the kill and before system/lost committed | O3.resumeAt |
 | shifted-piece | span-b1 in two WAVs, the second placed 20 s late (ends at 115350, the track at 95350) | O0.pieces |
 | overlapping-piece | span-b1 in two WAVs, the second placed 1 s early, over the first | O0.pieces |
+| pre-restore-declaration | Mac's writer today: A's and B's new wire ids declared between system/lost and browser/restored, each an ended 0-frame track with no `startOffsetMs`/`endOffsetMs`, bound to its key (SPEC-legal) | O0.offsets, O4.outcomeRows (the strict ones; no group errors) |
 
 ## Variants
 
@@ -259,6 +269,7 @@ equal to the base.
 | mac-loss-form | none/lost at 95400 (the transport loss), then system/lost when the fallback commits |
 | rotated-wavs | GNOME's RotatingWAV form: span-a1 in three WAVs (cut at 30000.0625 in the mute and at 70000.0625), span-b1 and microphone-2 in two |
 | folder-leads | A's stamps 20 ms ahead of the session clock (D61 output time) and the driver's waits ending on the session clock: mute asked at exactly 5000, unmute at exactly 65000 |
+| uuid-case | Mac's naming: id `9F3B2A1C-7D4E-4A5B-8C6D-0E1F2A3B4C5D` in session.json, folder `Recording-9f3b2a1c-7d4e-4a5b-8c6d-0e1f2a3b4c5d` |
 
 ## compare
 
