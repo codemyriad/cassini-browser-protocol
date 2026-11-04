@@ -246,6 +246,19 @@ class LiveFolderOracle(unittest.TestCase):
             other = dict(base, **{name: 'f' * 40})
             self.assertEqual(oracle.compare(base, other)[0], 2)
 
+    def test_mute_waits_end_on_the_session_clock_too(self):
+        # F(A) can lead the session clock (D61 output stamps), so a wait on F(A) alone could ask
+        # for the mute before MUTE_START_MS or the unmute before mute + MUTE_MS on the session
+        # clock; O2.muteStart and O2.duration hold the requests exactly (variant folder-leads).
+        actions = json.loads((LIVE / 'scenario.json').read_text())['evidence']['actions']
+        self.assertIn('once F(A) >= MUTE_START_MS and the session clock (Date.now() - timelineOriginMs) >= '
+                      'MUTE_START_MS', actions['mute'])
+        self.assertIn('once F(A) >= mute + MUTE_MS and the session clock >= mute + MUTE_MS', actions['unmute'])
+        session, tracks, evidence = make.run('folder-leads')
+        mute, unmute = evidence['actions']['mute'], evidence['actions']['unmute']
+        self.assertEqual([mute['requestedAtMs'], unmute['requestedAtMs'] - mute['requestedAtMs']],
+                         [oracle.C['MUTE_START_MS'], oracle.C['MUTE_MS']])
+
     def test_corpus_constants_are_read_not_copied(self):
         scenario = json.loads((LIVE / 'scenario.json').read_text())
         corpus = json.loads((ROOT / 'conformance/multistream/corpus.json').read_text())['constants']

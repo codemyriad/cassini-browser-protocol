@@ -445,10 +445,12 @@ class Run:
 
     # O2 60 s mute ---------------------------------------------------------------------------
     def o2(self, rule):
-        # The window itself comes from the evidence, so it is held to the scenario first. The
-        # driver asks for the mute once F(A) >= MUTE_START_MS and for the unmute once
-        # F(A) >= mute.requested + MUTE_MS; the folder clock never runs ahead of the session
-        # clock (a frame is written after it is captured), so both hold of the requests.
+        # The window itself comes from the evidence, so it is held to the scenario first. F(A)
+        # can lead the session clock (the extension stamps a frame when it reaches the output,
+        # D61, and GNOME checkpoints right after an append), so the driver waits on both: the
+        # mute once F(A) and the session clock reach MUTE_START_MS, the unmute once both reach
+        # mute.requested + MUTE_MS. The requests are session-clock times, so both lower bounds
+        # hold by construction, exactly.
         mute, unmute, wait = self.actions['mute'], self.actions['unmute'], SCENARIO['driver']['boundsMs']
         latest = self.actions['meOff']['observedAtMs'] + C['MUTE_START_MS'] + wait['record'] + C['ACTION_SLACK_MS']
         rule('muteStart', C['MUTE_START_MS'] <= mute['requestedAtMs'] <= latest,

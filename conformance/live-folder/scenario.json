@@ -79,8 +79,8 @@
     "actions": {
       "record": "requested: record(); observed: status with path and captureId, and A's track holds 1000 ms of frames",
       "meOff": "requested: selectMe(false); observed: the last selection event shows me:false",
-      "mute": "requested: muteSlot(remote, 0) once F(A) >= MUTE_START_MS; observed: replaceTrack(null) resolved",
-      "unmute": "requested: switchReceiveSlot(remote, 0, [A]) once F(A) >= mute + MUTE_MS; observed: F(A) advanced by PROOF_MS",
+      "mute": "requested: muteSlot(remote, 0) once F(A) >= MUTE_START_MS and the session clock (Date.now() - timelineOriginMs) >= MUTE_START_MS: F(A) may lead the session clock, so both; observed: replaceTrack(null) resolved",
+      "unmute": "requested: switchReceiveSlot(remote, 0, [A]) once F(A) >= mute + MUTE_MS and the session clock >= mute + MUTE_MS (mute is mute.requestedAtMs); observed: F(A) advanced by PROOF_MS",
       "lateRemote": "requested: switchReceiveSlot(remote, 1, [B]) after unmute, at or after LATE_REMOTE_MS; observed: a new sourceTrackId with PROOF_MS of frames",
       "meOn": "requested: selectMe(true) once S >= MIC_ON_MS; observed: selection me:true and a microphone span with PROOF_MS of frames",
       "kill": "requested: SIGKILL of the one live audio-host pid once S >= KILL_AT_MS; observed: othersSource system/lost",

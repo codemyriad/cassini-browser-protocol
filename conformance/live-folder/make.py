@@ -379,6 +379,15 @@ def rotated_wavs(session, tracks, evidence):
     rotate(_track(tracks, 'microphone-2'), frames(90250, 100000))
 
 
+def folder_leads(session, tracks, evidence):
+    # The extension stamps a frame when it reaches the output (D61): A's stamps run 20 ms ahead
+    # of the session clock, so F(A) passes each threshold 20 ms early and the driver's waits end
+    # on the session clock instead: the mute asked at exactly MUTE_START_MS, the unmute at
+    # exactly mute + MUTE_MS. A's span, with its mute edges, sits 20 ms later on the timeline.
+    _move_mute(tracks, evidence, (5000, 5010), (65000, 67270))
+    _track(tracks, 'span-a1')['startOffsetMs'] += 20
+
+
 def fractional_mic(session, tracks, evidence):
     # GNOME and Mac write the selection's wall-clock atMs as the span start; this one
     # places 1/50 ms below it on the 16 kHz grid (D55).
@@ -445,6 +454,7 @@ MUTANTS = {
 
 # name: another form a correct writer may produce; each must pass every check.
 VARIANTS = {
+    'folder-leads': folder_leads,
     'fractional-mic': fractional_mic,
     'mac-loss-form': mac_loss_form,
     'rotated-wavs': rotated_wavs,
