@@ -50,6 +50,11 @@ the time comes from an audio clock (span starts and ends, the last frame, none/l
 sample (1/16 ms) of the event's placed `atMs`: both writers store the event's
 fractional `atMs` as the start, and a raw comparison would fail half the runs.
 
+The mute window W comes from the evidence, so O2 first holds it to the scenario: the
+folder clock never runs ahead of the session clock (a frame is written after it is
+captured), so the driver's waits on F(A) bound the requests themselves. O2.silent then
+shows at least MUTE_MS − 2 × EDGE_MS of silence in A's one span, measured in PCM.
+
 ## Checks
 
 | rule | passes when |
@@ -68,6 +73,8 @@ fractional `atMs` as the start, and a raw comparison would fail half the runs.
 | O1.late | B's first span starts at or after LATE_REMOTE_MS |
 | O1.bracket | ... and inside the lateRemote bracket ± SLACK |
 | O1.bleed | there, tone A − tone B ≤ BLEED_DB |
+| O2.muteStart | MUTE_START_MS ≤ mute.requested ≤ meOff.observed + MUTE_START_MS + `boundsMs.record` + SLACK (the driver's wait for F(A) ≥ MUTE_START_MS and its bound) |
+| O2.duration | MUTE_MS ≤ unmute.requested − mute.requested ≤ mute.observed + `boundsMs.muteHold` + SLACK − mute.requested (the driver's hold until F(A) ≥ mute.requested + MUTE_MS, and its bound) |
 | O2.oneSpan | with W = [mute.requested, unmute.requested]: one A span covers W and no other A span touches it |
 | O2.gaps | A's gap ranges in W: none ≥ 1000 ms, total ≤ MUTE_JITTER_MS, no overflow marker before W ends |
 | O2.silent | A's RMS over [W₀ + EDGE_MS, W₁ − EDGE_MS] ≤ SILENT_DBFS |
@@ -163,6 +170,8 @@ that always passes turns the self-test red. Without jsonschema (macOS
 | system-before-lost | the system track starts 900 ms before lost | O3.system |
 | system-never-ends | the system track runs on to Stop | O3.system |
 | mic-late-no-prefix | microphone-2 starts 400 ms after M, no prefix gap | O5.micOn, O5.micAudio |
+| short-mute | the mute held 50.74 s (unmute asked at 56050), A's tone back as early | O2.duration |
+| early-mute | the mute asked at 2810, before F(A) can reach MUTE_START_MS, held a full MUTE_MS | O2.muteStart |
 
 ## Variants
 

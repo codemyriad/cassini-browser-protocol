@@ -160,6 +160,26 @@ def split_mute(session, tracks, evidence):
     tracks.insert(tracks.index(a1) + 1, second)
 
 
+def _move_mute(tracks, evidence, mute, unmute):
+    """The mute requested at mute[0] and the unmute at unmute[0] (brackets [requested, observed]):
+    A's zeros follow both requests by the base run's 140.0625 and 200.0625 ms."""
+    a1 = _track(tracks, 'span-a1')
+    evidence['actions'].update(mute=dict(requestedAtMs=mute[0], observedAtMs=mute[1]),
+                               unmute=dict(requestedAtMs=unmute[0], observedAtMs=unmute[1]))
+    silent, back = frames(a1['startOffsetMs'], mute[0] + 140.0625), frames(a1['startOffsetMs'], unmute[0] + 200.0625)
+    a1['content'] = [(0, silent, TONE_A), (back, a1['frames'], TONE_A)]
+
+
+def short_mute(session, tracks, evidence):
+    # Codex #49: a 50.74 s mute, A's tone back as early, everything else consistent with it.
+    _move_mute(tracks, evidence, (5310, 5320), (56050, 58320))
+
+
+def early_mute(session, tracks, evidence):
+    # The mute asked for at 2.81 s, before F(A) could reach MUTE_START_MS; held a full MUTE_MS.
+    _move_mute(tracks, evidence, (2810, 2820), (63550, 65820))
+
+
 def lost_in_mute(session, tracks, evidence):
     session['events'].append(dict(atMs=35000, type='othersSource', source='system', reason='lost'))
     _resort(session)
@@ -357,6 +377,8 @@ MUTANTS = {
     'system-before-lost': (system_before_lost, ['O3.system']),
     'system-never-ends': (system_never_ends, ['O3.system']),
     'mic-late-no-prefix': (mic_late_no_prefix, ['O5.micOn', 'O5.micAudio']),
+    'short-mute': (short_mute, ['O2.duration']),
+    'early-mute': (early_mute, ['O2.muteStart']),
 }
 
 # name: another form a correct writer may produce; each must pass every check.

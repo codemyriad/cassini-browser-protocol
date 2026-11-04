@@ -140,7 +140,7 @@ copied from `bursts.json` fail; see the folder's README.
 
 `conformance/live-folder/` holds the scenario constants and the `evidence.json`
 contract (`scenario.json`), the coordinator-owned oracle (`check.py`) and a
-synthetic passing run with 32 named mutants and 2 variant writer forms (`make.py`,
+synthetic passing run with 34 named mutants and 2 variant writer forms (`make.py`,
 pinned byte for byte by `materialized.sha256` on Linux and macOS Python 3.9). The
 shared driver runs the scenario against each app's real writer: a 60 s
 `replaceTrack(null)` mute with A the only open source, a late remote, a connected

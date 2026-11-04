@@ -375,9 +375,20 @@ class Run:
 
     # O2 60 s mute ---------------------------------------------------------------------------
     def o2(self, rule):
+        # The window itself comes from the evidence, so it is held to the scenario first. The
+        # driver asks for the mute once F(A) >= MUTE_START_MS and for the unmute once
+        # F(A) >= mute.requested + MUTE_MS; the folder clock never runs ahead of the session
+        # clock (a frame is written after it is captured), so both hold of the requests.
+        mute, unmute, wait = self.actions['mute'], self.actions['unmute'], SCENARIO['driver']['boundsMs']
+        latest = self.actions['meOff']['observedAtMs'] + C['MUTE_START_MS'] + wait['record'] + C['ACTION_SLACK_MS']
+        rule('muteStart', C['MUTE_START_MS'] <= mute['requestedAtMs'] <= latest,
+             dict(muteRequestedMs=mute['requestedAtMs'], boundsMs=[C['MUTE_START_MS'], latest]))
+        held = unmute['requestedAtMs'] - mute['requestedAtMs']
+        longest = mute['observedAtMs'] + wait['muteHold'] + C['ACTION_SLACK_MS'] - mute['requestedAtMs']
+        rule('duration', C['MUTE_MS'] <= held <= longest, dict(heldMs=held, boundsMs=[C['MUTE_MS'], longest]))
         key = self.key('A')
         spans = self.keys[key]
-        left, right = self.actions['mute']['requestedAtMs'], self.actions['unmute']['requestedAtMs']
+        left, right = mute['requestedAtMs'], unmute['requestedAtMs']
         covering = [t['id'] for t in spans if extent(t)[0] <= left and extent(t)[1] >= right]
         touching = [t['id'] for t in spans if extent(t)[0] < right and extent(t)[1] > left]
         rule('oneSpan', len(covering) == 1 and touching == covering,
