@@ -118,7 +118,7 @@ nothing else fails:
 
 | mutant | change | must fail |
 |---|---|---|
-| `a-system-late` | A.system 1234.5104 → 1234.5312: one 48 kHz frame later, the same 16 kHz frame | `mix48`, `playback` (exact tier) |
+| `a-system-late` | A.system 1234.5104 → 1234.5312: one 48 kHz frame later, the same 16 kHz frame | `mix48`, `mix48publication`, `playback` (exact tier) |
 | `b-mic-25ms` | B.microphone 25 ms later | every position leg (headline) |
 | `c-system-known` | C.system null → 0: the same placement, but known | `playback`, `offsetsAssumedZero` |
 `compare` prints each burst where two apps' files differ, for coordinator QA.
@@ -129,5 +129,5 @@ The published mix of a meeting with an unknown offset (GNOME plays it, Mac
 refuses it; R87 Q6); recognition through the real VAD (tones are not speech, so
 word times are checked through the word-time function, not through Silero); the
 word end clamped to the segment's PCM; rotated and clock-anchored spans; and a
-0-frame track with an unknown offset (Mac ignores it for playback and the
-export flag, GNOME today does not).
+0-frame track with an unknown offset (ignored by playback and by the export
+flag in both apps).
