@@ -42,6 +42,9 @@ ownership windows go in; integer half-open 16 kHz session-sample ranges `present
 frame(startOffsetMs, 16000) (startOffsetMs × 16 rounded half away from zero), not at the raw
 offset, and lasts frames/sampleRate from there; gap ranges and ownership stay on the session
 timeline. A window [a,b) ms covers samples [ceil(16a - 1e-6), ceil(16b - 1e-6)).
+A reader whose presence function takes an already placed offset runs these cases with
+frame(startOffsetMs, 16000)/16 ms, as its transcriber passes it; the raw `startOffsetMs`
+fails `a-fractional-start-offset-starts-at-the-d55-placement`.
 A missing or null `gaps` is unknown. An empty gap (`durationMs` 0, `frames` 0) is no range.
 Presence never reads PCM and never uses `droppedFrames`.
 
