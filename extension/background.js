@@ -540,7 +540,6 @@ chrome.runtime.onConnect.addListener(port => {
     if (message.type !== "packet" || !["track", "audio", ...(session.sourceOutcomes ? ["trackEnd", "sources"] : [])].includes(message.packet?.type)) return;
     try {
       await forwardPacket(session, message.packet, spanDocument(frame));
-      port.postMessage({ type: "ack", token: session.token, request: message.request });
     } catch (error) {
       if (error.retired) { /* Already retired locally; keep other spans recording. */ }
       else if (error.code === "state" && ["source", "command"].includes(error.scope)) {
@@ -556,7 +555,11 @@ chrome.runtime.onConnect.addListener(port => {
         session.warning = "One track was interrupted and has a gap. The other tracks continue."; session.problem ??= session.warning; notifyControl(); }
       else if (!["command", "source"].includes(error.scope)) failure(error.message, session);
       try { port.postMessage({ type: "ack", token: session.token, request: message.request, error: error.message, code: error.code, scope: error.scope, ...(error.retired === true ? {retired:true} : {}) }); } catch {}
+      return;
     }
+    // The packet is durable. Its ACK is page transport only: a page that closed
+    // or navigated while the native reply was in flight is not a capture failure.
+    try { port.postMessage({ type: "ack", token: session.token, request: message.request }); } catch {}
   });
   port.onDisconnect.addListener(() => {
     frames.delete(frame);
