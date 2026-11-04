@@ -1,9 +1,11 @@
 """Shared test 2 oracle self-test: the synthetic live folder, its mutants and check.py.
 
-The base folder must pass every check; each mutant must fail exactly the checks
-make.py lists for it, including the rule that names it. check.py runs as the apps
-run it: a subprocess under `python3 -I`, once more with no site-packages at all
-(stdlib only). Its corpus constants are read from corpus.json, never copied.
+The base folder and every variant (another correct writer form) must pass every
+check; each mutant must fail exactly the rules make.py lists for it, and every rule
+check.py has must be shown failing by some mutant or evidence case, so a rule that
+silently always passes turns this test red. check.py runs as the apps run it: a
+subprocess under `python3 -I`, once more with no site-packages at all (stdlib only).
+Its corpus constants are read from corpus.json, never copied.
 """
 import copy
 import hashlib
@@ -46,6 +48,19 @@ def failed(result):
     return [c['id'] for c in result['checks'] if not c['pass']], [r for c in result['checks'] for r in c['failed']]
 
 
+# Evidence faults: (the change, every rule it must fail, exactly).
+EVIDENCE_CASES = [
+    (lambda e: e['slotC'].update(packetsReceived=12), ['O4.evidence']),
+    (lambda e: e.update(maxSourceCount=2), ['O4.evidence']),
+    (lambda e: e['actions']['kill'].update(requestedAtMs=96000, observedAtMs=96500),
+     ['O3.lost', 'O3.restored', 'O3.state', 'O3.resumedStart', 'O3.system']),
+    (lambda e: e['nativeTones'].update(microphone=440), ['O5.micAudio']),
+    (lambda e: e.update(newFolders=e['newFolders'] * 2), ['O0.oneFolder']),
+    (lambda e: e['actions']['stop'].update(requestedAtMs=112000, observedAtMs=112500), ['O6.lastFrame']),
+    (lambda e: e['actions']['lateRemote'].update(requestedAtMs=71000, observedAtMs=72000), ['O1.bracket']),
+]
+
+
 class LiveFolderOracle(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -53,7 +68,7 @@ class LiveFolderOracle(unittest.TestCase):
         cls.root = Path(cls.temporary.name) / 'made'  # only make.py writes here (digests)
         cls.work = Path(cls.temporary.name) / 'work'
         cls.work.mkdir()
-        for name in [None] + sorted(make.MUTANTS):
+        for name in [None] + sorted(make.MUTANTS) + sorted(make.VARIANTS):
             make.make(cls.root / (name or 'base'), name)
         cls.base = next((cls.root / 'base').glob('Recording-*'))
 
@@ -91,23 +106,50 @@ class LiveFolderOracle(unittest.TestCase):
         self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
         self.assertTrue(result['checks'][0]['measured']['O0.schema']['value'].startswith('unavailable'))
 
-    def test_each_mutant_fails_exactly_its_checks(self):
-        for name, (_, checks, rule) in sorted(make.MUTANTS.items()):
+    def test_each_mutant_fails_exactly_its_rules(self):
+        for name, (_, rules) in sorted(make.MUTANTS.items()):
             with self.subTest(mutant=name):
                 folder = next((self.root / name).glob('Recording-*'))
                 process, result = run_check(folder, self.root / name / 'evidence.json', self.work / f'{name}.result.json')
                 self.assertEqual(process.returncode, 1, process.stderr)
-                ids, rules = failed(result)
-                self.assertEqual(ids, checks)
-                self.assertIn(rule, rules)
+                ids, failing = failed(result)
+                self.assertEqual(sorted(failing), sorted(rules))
+                self.assertEqual(ids, sorted({rule.split('.')[0] for rule in rules}))
 
-    def test_every_check_has_a_mutant(self):
-        named = {check for _, checks, _ in make.MUTANTS.values() for check in checks}
-        self.assertEqual(named, {f'O{n}' for n in range(8)})
+    def test_without_jsonschema_the_stdlib_rules_still_fail(self):
+        # macOS /usr/bin/python3 has no jsonschema: O0.schema passes as unavailable, the rest stays.
+        for name, (_, rules) in sorted(make.MUTANTS.items()):
+            if 'O0.schema' in rules:
+                with self.subTest(mutant=name):
+                    folder = next((self.root / name).glob('Recording-*'))
+                    process, result = run_check(folder, self.root / name / 'evidence.json',
+                                                self.work / f'{name}.bare.result.json', '-S')
+                    self.assertEqual(process.returncode, 1, process.stderr)
+                    self.assertEqual(sorted(failed(result)[1]), sorted(set(rules) - {'O0.schema'}))
+
+    def test_variants_pass_and_compare_equal_to_the_base(self):
+        base = oracle.check(self.base, oracle.load_evidence(self.root / 'base/evidence.json'))
+        for name in sorted(make.VARIANTS):
+            with self.subTest(variant=name):
+                folder = next((self.root / name).glob('Recording-*'))
+                process, result = run_check(folder, self.root / name / 'evidence.json', self.work / f'{name}.result.json')
+                self.assertEqual(process.returncode, 0, process.stdout + process.stderr)
+                self.assertEqual(failed(result), ([], []))
+                code, report = oracle.compare(base, result)
+                self.assertEqual(code, 0, report)
+
+    def test_every_rule_is_shown_failing(self):
+        # A rule no mutant or evidence case fails could be an always-pass and nothing would notice.
+        _, result = run_check(self.base, self.root / 'base/evidence.json', self.work / 'rules.result.json')
+        rules = {rule for check in result['checks'] for rule in check['measured']}
+        shown = {rule for _, failing in make.MUTANTS.values() for rule in failing}
+        shown |= {rule for _, failing in EVIDENCE_CASES for rule in failing}
+        self.assertEqual(sorted(rules - shown), [])
+        self.assertEqual(sorted(shown - rules), [])
 
     def test_mutants_keep_the_folder_valid_where_they_do_not_target_o0(self):
-        for name, (_, checks, _) in make.MUTANTS.items():
-            if 'O0' not in checks:
+        for name, (_, rules) in make.MUTANTS.items():
+            if not {'O0.schema', 'O0.bounds'} & set(rules):
                 with self.subTest(mutant=name):
                     events.validate(json.loads(next((self.root / name).glob('Recording-*/session.json')).read_text()))
 
@@ -118,21 +160,12 @@ class LiveFolderOracle(unittest.TestCase):
         evidence.write_text(json.dumps(value))
         return run_check(folder, evidence, evidence.with_name('result.json'))
 
-    def test_evidence_facts_fail_only_their_check(self):
-        cases = [
-            ('O4', lambda e: e['slotC'].update(packetsReceived=12)),
-            ('O4', lambda e: e.update(maxSourceCount=2)),
-            ('O3', lambda e: e['actions']['kill'].update(requestedAtMs=96000, observedAtMs=96500)),
-            ('O5', lambda e: e['nativeTones'].update(microphone=440)),
-            ('O0', lambda e: e.update(newFolders=e['newFolders'] * 2)),
-            ('O6', lambda e: e['actions']['stop'].update(requestedAtMs=112000, observedAtMs=112500)),
-            ('O1', lambda e: e['actions']['lateRemote'].update(requestedAtMs=71000, observedAtMs=72000)),
-        ]
-        for index, (check, change) in enumerate(cases):
-            with self.subTest(case=index, check=check):
+    def test_evidence_facts_fail_only_their_rules(self):
+        for index, (change, rules) in enumerate(EVIDENCE_CASES):
+            with self.subTest(case=index, rules=rules):
                 process, result = self.evidence_case(change)
                 self.assertEqual(process.returncode, 1, process.stderr)
-                self.assertEqual(failed(result)[0], [check])
+                self.assertEqual(sorted(failed(result)[1]), sorted(rules))
 
     def test_unusable_evidence_is_refused(self):
         for change in (lambda e: e['actions'].pop('kill'), lambda e: e.update(protocolCommit='abc'),
@@ -183,6 +216,12 @@ class LiveFolderOracle(unittest.TestCase):
         code, report = oracle.compare(base, result('resumed-new-key'))
         self.assertEqual(code, 1)
         self.assertFalse(report['categorical']['remoteSources']['same'])
+        # Mac's none/lost before system/lost is the same loss (SPEC S-6): same categorical facts.
+        code, report = oracle.compare(base, result('mac-loss-form'))
+        self.assertEqual(code, 0, report)
+        self.assertTrue(report['categorical']['othersSource']['same'])
+        code, report = oracle.compare(base, result('drop-restored'))
+        self.assertFalse(report['categorical']['othersSource']['same'])
         later = copy.deepcopy(base)
         later['facts']['numeric']['restoredMs'] += 999
         later['facts']['numeric']['resumeLatencyMs'] += 999

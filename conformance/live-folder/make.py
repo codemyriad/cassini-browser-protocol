@@ -3,12 +3,14 @@
 
     python3 conformance/live-folder/make.py OUT                 # OUT/Recording-<id>/, OUT/evidence.json
     python3 conformance/live-folder/make.py --mutant NAME OUT   # one named defect (MUTANTS below)
-    python3 conformance/live-folder/make.py --all OUT           # OUT/base/ and OUT/<mutant>/ for each mutant
+    python3 conformance/live-folder/make.py --variant NAME OUT  # one other correct form (VARIANTS below)
+    python3 conformance/live-folder/make.py --all OUT           # OUT/base/, OUT/<mutant>/ and OUT/<variant>/
 
 The base folder is what a correct writer produces for the scenario: 8 kHz,
 about 110 s, A muted for 60 s, B late, Me off then on, a forced resume with a
 system fallback in between, then Stop. Each mutant changes that run in one way
-and must fail exactly its listed checks in check.py (tests/test_live_folder_oracle.py).
+and must fail exactly its listed rules in check.py; each variant is another form a
+correct writer may produce and must pass (tests/test_live_folder_oracle.py).
 
 Tones are integer sine tables computed with Decimal (no platform libm), stereo
 tracks carry the same samples on both channels, and JSON floats are exact
@@ -164,7 +166,9 @@ def lost_in_mute(session, tracks, evidence):
 
 
 def b_early(session, tracks, evidence):
-    _track(tracks, 'span-b1')['startOffsetMs'] = 20000.25
+    b1 = _track(tracks, 'span-b1')
+    b1.update(startOffsetMs=20000.25, frames=frames(20000.25, 95350))  # still ends at the kill
+    b1['content'] = [(0, b1['frames'], TONE_B)]
 
 
 def silent_remote(session, tracks, evidence):
@@ -208,29 +212,164 @@ def no_clock_method(session, tracks, evidence):
     del _track(tracks, 'span-b1')['extra']['clockMethod']
 
 
-# name: (defect, the checks it must fail, exactly; the rule that names it)
+def short_wav(session, tracks, evidence):
+    _track(tracks, 'microphone-1')['wavFrames'] = frames(0, 2000)
+
+
+def wrong_end_offset(session, tracks, evidence):
+    _track(tracks, 'microphone-1')['endShiftMs'] = 5
+
+
+def local_kind(session, tracks, evidence):
+    _track(tracks, 'microphone-1')['kind'] = 'local'
+
+
+def duplicate_track_id(session, tracks, evidence):
+    _track(tracks, 'span-a2').update(id='span-a1', file='track-span-a2.wav')
+
+
+def interrupted(session, tracks, evidence):
+    session.update(state='interrupted', problem='Audio went missing', problemKind='gap')
+
+
+def open_track(session, tracks, evidence):
+    _track(tracks, 'span-b2')['ended'] = False
+
+
+def call_ended(session, tracks, evidence):
+    session['events'][-1]['reason'] = 'callEnded'
+
+
+def b_resumed_new_key(session, tracks, evidence):
+    _track(tracks, 'span-b2')['sourceTrackId'] = NEW_KEY
+
+
+def bleed(session, tracks, evidence):
+    b1 = _track(tracks, 'span-b1')
+    cut = frames(b1['startOffsetMs'], b1['startOffsetMs'] + 2000)
+    b1['content'] = [(0, cut, TONE_B + ((TONE_A[0][0], 2000),)), (cut, b1['frames'], TONE_B)]
+
+
+def tone_in_mute(session, tracks, evidence):
+    a1 = _track(tracks, 'span-a1')
+    a1['content'] = [(0, a1['frames'], TONE_A)]
+
+
+def no_edge_tone(session, tracks, evidence):
+    a1 = _track(tracks, 'span-a1')
+    a1['content'][1] = (frames(a1['startOffsetMs'], 68250.0625),) + a1['content'][1][1:]
+
+
+def low_audio_a(session, tracks, evidence):
+    session['outcomes'] = {A_KEY: 'lowAudio'}
+
+
+def resume_refused(session, tracks, evidence):
+    session['refusals'] = [dict(atMs=97000, side='browser', code='startFailed', detail='resumeRefused')]
+
+
+def zero_filled_loss(session, tracks, evidence):
+    # The dead transport's spans run on in zeros up to their resumed spans, with no gap range.
+    for name, end in (('span-a1', 99300.0625), ('span-b1', 99310)):
+        span = _track(tracks, name)
+        span['frames'] = frames(span['startOffsetMs'], end)
+
+
+def split_after_unmute(session, tracks, evidence):
+    a1 = _track(tracks, 'span-a1')
+    cut = frames(a1['startOffsetMs'], 70000.0625)
+    second = copy.deepcopy(a1)
+    second.update(id='span-a1b', startOffsetMs=70000.0625, frames=a1['frames'] - cut,
+                  content=[(max(0, a - cut), b - cut, mix) for a, b, mix in a1['content'] if b > cut])
+    a1.update(frames=cut, content=[(a, min(b, cut), mix) for a, b, mix in a1['content'] if a < cut])
+    tracks.insert(tracks.index(a1) + 1, second)
+
+
+def system_before_lost(session, tracks, evidence):
+    system = _track(tracks, 'system-1')
+    system.update(startOffsetMs=95012.5, frames=frames(95012.5, 99500))
+    system['content'] = [(0, system['frames'], SYSTEM)]
+
+
+def system_never_ends(session, tracks, evidence):
+    system = _track(tracks, 'system-1')
+    system.update(frames=frames(system['startOffsetMs'], END_MS))
+    system['content'] = [(0, system['frames'], SYSTEM)]
+
+
+def mic_late_no_prefix(session, tracks, evidence):
+    mic = _track(tracks, 'microphone-2')
+    mic.update(startOffsetMs=90650, frames=frames(90650, END_MS), gaps=[])
+    mic['content'] = [(0, mic['frames'], MIC)]
+
+
+def fractional_mic(session, tracks, evidence):
+    # GNOME and Mac write the selection's wall-clock atMs as the span start; this one
+    # places 1/50 ms below it on the 16 kHz grid (D55).
+    on = next(e for e in session['events'] if e['type'] == 'selection' and e['me'] and e['reason'] == 'user')
+    on['atMs'] = 90250.02
+    mic = _track(tracks, 'microphone-2')
+    mic.update(startOffsetMs=90250.02, frames=mic['frames'] - 1)  # its last frame still ends by end.atMs
+    mic['content'] = [(400, mic['frames'], MIC)]
+
+
+def mac_loss_form(session, tracks, evidence):
+    # Mac writes none/lost at the transport loss, then system/lost when the fallback commits (SPEC S-6).
+    session['events'].append(dict(atMs=95400, type='othersSource', source='none', reason='lost'))
+    _resort(session)
+
+
+# name: (defect, every rule it must fail, exactly; the first names it). With no
+# jsonschema (macOS /usr/bin/python3) O0.schema reports unavailable and passes.
 MUTANTS = {
-    'drop-restored': (drop_restored, ['O3'], 'O3.restored'),
-    'mute-gap': (mute_gap, ['O2'], 'O2.gaps'),
-    'split-mute': (split_mute, ['O2'], 'O2.oneSpan'),
-    'lost-in-mute': (lost_in_mute, ['O2', 'O3'], 'O2.noEvents'),
-    'b-early': (b_early, ['O1', 'O7'], 'O1.late'),
-    'silent-remote': (silent_remote, ['O4'], 'O4.keys'),
-    'never-audio-row': (never_audio_row, ['O4'], 'O4.outcomeRows'),
-    'selection-at-60s': (selection_at_60s, ['O5'], 'O5.selection'),
-    'mic-from-zero': (mic_from_zero, ['O5'], 'O5.micOff'),
-    'overlap-same-key': (overlap_same_key, ['O3'], 'O3.noOverlap'),
-    'resumed-new-key': (resumed_new_key, ['O3', 'O4', 'O7'], 'O3.spans'),
-    'resumed-label': (resumed_label, ['O3'], 'O3.labels'),
-    'end-before-track': (end_before_track, ['O0'], 'O0.bounds'),
-    'no-clock-method': (no_clock_method, ['O6'], 'O6.clockMethod'),
+    'drop-restored': (drop_restored, ['O3.restored', 'O3.sequence', 'O3.state', 'O3.system']),
+    'mute-gap': (mute_gap, ['O2.gaps', 'O2.present']),
+    'split-mute': (split_mute, ['O2.oneSpan', 'O3.spans']),
+    'lost-in-mute': (lost_in_mute, ['O2.noEvents', 'O3.sequence']),
+    'b-early': (b_early, ['O1.late', 'O1.bracket', 'O7.late']),
+    'silent-remote': (silent_remote, ['O4.keys', 'O4.outcomeRows']),
+    'never-audio-row': (never_audio_row, ['O4.outcomeRows']),
+    'selection-at-60s': (selection_at_60s, ['O5.selection', 'O5.micOn', 'O5.micAudio']),
+    'mic-from-zero': (mic_from_zero, ['O5.micOff', 'O5.micOn', 'O5.micAudio']),
+    'overlap-same-key': (overlap_same_key, ['O3.noOverlap', 'O3.spans', 'O3.lossAbsent', 'O3.resumedStart',
+                                            'O3.resumedTone']),
+    'resumed-new-key': (resumed_new_key, ['O3.spans', 'O3.resumedStart', 'O3.resumedTone', 'O4.keys',
+                                          'O4.outcomeRows', 'O7.spanRatio']),
+    'resumed-label': (resumed_label, ['O3.labels']),
+    'end-before-track': (end_before_track, ['O0.bounds']),
+    'no-clock-method': (no_clock_method, ['O6.clockMethod']),
+    'short-wav': (short_wav, ['O0.files']),
+    'wrong-end-offset': (wrong_end_offset, ['O0.offsets']),
+    'local-kind': (local_kind, ['O0.kinds']),
+    'duplicate-track-id': (duplicate_track_id, ['O0.unique', 'O0.schema']),
+    'interrupted': (interrupted, ['O0.state']),
+    'open-track': (open_track, ['O0.ended']),
+    'call-ended': (call_ended, ['O0.end']),
+    'b-resumed-new-key': (b_resumed_new_key, ['O1.oneKey', 'O3.spans', 'O3.resumedStart', 'O3.resumedTone',
+                                              'O4.keys', 'O4.outcomeRows']),
+    'bleed': (bleed, ['O1.bleed']),
+    'tone-in-mute': (tone_in_mute, ['O2.silent', 'O7.density']),
+    'no-edge-tone': (no_edge_tone, ['O2.toneEdges']),
+    'low-audio-a': (low_audio_a, ['O2.outcome', 'O4.outcomeRows']),
+    'resume-refused': (resume_refused, ['O3.refusals']),
+    'zero-filled-loss': (zero_filled_loss, ['O3.lossAbsent']),
+    'split-after-unmute': (split_after_unmute, ['O3.spans']),
+    'system-before-lost': (system_before_lost, ['O3.system']),
+    'system-never-ends': (system_never_ends, ['O3.system']),
+    'mic-late-no-prefix': (mic_late_no_prefix, ['O5.micOn', 'O5.micAudio']),
+}
+
+# name: another form a correct writer may produce; each must pass every check.
+VARIANTS = {
+    'fractional-mic': fractional_mic,
+    'mac-loss-form': mac_loss_form,
 }
 
 
-def run(mutant=None):
+def run(name=None):
     session, tracks, evidence = base()
-    if mutant is not None:
-        MUTANTS[mutant][0](session, tracks, evidence)
+    if name is not None:
+        (VARIANTS[name] if name in VARIANTS else MUTANTS[name][0])(session, tracks, evidence)
     return session, tracks, evidence
 
 
@@ -254,14 +393,19 @@ def samples(plan):
     return stereo
 
 
+def wav_name(plan):
+    return plan.get('file', f"track-{plan['id']}.wav")
+
+
 def document(session, tracks):
     """session.json as the writer checkpoints it at Stop, with captureOutcome from the tracks."""
     out = []
     for plan in tracks:
-        track = dict(id=plan['id'], label=plan['label'], kind=plan['kind'], file=f"track-{plan['id']}.wav",
+        track = dict(id=plan['id'], label=plan['label'], kind=plan['kind'], file=wav_name(plan),
                      sampleRate=RATE, channels=plan['channels'], frames=plan['frames'],
                      startOffsetMs=plan['startOffsetMs'],
-                     endOffsetMs=plan['startOffsetMs'] + plan['frames'] / RATE * 1000, ended=True)
+                     endOffsetMs=plan['startOffsetMs'] + plan['frames'] / RATE * 1000 + plan.get('endShiftMs', 0),
+                     ended=plan.get('ended', True))
         if 'sourceTrackId' in plan:
             track['sourceTrackId'] = plan['sourceTrackId']
             track.update(receivedFrames=plan['frames'], captureOutcome='captured')
@@ -273,10 +417,11 @@ def document(session, tracks):
         if 'sourceTrackId' in track:
             row = sources.setdefault(track['sourceTrackId'], dict(
                 sourceTrackId=track['sourceTrackId'], kind=track['kind'], label=track['label'],
-                captureOutcome='captured', audioMs=0, trackIds=[]))
+                captureOutcome=session.get('outcomes', {}).get(track['sourceTrackId'], 'captured'),
+                audioMs=0, trackIds=[]))
             row['audioMs'] += track['frames'] / RATE * 1000
             row['trackIds'].append(track['id'])
-    fields = {k: v for k, v in session.items() if k not in ('events', 'extraSources')}
+    fields = {k: v for k, v in session.items() if k not in ('events', 'extraSources', 'outcomes')}
     return dict(fields, tracks=out, events=session['events'],
                 captureOutcome=dict(sources=list(sources.values()) + session.get('extraSources', [])))
 
@@ -287,10 +432,10 @@ def write(out, session, tracks, evidence):
     folder = out / f"Recording-{session['id']}"
     folder.mkdir(parents=True)
     for plan in tracks:
-        data = samples(plan)
+        data = samples(plan)[:plan.get('wavFrames', plan['frames']) * plan['channels']]
         if sys.byteorder != 'little':
             data.byteswap()
-        with wave.open(str(folder / f"track-{plan['id']}.wav"), 'wb') as writer:
+        with wave.open(str(folder / wav_name(plan)), 'wb') as writer:
             writer.setnchannels(plan['channels'])
             writer.setsampwidth(2)
             writer.setframerate(RATE)
@@ -300,8 +445,9 @@ def write(out, session, tracks, evidence):
     return folder
 
 
-def make(out, mutant=None):
-    return write(out, *run(mutant))
+def make(out, name=None):
+    """Materialize the base run, or one named mutant or variant of it."""
+    return write(out, *run(name))
 
 
 def main():
@@ -309,13 +455,14 @@ def main():
     parser.add_argument('out', type=Path)
     group = parser.add_mutually_exclusive_group()
     group.add_argument('--mutant', choices=sorted(MUTANTS))
+    group.add_argument('--variant', choices=sorted(VARIANTS))
     group.add_argument('--all', action='store_true')
     args = parser.parse_args()
     if args.all:
-        for name in [None] + sorted(MUTANTS):
+        for name in [None] + sorted(MUTANTS) + sorted(VARIANTS):
             print(make(args.out / (name or 'base'), name))
     else:
-        print(make(args.out, args.mutant))
+        print(make(args.out, args.mutant or args.variant))
 
 
 if __name__ == '__main__':

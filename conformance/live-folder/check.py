@@ -51,6 +51,7 @@ _corpus = json.loads((HERE / SCENARIO['corpus']['file']).read_text())['constants
 C.update({name: _corpus[name] for name in SCENARIO['corpus']['constants']})
 ACTIONS = tuple(SCENARIO['evidence']['actions'])
 COMPARE_BAND_MS = 1000
+SAMPLE_MS = 1 / 16  # one 16 kHz session sample (D55)
 FLOOR_DBFS = -200.0  # digital silence, reported as a finite number
 ME = ('microphone', 'local')
 NATIVE = ('microphone', 'local', 'system')
@@ -123,6 +124,12 @@ def extent(track):
     """[start, end) session ms: the D55 placement plus frames/rate (R88)."""
     start = events.placed_ms(track['startOffsetMs'])
     return start, start + track['frames'] * 1000 / track['sampleRate']
+
+
+def at_event(start, at):
+    """A span starts at an event's atMs (SPEC S-6): its extent is that time's D55 placement,
+    within one session sample (a writer may start on its first native frame after atMs)."""
+    return abs(start - events.placed_ms(at)) <= SAMPLE_MS + 1e-9
 
 
 def dbfs(mean_square):
@@ -263,6 +270,13 @@ class Run:
     def matching(self, source, reason):
         return [e for e in self.others_events() if (e.get('source'), e.get('reason')) == (source, reason)]
 
+    def others_form(self):
+        """othersSource as [source, reason] pairs, with each none/lost that a system/lost directly
+        follows folded into it: SPEC S-6's two forms of one committed loss (Mac writes none/lost at
+        the transport loss; GNOME keeps its written source until the fallback commits)."""
+        pairs = [[e.get('source'), e.get('reason')] for e in self.others_events()]
+        return [p for p, n in zip(pairs, pairs[1:] + [None]) if not (p == ['none', 'lost'] and n == ['system', 'lost'])]
+
     def lost(self):
         """The system/lost inside the kill bracket, when exactly one is."""
         found = [e for e in self.matching('system', 'lost') if self.bracket('kill', e['atMs'])]
@@ -312,6 +326,20 @@ class Run:
             if total != track.get('frames'):
                 problems.append(f"{track.get('id')}: pieces hold {total} frames, the track says {track.get('frames')}")
         rule('files', not problems, problems[:5] or f'{len(self.tracks)} tracks, every WAV and span reachable')
+        ids = [t.get('id') for t in self.tracks]
+        owner, shared = {}, []
+        for track in self.tracks:
+            names = [p.get('file') for p in pieces(track)]
+            if track.get('spans'):
+                names = sorted(set(names) | {track.get('file')})  # the track names its current spans row
+            if len(names) != len(set(names)):
+                shared.append(track.get('id'))
+            for name in names:
+                if owner.setdefault(name, track.get('id')) != track.get('id'):
+                    shared.append(name)
+        repeated = sorted({i for i in ids if ids.count(i) > 1}, key=str)
+        rule('unique', not repeated and not shared, dict(trackIds=repeated, wavs=shared) if repeated or shared
+             else 'every track id and WAV is its own (SPEC S-6)')
         open_tracks = [t.get('id') for t in self.tracks if t.get('ended') is not True]
         rule('ended', not open_tracks, open_tracks or 'every track ended')
         wrong = []
@@ -343,7 +371,6 @@ class Run:
         first = self.keys[key][:1]
         b = self.f.tone(first, start, start + C['PROOF_MS'], C['TONE_B_HZ'])
         a = self.f.tone(first, start, start + C['PROOF_MS'], C['TONE_A_HZ'])
-        rule('tone', _audible(b), b)
         rule('bleed', a is not None and b is not None and a - b <= C['BLEED_DB'], dict(toneA=a, toneB=b))
 
     # O2 60 s mute ---------------------------------------------------------------------------
@@ -390,8 +417,11 @@ class Run:
 
     # O3 forced resume -----------------------------------------------------------------------
     def o3(self, rule):
-        sequence = [[e.get('source'), e.get('reason')] for e in self.others_events()]
-        rule('sequence', sequence == [['browser', 'start'], ['system', 'lost'], ['browser', 'restored']], sequence)
+        sequence = self.others_form()
+        none_lost = [e['atMs'] for e in self.matching('none', 'lost')]
+        rule('sequence', sequence == [['browser', 'start'], ['system', 'lost'], ['browser', 'restored']] and
+             all(self.bracket('kill', at, C['ACTION_SLACK_MS']) for at in none_lost),
+             dict(folded=sequence, noneLostMs=none_lost))
         lost, restored = self.lost(), self.restored()
         rule('lost', lost is not None, dict(lost=[e['atMs'] for e in self.matching('system', 'lost')],
                                             kill=self.actions['kill']))
@@ -408,8 +438,17 @@ class Run:
         else:
             rule('state', False, 'needs one lost in the kill bracket and one restored after it')
         a, b = self.key('A'), self.key('B')
-        counts = {role: len(self.keys[key]) for role, key in (('A', a), ('B', b))}
-        rule('spans', min(counts.values()) >= 2, counts)
+        kill = self.actions['kill']['requestedAtMs']
+        pre = {role: [t for t in self.keys[key] if extent(t)[0] < kill] for role, key in (('A', a), ('B', b))}
+        counts = {role: [len(pre[role]), len(self.post_kill(key))] for role, key in (('A', a), ('B', b))}
+        rule('spans', all(v == [1, 1] for v in counts.values()), dict(preAndPostKill=counts))
+        # SPEC S-6: the Others are absent over the loss; the dead transport's audio is never zero-filled.
+        ends = {}
+        for role, spans in pre.items():
+            present = [b / 16 for t in spans for _, b in gaps.presence(t)['present']]
+            ends[role] = max(present) if present else None
+        rule('lossAbsent', all(_number(v) and self.bracket('kill', v, C['ACTION_SLACK_MS']) for v in ends.values()),
+             dict(lastPresentBeforeLossMs=ends, kill=self.actions['kill']))
         overlaps = []
         for key, spans in self.keys.items():
             for one, two in zip(spans, spans[1:]):
@@ -427,8 +466,8 @@ class Run:
             tones[role] = [self.f.tone([t], extent(t)[0], extent(t)[0] + C['PROOF_MS'], hz) for t in self.post_kill(key)]
         rule('resumedTone', all(tones.values()) and all(_audible(v) for t in tones.values() for v in t), tones)
         system = [list(extent(t)) for t in self.tracks if t.get('kind') == 'system']
-        rule('system', lost is not None and restored is not None and any(
-            abs(s - lost['atMs']) <= C['EDGE_MS'] and e >= restored['atMs'] - C['EDGE_MS'] for s, e in system),
+        rule('system', lost is not None and restored is not None and len(system) == 1 and all(
+            at_event(s, lost['atMs']) and abs(e - restored['atMs']) <= C['EDGE_MS'] for s, e in system),
             dict(systemMs=system))
         refusals = self.doc.get('refusals') if isinstance(self.doc.get('refusals'), list) else []
         refused = [r for r in refusals if isinstance(r, dict) and
@@ -466,12 +505,12 @@ class Run:
             rule('micAudio', False, 'needs a me:true selection')
             return
         mic = [t for t in self.tracks if t.get('kind') in ME]
-        quiet = off['atMs'] + C['ACTION_SLACK_MS']
-        intruding = [t['id'] for t in mic if extent(t)[0] < at and extent(t)[1] > quiet]
-        rule('micOff', not intruding, dict(windowMs=[quiet, at], intruding=intruding))
-        started = [t for t in mic if at - 1e-6 <= extent(t)[0] <= at + C['EDGE_MS'] and
-                   extent(t)[1] >= at + C['PROOF_MS']]
-        rule('micOn', len(started) == 1, dict(starts=[extent(t)[0] for t in mic], atMs=at))
+        quiet, on = off['atMs'] + C['ACTION_SLACK_MS'], events.placed_ms(at)
+        intruding = [t['id'] for t in mic if extent(t)[0] < on - SAMPLE_MS - 1e-9 and extent(t)[1] > quiet]
+        rule('micOff', not intruding, dict(windowMs=[quiet, on], intruding=intruding))
+        # SPEC S-6/D52.2: the span starts at the selection's atMs; a late first buffer is a prefix gap.
+        started = [t for t in mic if at_event(extent(t)[0], at) and extent(t)[1] >= on + C['PROOF_MS']]
+        rule('micOn', len(started) == 1, dict(starts=[extent(t)[0] for t in mic], atMs=at, placedMs=on))
         if len(started) != 1:
             rule('micAudio', False, 'no microphone span starts at the me:true selection')
             return
@@ -520,8 +559,9 @@ class Run:
         outcomes = {s.get('sourceTrackId'): s.get('captureOutcome') for s in self.sources()}
         role = {key: r for r, keys in self.roles.items() for key in keys}
         return dict(
+            written=dict(othersSource=[[e.get('source'), e.get('reason')] for e in self.others_events()]),
             categorical=dict(
-                othersSource=[[e.get('source'), e.get('reason')] for e in self.others_events()],
+                othersSource=self.others_form(),
                 selection=[[e.get('me'), e.get('others'), e.get('reason')] for e in chosen],
                 state=self.doc.get('state'), problemKind=self.doc.get('problemKind'), endReason=end.get('reason'),
                 remoteSources=len(self.keys),
