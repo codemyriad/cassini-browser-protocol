@@ -8,17 +8,29 @@ import subprocess
 import sys
 import tempfile
 import wave
-from jsonschema import Draft202012Validator, FormatChecker
+from functools import lru_cache
 
 ROOT = Path(__file__).resolve().parent.parent
 FIXTURES = ROOT / 'conformance/session-events'
-SCHEMA = Draft202012Validator(json.loads((ROOT / 'schemas/session.schema.json').read_text()),
-                             format_checker=FormatChecker())
+
+
+@lru_cache(maxsize=None)
+def schema():
+    """The session schema validator. jsonschema is imported here, not at load, so the
+    stdlib-only live-folder oracle (conformance/live-folder/check.py) can reuse bounds()."""
+    from jsonschema import Draft202012Validator, FormatChecker
+    return Draft202012Validator(json.loads((ROOT / 'schemas/session.schema.json').read_text()),
+                                format_checker=FormatChecker())
 
 
 def validate(document):
     """JSON Schema plus S-6 bounds that JSON Schema cannot express."""
-    SCHEMA.validate(document)
+    schema().validate(document)
+    bounds(document)
+
+
+def bounds(document):
+    """The S-6 bounds JSON Schema cannot express; needs no jsonschema."""
     previous = 0
     ended = False
     source = None
