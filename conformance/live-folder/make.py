@@ -44,6 +44,7 @@ ACTIONS = {
     'restore': [96680, 102380], 'stop': [109500, 110310],
 }
 END_MS = 109625
+CAPTURE_ID, ORIGIN = 'live-folder-synthetic', 1793880000000
 
 
 def _sin(x):
@@ -124,12 +125,18 @@ def base():
                        dict(atMs=END_MS, type='end', reason='user'),
                    ])
     evidence = dict(scenario='live-folder/1', app='synthetic', protocolCommit='0' * 40, extensionVersion='0.2.12',
-                    captureId='live-folder-synthetic', timelineOriginMs=1793880000000,
+                    captureId=CAPTURE_ID, timelineOriginMs=ORIGIN,
                     newFolders=[f'Recording-{SESSION}'],
+                    # The app's one ask, read off the control pipe between system/lost and browser/restored.
+                    resumeRequests=[resume_request(97210.5, 'resume-1')],
                     actions={k: dict(requestedAtMs=a, observedAtMs=b) for k, (a, b) in ACTIONS.items()},
                     slotC=dict(connectionState='connected', packetsReceived=0), maxSourceCount=3,
                     nativeTones=dict(microphone=MIC_HZ))
     return session, tracks, evidence
+
+
+def resume_request(at, request_id, capture_id=CAPTURE_ID):
+    return dict(atMs=at, via='control-pipe', requestId=request_id, captureId=capture_id, timelineOriginMs=ORIGIN)
 
 
 def _track(plans, identifier):
@@ -323,6 +330,24 @@ def mic_late_no_prefix(session, tracks, evidence):
     mic['content'] = [(0, mic['frames'], MIC)]
 
 
+def no_resume(session, tracks, evidence):
+    # The folder still shows the restore: only the pipe can tell that the app never asked.
+    evidence['resumeRequests'] = []
+
+
+def duplicate_resume(session, tracks, evidence):
+    evidence['resumeRequests'].append(resume_request(98410.25, 'resume-2'))
+
+
+def wrong_capture_resume(session, tracks, evidence):
+    evidence['resumeRequests'] = [resume_request(97210.5, 'resume-1', 'live-folder-another')]
+
+
+def early_resume(session, tracks, evidence):
+    # Asked after the kill and before the fallback committed system/lost (D52.5: wait for the commit).
+    evidence['resumeRequests'] = [resume_request(95600, 'resume-1')]
+
+
 def fractional_mic(session, tracks, evidence):
     # GNOME and Mac write the selection's wall-clock atMs as the span start; this one
     # places 1/50 ms below it on the 16 kHz grid (D55).
@@ -342,7 +367,7 @@ def mac_loss_form(session, tracks, evidence):
 # name: (defect, every rule it must fail, exactly; the first names it). With no
 # jsonschema (macOS /usr/bin/python3) O0.schema reports unavailable and passes.
 MUTANTS = {
-    'drop-restored': (drop_restored, ['O3.restored', 'O3.sequence', 'O3.state', 'O3.system']),
+    'drop-restored': (drop_restored, ['O3.restored', 'O3.sequence', 'O3.state', 'O3.system', 'O3.resumeAt']),
     'mute-gap': (mute_gap, ['O2.gaps', 'O2.present']),
     'split-mute': (split_mute, ['O2.oneSpan', 'O3.spans']),
     'lost-in-mute': (lost_in_mute, ['O2.noEvents', 'O3.sequence']),
@@ -379,6 +404,10 @@ MUTANTS = {
     'mic-late-no-prefix': (mic_late_no_prefix, ['O5.micOn', 'O5.micAudio']),
     'short-mute': (short_mute, ['O2.duration']),
     'early-mute': (early_mute, ['O2.muteStart']),
+    'no-resume': (no_resume, ['O3.resumeOnce', 'O3.resumeAt']),
+    'duplicate-resume': (duplicate_resume, ['O3.resumeOnce']),
+    'wrong-capture-resume': (wrong_capture_resume, ['O3.resumeOnce', 'O3.resumeAt']),
+    'early-resume': (early_resume, ['O3.resumeAt']),
 }
 
 # name: another form a correct writer may produce; each must pass every check.

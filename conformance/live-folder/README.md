@@ -36,8 +36,8 @@ JSON Schema step runs only where jsonschema is importable and `O0.schema` says
 ## Truth sources
 
 The evidence brackets (`actions.<name>.{requestedAtMs, observedAtMs}` on the session
-timeline), the scenario constants and PCM the oracle measures itself. App readers are
-never consulted. A track's extent starts at its D55 placement and lasts frames/rate;
+timeline), the resume requests the driver read off the control pipe, the scenario
+constants and PCM the oracle measures itself. App readers are never consulted. A track's extent starts at its D55 placement and lasts frames/rate;
 GNOME's RotatingWAV `spans` rows are read piece by piece, never WAV length alone.
 
 Roles come from PCM: a remote `sourceTrackId` is A (or B) when the first PROOF_MS of
@@ -54,6 +54,34 @@ The mute window W comes from the evidence, so O2 first holds it to the scenario:
 folder clock never runs ahead of the session clock (a frame is written after it is
 captured), so the driver's waits on F(A) bound the requests themselves. O2.silent then
 shows at least MUTE_MS − 2 × EDGE_MS of silence in A's one span, measured in PCM.
+
+### Resume requests
+
+The folder shows the restore, not how often the app asked for it, so the driver observes
+each resume-capture-v1 request itself (`scenario.json` `evidence.resumeObservation`). The
+app's production control host (`io.codemyriad.cassini.control`) is registered through a
+driver-owned relay launcher: it copies stdin and stdout between the browser and the host
+unchanged and parses the host-to-browser native messaging frames (4-byte native-endian
+length, UTF-8 JSON). Every frame with `type: "command"`, `action: "start"` and a
+`resumeCapture` member becomes one entry:
+
+```json
+"captureId": "<the extension's cassiniSessions[] captureId for the meeting tab>",
+"timelineOriginMs": 1793880000000,
+"resumeRequests": [
+  {"atMs": 97210.5, "via": "control-pipe", "requestId": "resume-1",
+   "captureId": "<resumeCapture.captureId as written>", "timelineOriginMs": 1793880000000}
+]
+```
+
+`atMs` is `Date.now()` when the relay has read the whole frame, before forwarding it, minus
+`timelineOriginMs`. The identity a request must name (`captureId`, `timelineOriginMs`) is
+the one the extension's service worker holds for the recording, read at record. This is
+independent of the app under test: they are the bytes its control host wrote, copied by a
+driver process before the extension reads them, so neither the app's own reports nor the
+extension's checks, coalescing or refusal can hide or add one. Requests are counted from
+before record until the stop observation, reconnects included; a frame the relay cannot
+read fails the run.
 
 ## Checks
 
@@ -94,6 +122,8 @@ shows at least MUTE_MS − 2 × EDGE_MS of silence in A's one span, measured in 
 | O3.resumedTone | each of those carries its tone in its first PROOF_MS |
 | O3.system | exactly one system track; it starts at lost (SPEC S-6) and ends within EDGE_MS of restored |
 | O3.refusals | no `startRejected` refusal and no `resumeRefused` detail |
+| O3.resumeOnce | the evidence shows exactly one resume request, and it names this recording: its `captureId` and `timelineOriginMs` equal the evidence's (D52.5 ask once) |
+| O3.resumeAt | every request naming this recording is at or after the committed loss (the last system/lost before the first browser/restored) and at or before that browser/restored; there is at least one |
 | O4.keys | every remote track has a `sourceTrackId`, and there are exactly 2 |
 | O4.outcomeRows | exactly 2 `captureOutcome.sources` rows, one per key, each listing exactly that key's track ids, both `captured` (so no `neverAudio`) |
 | O4.evidence | `maxSourceCount` 3, slot C `connected` with 0 packets received |
@@ -138,7 +168,7 @@ that always passes turns the self-test red. Without jsonschema (macOS
 
 | mutant | defect | fails exactly |
 |---|---|---|
-| drop-restored | no browser/restored | O3.restored, O3.sequence, O3.state, O3.system |
+| drop-restored | no browser/restored | O3.restored, O3.sequence, O3.state, O3.system, O3.resumeAt |
 | mute-gap | a 2 s jump gap in the mute | O2.gaps, O2.present |
 | split-mute | A split into two spans during the mute | O2.oneSpan, O3.spans |
 | lost-in-mute | a system/lost at 35 s | O2.noEvents, O3.sequence |
@@ -172,6 +202,10 @@ that always passes turns the self-test red. Without jsonschema (macOS
 | mic-late-no-prefix | microphone-2 starts 400 ms after M, no prefix gap | O5.micOn, O5.micAudio |
 | short-mute | the mute held 50.74 s (unmute asked at 56050), A's tone back as early | O2.duration |
 | early-mute | the mute asked at 2810, before F(A) can reach MUTE_START_MS, held a full MUTE_MS | O2.muteStart |
+| no-resume | no resume request on the pipe (the folder still shows the restore) | O3.resumeOnce, O3.resumeAt |
+| duplicate-resume | a second request at 98410.25 | O3.resumeOnce |
+| wrong-capture-resume | the one request names captureId `live-folder-another` | O3.resumeOnce, O3.resumeAt |
+| early-resume | the one request at 95600, after the kill and before system/lost committed | O3.resumeAt |
 
 ## Variants
 

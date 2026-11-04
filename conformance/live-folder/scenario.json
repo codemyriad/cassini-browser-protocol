@@ -57,11 +57,24 @@
       "actions": "{name: {requestedAtMs, observedAtMs}} for every name in actions below; requestedAtMs <= observedAtMs",
       "slotC": "{connectionState, packetsReceived}: slot C's peer state and inbound-rtp packetsReceived sampled just before Stop",
       "maxSourceCount": "the highest meeting-row sourceCount seen",
-      "nativeTones": "{microphone: Hz}: the tone the app's test microphone plays"
+      "nativeTones": "{microphone: Hz}: the tone the app's test microphone plays",
+      "captureId": "the recording's captureId as the extension's service worker holds it (chrome.storage.session cassiniSessions[] entry of the meeting tab, read at record): the identity a resume must name",
+      "timelineOriginMs": "that entry's startedAt, an integer: the origin of every time above and the other half of the recording's identity",
+      "resumeRequests": "every resume request the app sent during the run, in pipe order, as resumeObservation below defines it: [{atMs, via, requestId, captureId, timelineOriginMs}]; [] when there was none"
     },
-    "optional": {
-      "captureId": "the capture's id, for the log",
-      "timelineOriginMs": "the origin used for every time above"
+    "resumeObservation": {
+      "via": "control-pipe",
+      "point": "The app adapter registers the app's production control host (native messaging host io.codemyriad.cassini.control) through a driver-owned relay launcher (scenarios/native-launcher.mjs) instead of the plain exec launcher. The relay starts the host with its argv and the browser's arguments, copies the browser's stdin to the host and the host's stdout to the browser byte for byte, unchanged and unbuffered, and parses the host-to-browser direction as native messaging frames (a 4-byte native-endian length, then that many bytes of UTF-8 JSON). Every control-host connection of the run is relayed, reconnects included.",
+      "request": "Every host-to-browser frame with type \"command\", action \"start\" and a resumeCapture member, from before record until the stop observation: one resumeRequests entry each, even when the extension later refuses or ignores it.",
+      "fields": {
+        "atMs": "Date.now() when the relay has read the whole frame, before forwarding it, minus timelineOriginMs",
+        "via": "\"control-pipe\", the only observation accepted",
+        "requestId": "the frame's requestId, as written",
+        "captureId": "the frame's resumeCapture.captureId, as written (any JSON value)",
+        "timelineOriginMs": "the frame's resumeCapture.timelineOriginMs, as written (any JSON value)"
+      },
+      "unusable": "A host-to-browser frame the relay cannot read as JSON fails the run: the driver writes no evidence.",
+      "independence": "These are the bytes the app's control host wrote to the browser, copied by a driver process before the extension reads them: no app log, status, reader or self-report is consulted, and the extension's own checks, coalescing or refusal cannot hide or add a request. The identity it is compared with comes from the extension, not from the app."
     },
     "actions": {
       "record": "requested: record(); observed: status with path and captureId, and A's track holds 1000 ms of frames",

@@ -169,7 +169,13 @@ class LiveFolderOracle(unittest.TestCase):
 
     def test_unusable_evidence_is_refused(self):
         for change in (lambda e: e['actions'].pop('kill'), lambda e: e.update(protocolCommit='abc'),
-                       lambda e: e['actions']['mute'].update(observedAtMs=0), lambda e: e.pop('nativeTones')):
+                       lambda e: e['actions']['mute'].update(observedAtMs=0), lambda e: e.pop('nativeTones'),
+                       # The resume requests and the identity they must name are required facts, and
+                       # only the driver's own copy of the control pipe counts as observing a request.
+                       lambda e: e.pop('resumeRequests'), lambda e: e.pop('captureId'),
+                       lambda e: e.update(timelineOriginMs=1793880000000.5),
+                       lambda e: e['resumeRequests'][0].update(via='app-log'),
+                       lambda e: e['resumeRequests'][0].pop('captureId')):
             process, result = self.evidence_case(change)
             self.assertEqual(process.returncode, 2)
             self.assertIn('unusable input: evidence', process.stderr)

@@ -140,14 +140,17 @@ copied from `bursts.json` fail; see the folder's README.
 
 `conformance/live-folder/` holds the scenario constants and the `evidence.json`
 contract (`scenario.json`), the coordinator-owned oracle (`check.py`) and a
-synthetic passing run with 34 named mutants and 2 variant writer forms (`make.py`,
+synthetic passing run with 38 named mutants and 2 variant writer forms (`make.py`,
 pinned byte for byte by `materialized.sha256` on Linux and macOS Python 3.9). The
 shared driver runs the scenario against each app's real writer: a 60 s
 `replaceTrack(null)` mute with A the only open source, a late remote, a connected
 slot that never sends, Me off then on at 90 s, and a forced resume (SIGKILL of the
 audio host: system/lost, one `resume-capture-v1`, browser/restored with new spans
-under the same keys). `check.py check` then checks the folder against the evidence
-brackets, the scenario and corpus constants and PCM it measures itself, never
+under the same keys). The driver reads each resume request off the app's control
+pipe itself, through a relay launcher in front of the control host, and records it with
+the recording identity it names and its time (`scenario.json` `resumeObservation`).
+`check.py check` then checks the folder against the evidence brackets and those
+requests, the scenario and corpus constants and PCM it measures itself, never
 through an app reader; `check.py compare` lines two apps' results up.
 `tests/test_live_folder_oracle.py` proves the base run and the variants pass, each
 mutant and evidence fault fails exactly its rules, every rule is shown failing at

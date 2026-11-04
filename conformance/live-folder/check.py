@@ -57,6 +57,7 @@ ME = ('microphone', 'local')
 NATIVE = ('microphone', 'local', 'system')
 WAV_NAME = re.compile(r'track-[^/\\]+\.wav')
 COMMIT = re.compile(r'[0-9a-f]{40}')
+VIA = SCENARIO['evidence']['resumeObservation']['via']
 
 
 class Unusable(Exception):
@@ -110,6 +111,18 @@ def load_evidence(path):
     tones = value.get('nativeTones')
     if not (isinstance(tones, dict) and _number(tones.get('microphone')) and 20 <= tones['microphone'] <= 20000):
         problems.append('nativeTones.microphone')
+    if not isinstance(value.get('captureId'), str) or not value['captureId']:
+        problems.append('captureId')
+    if type(value.get('timelineOriginMs')) is not int or value['timelineOriginMs'] < 0:
+        problems.append('timelineOriginMs')
+    requests = value.get('resumeRequests')
+    if not isinstance(requests, list):
+        problems.append('resumeRequests')
+    else:
+        for index, request in enumerate(requests):
+            if not (isinstance(request, dict) and _number(request.get('atMs')) and request.get('via') == VIA and
+                    {'requestId', 'captureId', 'timelineOriginMs'} <= set(request)):
+                problems.append(f'resumeRequests[{index}]')
     if problems:
         raise Unusable('evidence: missing or invalid ' + ', '.join(problems))
     return value
@@ -288,6 +301,24 @@ class Run:
             return None
         found = [e for e in self.matching('browser', 'restored') if e['atMs'] >= lost['atMs']]
         return found[0] if len(found) == 1 else None
+
+    def resume_requests(self):
+        """(every observed resume request, those naming this recording): its captureId and
+        timelineOriginMs as the extension holds them, the identity resumeCapture names (SPEC-CONTROL)."""
+        every = self.e['resumeRequests']
+        identity = [self.e['captureId'], self.e['timelineOriginMs']]
+        return every, [r for r in every if [r['captureId'], r['timelineOriginMs']] == identity]
+
+    def resume_seam(self):
+        """[committed loss, restoration]: the first browser/restored and the last system/lost
+        written before it (a none/lost is not the commit: SPEC-CONTROL D52.5), else None."""
+        written = [e for e in self.others_events() if _number(e.get('atMs'))]
+        pairs = [(e.get('source'), e.get('reason')) for e in written]
+        if ('browser', 'restored') not in pairs:
+            return None
+        restored = pairs.index(('browser', 'restored'))
+        lost = [e['atMs'] for e, p in zip(written[:restored], pairs) if p == ('system', 'lost')]
+        return [lost[-1], written[restored]['atMs']] if lost else None
 
     def post_kill(self, key):
         return [t for t in self.keys[key] if extent(t)[0] >= self.actions['kill']['requestedAtMs']]
@@ -484,6 +515,14 @@ class Run:
         refused = [r for r in refusals if isinstance(r, dict) and
                    (r.get('code') == 'startRejected' or r.get('detail') == 'resumeRefused')]
         rule('refusals', not refused, refused)
+        # D52.5 ask once, from the driver's own copy of the control pipe (scenario.json resumeObservation).
+        every, mine = self.resume_requests()
+        observed = [[r['atMs'], r['requestId'], r['captureId'], r['timelineOriginMs']] for r in every]
+        rule('resumeOnce', len(every) == 1 and len(mine) == 1,
+             dict(requests=observed, recording=[self.e['captureId'], self.e['timelineOriginMs']]))
+        seam = self.resume_seam()
+        rule('resumeAt', seam is not None and bool(mine) and all(seam[0] <= r['atMs'] <= seam[1] for r in mine),
+             dict(atMs=[r['atMs'] for r in mine], lostAndRestoredMs=seam))
 
     # O4 remote with no packets ---------------------------------------------------------------
     def o4(self, rule):
@@ -575,7 +614,7 @@ class Run:
                 othersSource=self.others_form(),
                 selection=[[e.get('me'), e.get('others'), e.get('reason')] for e in chosen],
                 state=self.doc.get('state'), problemKind=self.doc.get('problemKind'), endReason=end.get('reason'),
-                remoteSources=len(self.keys),
+                remoteSources=len(self.keys), resumeRequests=len(self.resume_requests()[1]),
                 spans=dict(A=[len(self.keys[k]) for k in self.roles['A']], B=[len(self.keys[k]) for k in self.roles['B']],
                            microphone=sum(t.get('kind') in ME for t in self.tracks),
                            system=sum(t.get('kind') == 'system' for t in self.tracks)),
