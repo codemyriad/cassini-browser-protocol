@@ -38,6 +38,20 @@ const remoteTracks = manifest => tracksOf(manifest, track => track.kind === 'rem
 const others = manifest => eventsOf(manifest, 'othersSource');
 const lengthMs = track => (extent(track) ? extent(track)[1] - extent(track)[0] : 0);
 
+// One receive slot's inbound-rtp counters on the meeting page (zeros before any packet).
+// Diagnostic only: the jitter buffer's mean delay between two samples is how long the
+// receiver still plays audio the sender has already stopped.
+async function receiverStats(meeting, slot) {
+  return meeting.evaluate(async slot => {
+    const receiver = topologyPeer.getTransceivers()[slot].receiver;
+    const inbound = [...(await receiver.getStats()).values()].find(r => r.type === 'inbound-rtp') || {};
+    const pick = ['packetsReceived', 'jitterBufferDelay', 'jitterBufferEmittedCount', 'jitterBufferTargetDelay', 'concealedSamples', 'totalSamplesReceived'];
+    return { connectionState: topologyPeer.connectionState, ...Object.fromEntries(pick.map(name => [name, inbound[name] ?? 0])) };
+  }, slot);
+}
+const playoutMs = (from, to) => to.jitterBufferEmittedCount > from.jitterBufferEmittedCount
+  ? Math.round(1000 * (to.jitterBufferDelay - from.jitterBufferDelay) / (to.jitterBufferEmittedCount - from.jitterBufferEmittedCount)) : null;
+
 export async function runLiveFolder({ meeting, remote, app, worker, out, log = console.log, python = 'python3' }) {
   const { constants: C, bounds, pollMs, oracle } = await loadScenario();
   const wall = () => Date.now();
@@ -93,6 +107,7 @@ export async function runLiveFolder({ meeting, remote, app, worker, out, log = c
     }, captureId), 'record: the extension holds the session origin', bounds.record, { pollMs });
     step('record', requested, recorded);
     notes.keyA = keyA;
+    const receiverAtRecord = await receiverStats(meeting, 0);
     await row();
 
     // 2. Me off (skipped when the app starts with Me off: the start selection is the off one).
@@ -110,9 +125,12 @@ export async function runLiveFolder({ meeting, remote, app, worker, out, log = c
     await clock.waitFolder(() => clock.F(keyA) >= C.MUTE_START_MS, `mute: F(A) reaches ${C.MUTE_START_MS} ms`,
       C.MUTE_START_MS + bounds.record);
     const spansA = new Set(tracksOf(clock.manifest, keyA).map(t => t.id)), othersBefore = others(clock.manifest).length;
+    const receiverAtMute = await receiverStats(meeting, 0);
+    notes.receiverA = { atRecord: receiverAtRecord, atMute: receiverAtMute, playoutMsBeforeMute: playoutMs(receiverAtRecord, receiverAtMute) };
     requested = wall();
     await muteSlot(remote, 0);
     step('mute', requested, wall());
+    log(`live-folder: A's mean jitter-buffer delay before the mute ${notes.receiverA.playoutMsBeforeMute} ms`);
 
     // 4. Hold the mute for MUTE_MS of A's own frames: one span, no source change, never ended.
     // Stalled frames fail the bound: that stall is what this step is here to catch.
@@ -186,11 +204,8 @@ export async function runLiveFolder({ meeting, remote, app, worker, out, log = c
     // 8. Stop, after STOP_AFTER_RESTORE_MS more. Slot C's stats are the page-side evidence
     // that a connected remote with no packets existed (P4).
     await untilS(session(actions.restore.observedWall) + C.STOP_AFTER_RESTORE_MS, 'stop');
-    slotC = await meeting.evaluate(async () => {
-      const receiver = topologyPeer.getTransceivers()[2].receiver;
-      const inbound = [...(await receiver.getStats()).values()].find(r => r.type === 'inbound-rtp');
-      return { connectionState: topologyPeer.connectionState, packetsReceived: inbound?.packetsReceived ?? 0 };
-    });
+    const stats = await receiverStats(meeting, 2);
+    slotC = { connectionState: stats.connectionState, packetsReceived: stats.packetsReceived };
     await row();
     requested = wall();
     await app.stop();
