@@ -259,6 +259,16 @@ class LiveFolderOracle(unittest.TestCase):
         self.assertEqual([mute['requestedAtMs'], unmute['requestedAtMs'] - mute['requestedAtMs']],
                          [oracle.C['MUTE_START_MS'], oracle.C['MUTE_MS']])
 
+    def test_resume_observation_keeps_the_host_the_browsers_child(self):
+        # The Mac control host knows its browser only by getppid(): a relay that spawned it would
+        # change the app under test. The host is exec'd by the launcher; only its stdout is relayed.
+        observation = json.loads((LIVE / 'scenario.json').read_text())['evidence']['resumeObservation']
+        self.assertIn("keeps the host the browser's direct child", observation['point'])
+        self.assertIn('then execs the production host', observation['point'])
+        self.assertIn('The browser-to-host direction is not touched', observation['point'])
+        self.assertIn("checks that this pid's parent is the browser process and fails the run otherwise",
+                      observation['process'])
+
     def test_corpus_constants_are_read_not_copied(self):
         scenario = json.loads((LIVE / 'scenario.json').read_text())
         corpus = json.loads((ROOT / 'conformance/multistream/corpus.json').read_text())['constants']

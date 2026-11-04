@@ -78,10 +78,25 @@ in A's one span, measured in PCM.
 The folder shows the restore, not how often the app asked for it, so the driver observes
 each resume-capture-v1 request itself (`scenario.json` `evidence.resumeObservation`). The
 app's production control host (`io.codemyriad.cassini.control`) is registered through a
-driver-owned relay launcher: it copies stdin and stdout between the browser and the host
-unchanged and parses the host-to-browser native messaging frames (4-byte native-endian
-length, UTF-8 JSON). Every frame with `type: "command"`, `action: "start"` and a
-`resumeCapture` member becomes one entry:
+driver-owned launcher that keeps the host the browser's direct child: the launcher starts
+a detached relay reading a private FIFO and writing to the browser's pipe, then execs the
+host with only its stdout redirected into that FIFO. A sketch in POSIX sh:
+
+```sh
+mkfifo "$dir/out"
+( exec node relay.mjs "$dir/out" </dev/null & )   # detached; stdout is the browser's pipe
+exec /path/to/control-host "$@" >"$dir/out"        # same pid, parent, argv, env and stdin
+```
+
+The relay copies the host-to-browser bytes unchanged and unbuffered, exits at the end of
+its input, and parses them as native messaging frames (4-byte native-endian length, UTF-8
+JSON); the browser-to-host direction is not touched. The host must not be the relay's
+child: the Mac control host identifies its browser only by `getppid()`
+(`BrowserInstance.parentBrowser`), so a spawning relay would run it with no identified
+browser, a configuration production never meets. The launcher records its pid (the
+host's, after exec) and the driver fails the run unless that pid's parent is the browser.
+Every frame with `type: "command"`, `action: "start"` and a `resumeCapture` member becomes
+one entry:
 
 ```json
 "captureId": "<the extension's cassiniSessions[] captureId for the meeting tab>",
@@ -97,7 +112,8 @@ length, UTF-8 JSON). Every frame with `type: "command"`, `action: "start"` and a
 the one the extension's service worker holds for the recording, read at record. This is
 independent of the app under test: they are the bytes its control host wrote, copied by a
 driver process before the extension reads them, so neither the app's own reports nor the
-extension's checks, coalescing or refusal can hide or add one. Requests are counted from
+extension's checks, coalescing or refusal can hide or add one; and the host runs as in
+production, so the observation does not change what it sends. Requests are counted from
 before record until the stop observation, reconnects included; a frame the relay cannot
 read fails the run.
 
