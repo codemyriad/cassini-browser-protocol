@@ -1,0 +1,222 @@
+// Shared test 2 driver (D68): one live recording, through an app's real writer, of a call
+// with a 60 s remote mute, a late remote, a connected remote that never sends, the app's
+// microphone switched off and back on at 90 s, and a forced resume (SIGKILL of the
+// session's audio host). The folder is then judged only by conformance/live-folder/check.py.
+//
+// Both apps run this same driver; each supplies an adapter (`app`) for its own actions:
+//   record()            start recording the meeting the way a person does (async, returns once asked)
+//   selectMe(on)        switch the app's Me (microphone) selection for this recording
+//   snapshot()          {path, captureId} of this recording, or null before it exists
+//   meetingRow()        the app's row for the meeting tab: {sourceCount, heard}, or null
+//   stop()              stop this recording the way a person does (returns once asked)
+//   audioHostPids()     live pids of the audio native hosts (scenarios/native-launcher.mjs)
+//   folders()           names of the Recording-* folders in the app's Library
+//   saved?(path)        optional: wait for app-owned files written after Stop (bounded)
+//   name, protocolCommit, nativeTones: {microphone: Hz}, startsWithMeOff?: true
+// meeting is the call tab (in the browser with the extension), remote its far end, worker
+// the extension's service worker. Every wait polls the folder (scenarios/folder-clock.mjs)
+// or the app, with a labelled bound from scenario.json; nothing sleeps (E1).
+import assert from 'node:assert/strict';
+import { execFile } from 'node:child_process';
+import { readFile, writeFile } from 'node:fs/promises';
+import path from 'node:path';
+import { connectReceiveSlots, muteSlot, switchReceiveSlot } from './product-topologies.mjs';
+import { eventsOf, extent, folderClock, poll, tracksOf } from './folder-clock.mjs';
+
+const ORACLE = path.resolve(import.meta.dirname, '../conformance/live-folder');
+
+// scenario.json's constants plus the corpus constants it names (read, never copied).
+export async function loadScenario(oracle = ORACLE) {
+  const scenario = JSON.parse(await readFile(path.join(oracle, 'scenario.json'), 'utf8'));
+  const corpus = JSON.parse(await readFile(path.join(oracle, scenario.corpus.file), 'utf8')).constants;
+  const constants = { ...scenario.constants };
+  for (const name of scenario.corpus.constants) constants[name] = corpus[name];
+  return { scenario, constants, bounds: scenario.driver.boundsMs, pollMs: scenario.driver.pollMs, oracle };
+}
+
+const remoteTracks = manifest => tracksOf(manifest, track => track.kind === 'remote' && typeof track.sourceTrackId === 'string');
+const others = manifest => eventsOf(manifest, 'othersSource');
+const lengthMs = track => (extent(track) ? extent(track)[1] - extent(track)[0] : 0);
+
+export async function runLiveFolder({ meeting, remote, app, worker, out, log = console.log, python = 'python3' }) {
+  const { constants: C, bounds, pollMs, oracle } = await loadScenario();
+  const wall = () => Date.now();
+  const actions = {}, notes = { steps: [] };
+  let origin = null, clock = null, captureId = null, maxSourceCount = 0, slotC = null, before = null, newFolders = null;
+  const session = at => at - origin;
+  const step = (name, requested, observed) => {
+    actions[name] = { requestedWall: requested, observedWall: observed };
+    log(`live-folder: ${name} requested ${origin === null ? '-' : session(requested)} observed ${origin === null ? '-' : session(observed)} (session ms)`);
+  };
+  const row = async () => {
+    const value = await app.meetingRow();
+    if (Number.isInteger(value?.sourceCount)) maxSourceCount = Math.max(maxSourceCount, value.sourceCount);
+    return value;
+  };
+  // Wait until the folder clock reaches target (session ms): the clock runs in real time,
+  // so the bound is the distance left plus the record bound for checkpoint lag.
+  const untilS = (target, label) => clock.waitFolder(() => clock.S() >= target, `${label}: folder clock reaches ${target} ms`,
+    Math.max(0, target - clock.S()) + bounds.record);
+  const evidence = () => ({
+    scenario: 'live-folder/1', app: app.name, protocolCommit: app.protocolCommit,
+    extensionVersion: notes.extensionVersion, newFolders,
+    actions: Object.fromEntries(Object.entries(actions).map(([name, { requestedWall, observedWall }]) =>
+      [name, { requestedAtMs: session(requestedWall), observedAtMs: session(observedWall) }])),
+    slotC, maxSourceCount, nativeTones: app.nativeTones, captureId, timelineOriginMs: origin, notes,
+  });
+
+  try {
+    notes.extensionVersion = await worker.evaluate(() => chrome.runtime.getManifest().version);
+    // 0. Setup: three recvonly slots on one peer. A sends from the start, B is pre-negotiated
+    // and sends later, C stays connected and never gets a track.
+    await connectReceiveSlots(meeting, remote, [[C.TONE_A_HZ], null, null]);
+    await poll(async () => { const value = await row(); return value?.sourceCount === 3 && value.heard === true; },
+      'setup: the app lists the call with sourceCount 3 and heard', bounds.setup, { pollMs });
+    before = await app.folders();
+
+    // 1. Record.
+    let requested = wall();
+    await app.record();
+    const status = await poll(async () => { const value = await app.snapshot(); return value?.path && value.captureId ? value : null; },
+      'record: the app reports the recording folder and capture id', bounds.record, { pollMs });
+    captureId = status.captureId;
+    clock = folderClock(status.path, { pollMs });
+    const keyA = await clock.waitFolder(manifest => {
+      const track = remoteTracks(manifest).find(t => lengthMs(t) >= 1000);
+      return track?.sourceTrackId;
+    }, 'record: A has 1000 ms of frames', bounds.record);
+    const recorded = wall();
+    // The session timeline's origin, as the extension holds it: app-neutral.
+    origin = await poll(() => worker.evaluate(async id => {
+      const { cassiniSessions = [] } = await chrome.storage.session.get('cassiniSessions');
+      return cassiniSessions.find(s => s.captureId === id)?.startedAt ?? null;
+    }, captureId), 'record: the extension holds the session origin', bounds.record, { pollMs });
+    step('record', requested, recorded);
+    notes.keyA = keyA;
+    await row();
+
+    // 2. Me off (skipped when the app starts with Me off: the start selection is the off one).
+    if (app.startsWithMeOff) {
+      actions.meOff = { ...actions.record };
+    } else {
+      requested = wall();
+      await app.selectMe(false);
+      await clock.waitFolder(manifest => eventsOf(manifest, 'selection').at(-1)?.me === false,
+        'meOff: the last selection event shows me:false', bounds.meOff);
+      step('meOff', requested, wall());
+    }
+
+    // 3. Mute A once F(A) >= MUTE_START_MS. A is then the only open source.
+    await clock.waitFolder(() => clock.F(keyA) >= C.MUTE_START_MS, `mute: F(A) reaches ${C.MUTE_START_MS} ms`,
+      C.MUTE_START_MS + bounds.record);
+    const spansA = new Set(tracksOf(clock.manifest, keyA).map(t => t.id)), othersBefore = others(clock.manifest).length;
+    requested = wall();
+    await muteSlot(remote, 0);
+    step('mute', requested, wall());
+
+    // 4. Hold the mute for MUTE_MS of A's own frames: one span, no source change, never ended.
+    // Stalled frames fail the bound: that stall is what this step is here to catch.
+    const muteAt = session(actions.mute.requestedWall);
+    await clock.waitFolder(manifest => {
+      const ids = tracksOf(manifest, keyA).map(t => t.id);
+      assert.deepEqual(ids.filter(id => !spansA.has(id)), [], `muteHold: A opened a new span during the mute`);
+      assert.equal(others(manifest).length, othersBefore, `muteHold: an othersSource event during the mute: ${JSON.stringify(others(manifest).at(-1))}`);
+      assert.ok(!tracksOf(manifest, keyA).some(t => t.ended === true), 'muteHold: A ended during the mute');
+      return clock.F(keyA) >= muteAt + C.MUTE_MS;
+    }, `muteHold: F(A) reaches mute + ${C.MUTE_MS} ms`, bounds.muteHold);
+    requested = wall();
+    const unmutedFrom = clock.F(keyA);
+    await switchReceiveSlot(remote, 0, [C.TONE_A_HZ]);
+    await clock.waitFolder(() => clock.F(keyA) >= unmutedFrom + C.PROOF_MS, `unmute: F(A) advances ${C.PROOF_MS} ms`, bounds.unmute);
+    step('unmute', requested, wall());
+
+    // 5. Late remote: B starts sending on its pre-negotiated slot.
+    await untilS(C.LATE_REMOTE_MS, 'lateRemote');
+    requested = wall();
+    await switchReceiveSlot(remote, 1, [C.TONE_B_HZ]);
+    const keyB = await clock.waitFolder(manifest => remoteTracks(manifest).find(t => t.sourceTrackId !== keyA && lengthMs(t) >= C.PROOF_MS)?.sourceTrackId,
+      `lateRemote: a new sourceTrackId with ${C.PROOF_MS} ms of frames`, bounds.lateRemote);
+    step('lateRemote', requested, wall());
+    notes.keyB = keyB;
+
+    // 6. Me on at MIC_ON_MS. The microphone span starts at the me:true selection's atMs
+    // (a late first buffer is a prefix gap, inside the span), so wait for that span.
+    await untilS(C.MIC_ON_MS, 'meOn');
+    requested = wall();
+    await app.selectMe(true);
+    await clock.waitFolder(manifest => {
+      const on = eventsOf(manifest, 'selection').at(-1);
+      if (on?.me !== true || !Number.isFinite(on.atMs)) return false;
+      return tracksOf(manifest, track => track.kind === 'microphone')
+        .some(t => extent(t) && extent(t)[0] >= on.atMs - 1 && lengthMs(t) >= C.PROOF_MS);
+    }, `meOn: selection me:true and a microphone span from it with ${C.PROOF_MS} ms`, bounds.meOn);
+    step('meOn', requested, wall());
+
+    // 7. Forced resume: SIGKILL the session's one audio host. The app commits its fallback
+    // (system/lost) first; only then may the resume complete (browser/restored), so the
+    // folder always has the committed-loss form (D68 item 1).
+    await untilS(C.KILL_AT_MS, 'kill');
+    const pids = await app.audioHostPids();
+    assert.equal(pids.length, 1, `kill: exactly one live audio host, found ${JSON.stringify(pids)}`);
+    const folderCount = (await app.folders()).length;
+    const spansBefore = new Set(remoteTracks(clock.manifest).map(t => t.id));
+    const othersAtKill = others(clock.manifest).length;
+    notes.killedPid = pids[0];
+    requested = wall();
+    process.kill(pids[0], 'SIGKILL');
+    const lost = await clock.waitFolder(manifest => {
+      const after = others(manifest).slice(othersAtKill);
+      const lostAt = after.findIndex(e => e.source === 'system' && e.reason === 'lost');
+      const restoredAt = after.findIndex(e => e.source === 'browser' && e.reason === 'restored');
+      assert.ok(restoredAt < 0 || lostAt >= 0 && lostAt < restoredAt,
+        `kill: browser/restored before any system/lost: ${JSON.stringify(after)}`);
+      return lostAt >= 0 ? after[lostAt] : null;
+    }, 'kill: othersSource system/lost', bounds.lost);
+    step('kill', requested, wall());
+    requested = actions.kill.observedWall;
+    await clock.waitFolder(manifest => {
+      const restored = others(manifest).some(e => e.source === 'browser' && e.reason === 'restored' && e.atMs >= lost.atMs);
+      const fresh = key => remoteTracks(manifest).some(t => t.sourceTrackId === key && !spansBefore.has(t.id) && lengthMs(t) >= C.PROOF_MS);
+      return restored && fresh(keyA) && fresh(keyB);
+    }, `restore: browser/restored and new spans under A and B with ${C.PROOF_MS} ms each`, bounds.restore);
+    step('restore', requested, wall());
+    assert.equal((await app.folders()).length, folderCount, 'restore: the resume made another Recording-* folder');
+    notes.audioHostsAfterResume = await app.audioHostPids();
+
+    // 8. Stop, after STOP_AFTER_RESTORE_MS more. Slot C's stats are the page-side evidence
+    // that a connected remote with no packets existed (P4).
+    await untilS(session(actions.restore.observedWall) + C.STOP_AFTER_RESTORE_MS, 'stop');
+    slotC = await meeting.evaluate(async () => {
+      const receiver = topologyPeer.getTransceivers()[2].receiver;
+      const inbound = [...(await receiver.getStats()).values()].find(r => r.type === 'inbound-rtp');
+      return { connectionState: topologyPeer.connectionState, packetsReceived: inbound?.packetsReceived ?? 0 };
+    });
+    await row();
+    requested = wall();
+    await app.stop();
+    await clock.waitFolder(manifest => manifest.state !== 'recording' && eventsOf(manifest).at(-1)?.type === 'end',
+      'stop: the folder leaves recording and ends with an end event', bounds.stop);
+    step('stop', requested, wall());
+    if (app.saved) await app.saved(status.path);
+    const after = await app.folders();
+    newFolders = after.filter(name => !before.includes(name));
+
+    const evidenceFile = path.join(out, 'evidence.json'), resultFile = path.join(out, 'result.json');
+    await writeFile(evidenceFile, JSON.stringify(evidence(), null, 1) + '\n');
+    // The oracle, before the app quits or compacts the folder.
+    const run = await new Promise(resolve => execFile(python, ['-I', path.join(oracle, 'check.py'), 'check', status.path,
+      '--evidence', evidenceFile, '--out', resultFile], { maxBuffer: 16 << 20 }, (error, stdout, stderr) =>
+      resolve({ code: error ? (typeof error.code === 'number' ? error.code : 2) : 0, stdout, stderr })));
+    await writeFile(path.join(out, 'check.log'), run.stdout + run.stderr);
+    log(run.stdout.trim().split('\n').at(-1) || run.stderr.trim());
+    let result = null;
+    try { result = JSON.parse(await readFile(resultFile, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
+    return { code: run.code, result, folder: status.path, evidence: evidenceFile, stdout: run.stdout, stderr: run.stderr };
+  } catch (error) {
+    // Whatever was reached, for the failure's evidence; check.py never sees a partial run.
+    notes.failure = error.stack;
+    notes.folder = clock?.describe();
+    try { await writeFile(path.join(out, 'evidence.partial.json'), JSON.stringify({ ...evidence(), actions: origin === null ? actions : evidence().actions }, null, 1) + '\n'); } catch {}
+    throw error;
+  }
+}

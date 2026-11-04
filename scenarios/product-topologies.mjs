@@ -1,4 +1,6 @@
 // Controlled models, not reverse-engineered assertions about current product internals.
+// frequencies has one entry per recvonly slot on one peer: an array of tone frequencies, or
+// null for a slot that is connected but never gets a track (no RTP, like a silent SFU slot).
 export async function connectReceiveSlots(local, remote, frequencies, { prejoin = false } = {}) {
   const offer = await local.evaluate(async ({ count, prejoin }) => {
     const peer = new RTCPeerConnection();
@@ -32,7 +34,7 @@ export async function connectReceiveSlots(local, remote, frequencies, { prejoin 
     await peer.setRemoteDescription(offer);
     await Promise.all(frequencies.map((values, index) => {
       const transceiver = peer.getTransceivers()[index]; transceiver.direction = 'sendonly';
-      return prejoin ? undefined : transceiver.sender.replaceTrack(tone(values));
+      return prejoin || values === null ? undefined : transceiver.sender.replaceTrack(tone(values));
     }));
     await audio.resume(); await peer.setLocalDescription(await peer.createAnswer());
     if (peer.iceGatheringState !== 'complete') await new Promise(resolve => peer.addEventListener('icegatheringstatechange', () => {
@@ -64,6 +66,15 @@ export async function switchReceiveSlot(remote, slot, frequencies) {
   await remote.evaluate(async ({ slot, frequencies }) => {
     await topologyRemote.peer.getTransceivers()[slot].sender.replaceTrack(topologyRemote.tone(frequencies));
   }, { slot, frequencies });
+}
+
+// A remote mute as real SFUs send it: the sender keeps its slot and stops RTP entirely
+// (replaceTrack(null)); the receiver, its track and the page's source count stay.
+// switchReceiveSlot on the same slot unmutes it with a fresh tone track.
+export async function muteSlot(remote, slot) {
+  await remote.evaluate(async slot => {
+    await topologyRemote.peer.getTransceivers()[slot].sender.replaceTrack(null);
+  }, slot);
 }
 
 export async function installZoomLikeAudio(page) {

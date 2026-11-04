@@ -17,6 +17,10 @@ jobs:
       - run: python3 -m unittest discover -s tests -p "test_*.py"
       - run: python3 conformance/check-native-fixture.py
       - run: python3 conformance/check-session-events.py
+      - name: Shared scenario modules parse; live-folder driver unit tests
+        run: |
+          for file in scenarios/*.mjs tests/*.mjs; do node --check "$file"; done
+          node --test tests/live-folder-driver.test.mjs
       - run: npm ci
       - run: npx playwright install --with-deps chromium
       - name: Isolated output device for generated tab tone
