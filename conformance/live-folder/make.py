@@ -135,8 +135,9 @@ def base():
     return session, tracks, evidence
 
 
-def resume_request(at, request_id, capture_id=CAPTURE_ID):
-    return dict(atMs=at, via='control-pipe', requestId=request_id, captureId=capture_id, timelineOriginMs=ORIGIN)
+def resume_request(at, request_id, capture_id=CAPTURE_ID, connection=1):
+    return dict(atMs=at, via='control-pipe', connection=connection, requestId=request_id, captureId=capture_id,
+                timelineOriginMs=ORIGIN)
 
 
 def _track(plans, identifier):
@@ -336,6 +337,7 @@ def no_resume(session, tracks, evidence):
 
 
 def duplicate_resume(session, tracks, evidence):
+    # A second ask on the same control connection: D52.5 allows one per loss and connection.
     evidence['resumeRequests'].append(resume_request(98410.25, 'resume-2'))
 
 

@@ -121,6 +121,7 @@ def load_evidence(path):
     else:
         for index, request in enumerate(requests):
             if not (isinstance(request, dict) and _number(request.get('atMs')) and request.get('via') == VIA and
+                    type(request.get('connection')) is int and request['connection'] >= 1 and
                     {'requestId', 'captureId', 'timelineOriginMs'} <= set(request)):
                 problems.append(f'resumeRequests[{index}]')
     if problems:
@@ -556,10 +557,12 @@ class Run:
         refused = [r for r in refusals if isinstance(r, dict) and
                    (r.get('code') == 'startRejected' or r.get('detail') == 'resumeRefused')]
         rule('refusals', not refused, refused)
-        # D52.5 ask once, from the driver's own copy of the control pipe (scenario.json resumeObservation).
+        # D52.5 ask once per loss and control connection (a reconnect's new hello asks once more), from
+        # the driver's own copy of the control pipe (scenario.json resumeObservation). One loss here.
         every, mine = self.resume_requests()
-        observed = [[r['atMs'], r['requestId'], r['captureId'], r['timelineOriginMs']] for r in every]
-        rule('resumeOnce', len(every) == 1 and len(mine) == 1,
+        observed = [[r['atMs'], r['connection'], r['requestId'], r['captureId'], r['timelineOriginMs']] for r in every]
+        connections = [r['connection'] for r in every]
+        rule('resumeOnce', bool(every) and len(mine) == len(every) and len(set(connections)) == len(connections),
              dict(requests=observed, recording=[self.e['captureId'], self.e['timelineOriginMs']]))
         seam = self.resume_seam()
         rule('resumeAt', seam is not None and bool(mine) and all(seam[0] <= r['atMs'] <= seam[1] for r in mine),

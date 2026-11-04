@@ -175,10 +175,25 @@ class LiveFolderOracle(unittest.TestCase):
                        lambda e: e.pop('resumeRequests'), lambda e: e.pop('captureId'),
                        lambda e: e.update(timelineOriginMs=1793880000000.5),
                        lambda e: e['resumeRequests'][0].update(via='app-log'),
-                       lambda e: e['resumeRequests'][0].pop('captureId')):
+                       lambda e: e['resumeRequests'][0].pop('captureId'),
+                       lambda e: e['resumeRequests'][0].pop('connection'),
+                       lambda e: e['resumeRequests'][0].update(connection=0),
+                       lambda e: e['resumeRequests'][0].update(connection=True),
+                       lambda e: e['resumeRequests'][0].update(connection=1.0)):
             process, result = self.evidence_case(change)
             self.assertEqual(process.returncode, 2)
             self.assertIn('unusable input: evidence', process.stderr)
+
+    def test_resume_is_asked_once_per_control_connection(self):
+        # D52.5: a new control connection (a new hello) discards the in-flight resume and asks once
+        # more; a second ask on the same connection is the duplicate O3.resumeOnce exists to catch.
+        def second(connection):
+            return lambda e: e['resumeRequests'].append(dict(e['resumeRequests'][0], atMs=98410.25,
+                                                             requestId='resume-2', connection=connection))
+        for connection, rules in ((2, []), (1, ['O3.resumeOnce'])):
+            with self.subTest(connection=connection):
+                process, result = self.evidence_case(second(connection))
+                self.assertEqual(failed(result)[1], rules, process.stdout)
 
     def test_rotated_wavs_are_read_through_spans(self):
         # GNOME's RotatingWAV keeps one logical track in several WAVs, listed in `spans`.

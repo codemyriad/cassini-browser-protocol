@@ -60,7 +60,7 @@
       "nativeTones": "{microphone: Hz}: the tone the app's test microphone plays",
       "captureId": "the recording's captureId as the extension's service worker holds it (chrome.storage.session cassiniSessions[] entry of the meeting tab, read at record): the identity a resume must name",
       "timelineOriginMs": "that entry's startedAt, an integer: the origin of every time above and the other half of the recording's identity",
-      "resumeRequests": "every resume request the app sent during the run, in pipe order, as resumeObservation below defines it: [{atMs, via, requestId, captureId, timelineOriginMs}]; [] when there was none"
+      "resumeRequests": "every resume request the app sent during the run, in pipe order, as resumeObservation below defines it: [{atMs, via, connection, requestId, captureId, timelineOriginMs}]; [] when there was none"
     },
     "resumeObservation": {
       "via": "control-pipe",
@@ -70,6 +70,7 @@
       "fields": {
         "atMs": "Date.now() when the relay has read the whole frame, before forwarding it, minus timelineOriginMs",
         "via": "\"control-pipe\", the only observation accepted",
+        "connection": "an integer >= 1: the control host that wrote the frame, numbered in launch order from 1 for the first control host the browser started in the run. Each launch is one control connection (its own hello): SPEC-CONTROL D52.5 allows one ask per loss and control connection",
         "requestId": "the frame's requestId, as written",
         "captureId": "the frame's resumeCapture.captureId, as written (any JSON value)",
         "timelineOriginMs": "the frame's resumeCapture.timelineOriginMs, as written (any JSON value)"
