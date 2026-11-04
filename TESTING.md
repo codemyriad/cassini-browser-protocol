@@ -162,9 +162,14 @@ adapter (`record`, `selectMe`, `snapshot`, `meetingRow`, `stop`, `audioHostPids`
 `evidence.json` and runs `check.py` before the app quits. It needs no Playwright of its
 own: the adapter passes the pages and the extension's service worker.
 
-- Topology: `connectReceiveSlots(meeting, remote, [[A], null, null])`, three recvonly
-  slots on one peer. A `null` slot is connected and never gets a track; `muteSlot`
-  mutes a slot with `replaceTrack(null)`, so no RTP flows (the real SFU shape).
+- Topology: `connectReceiveSlots(meeting, remote, [[A], null, null], {play: true})`, three
+  recvonly slots on one peer. A `null` slot is connected and never gets a track; `muteSlot`
+  mutes a slot with `replaceTrack(null)`, so no RTP flows (the real SFU shape). `play`
+  makes the page play each slot through an `<audio>` element, as meeting pages do:
+  nothing pulls an unplayed receiver, so its jitter buffer fills until the capture starts
+  and the recording then lags the sender by 1-2 s (measured on roy: about 50 ms when
+  played). That lag carried A's tone up to 1.4 s past the mute and failed O2.silent in
+  two of six runs; the driver records A's jitter-buffer delay in `evidence.json` notes.
 - Clock: `scenarios/folder-clock.mjs` reads `session.json` (tolerating a missing or
   half-written file) for S, the latest track end, and F(source), one source's. Every
   step waits on the folder or the app with a bound from `scenario.json` and fails with

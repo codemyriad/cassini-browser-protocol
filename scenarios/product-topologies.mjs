@@ -1,7 +1,10 @@
 // Controlled models, not reverse-engineered assertions about current product internals.
 // frequencies has one entry per recvonly slot on one peer: an array of tone frequencies, or
 // null for a slot that is connected but never gets a track (no RTP, like a silent SFU slot).
-export async function connectReceiveSlots(local, remote, frequencies, { prejoin = false } = {}) {
+// play: once connected, the page plays every receive slot through its own <audio> element,
+// as meeting pages do. Nothing pulls an unplayed receiver: its jitter buffer fills until a
+// capture starts, which then runs a second or more behind the sender.
+export async function connectReceiveSlots(local, remote, frequencies, { prejoin = false, play = false } = {}) {
   const offer = await local.evaluate(async ({ count, prejoin }) => {
     const peer = new RTCPeerConnection();
     for (let i = 0; i < count; i++) peer.addTransceiver('audio', { direction: 'recvonly' });
@@ -60,6 +63,17 @@ export async function connectReceiveSlots(local, remote, frequencies, { prejoin 
     }));
     throw error;
   }
+  if (play) await local.evaluate(async () => {
+    window.topologyPlayers = [];
+    for (const transceiver of topologyPeer.getTransceivers()) {
+      if (transceiver.currentDirection !== 'recvonly') continue;
+      const element = new Audio();
+      element.srcObject = new MediaStream([transceiver.receiver.track]);
+      (document.body || document.documentElement).append(element);
+      await element.play();
+      topologyPlayers.push(element);
+    }
+  });
 }
 
 export async function switchReceiveSlot(remote, slot, frequencies) {

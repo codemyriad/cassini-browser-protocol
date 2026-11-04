@@ -82,8 +82,11 @@ export async function runLiveFolder({ meeting, remote, app, worker, out, log = c
   try {
     notes.extensionVersion = await worker.evaluate(() => chrome.runtime.getManifest().version);
     // 0. Setup: three recvonly slots on one peer. A sends from the start, B is pre-negotiated
-    // and sends later, C stays connected and never gets a track.
-    await connectReceiveSlots(meeting, remote, [[C.TONE_A_HZ], null, null]);
+    // and sends later, C stays connected and never gets a track. The page plays the call, as
+    // a meeting page does, so A's receiver plays out about 50 ms behind the sender; an
+    // unplayed receiver buffers until the capture pulls it and then lags by a second or
+    // more, which would carry A's tone past the mute's edge.
+    await connectReceiveSlots(meeting, remote, [[C.TONE_A_HZ], null, null], { play: true });
     await poll(async () => { const value = await row(); return value?.sourceCount === 3 && value.heard === true; },
       'setup: the app lists the call with sourceCount 3 and heard', bounds.setup, { pollMs });
     before = await app.folders();
