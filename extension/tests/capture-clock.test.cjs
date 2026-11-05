@@ -333,11 +333,14 @@ async function device(run, { stamps = true, outputLatency = 0, retries = [] } = 
         return Object.assign(recorder, { requested, node: nodes.at(-1) });
       },
       // Render one 8192-frame batch on every armed worklet; `queue(node)` keeps it from the page.
-      async render({ queue = () => false, drift = 0 } = {}) {
+      // `stamp(fresh)` replaces the device's stamp for this batch before any chunk is delivered,
+      // so the readings its chunks trigger see it (a stale or frozen stamp).
+      async render({ queue = () => false, drift = 0, stamp } = {}) {
         now += 8192 / 48;
         dev.ct += 8192 / 48000;
         dev.level += drift;
         restamp();
+        if (stamp) dev.stamp = stamp(dev.stamp);
         for (const node of nodes) {
           if (!node.armed || node.stopped) continue;
           const chunk = { frame: node.next, truth: dev.level + node.next / 48 + dev.outputLatency * 1000 };
@@ -400,9 +403,11 @@ test('D61.1: a steady device places every chunk exactly as before, stamps fresh 
     const a = await rig.start('A');
     const frozen = { ...rig.dev.stamp };
     rig.dev.noise = () => 0;
-    for (let i = 0; i < 20; i++) { await rig.render(); rig.dev.stamp = frozen; }
+    // Every batch's readings see the calibration stamp, while the device's own stamp has moved on.
+    for (let i = 0; i < 20; i++) await rig.render({ stamp: () => ({ ...frozen }) });
     await a.stop();
     exact(placement(rig, a, 'A'), 'constant stamp');
+    assert.deepEqual(rig.jumps('A'), []);
     assert.equal(rig.audio('A').length, 20);
   });
 });
@@ -500,13 +505,16 @@ test('D61.1: a transient that reverts, a fall then an equal rise, and a latency 
   await device(async rig => {
     const a = await rig.start('A');
     for (let i = 0; i < 4; i++) await rig.render();
-    for (let i = 0; i < 4; i++) {
-      const stamp = { ...rig.dev.stamp };
-      await rig.render();
-      rig.dev.stamp = { contextTime: stamp.contextTime, performanceTime: stamp.performanceTime + 2000 };
+    // Twelve batches whose readings all see the last fresh stamp's contextTime with a
+    // performanceTime 2000 ms high: as fresh readings they would confirm a 2 s rise (two
+    // readings, >= 100 ms apart, agreeing), so only the freshness guard keeps them out.
+    const last = { ...rig.dev.stamp };
+    for (let i = 0; i < 12; i++) {
+      await rig.render({ stamp: () => ({ contextTime: last.contextTime, performanceTime: last.performanceTime + 2000 }) });
     }
     await a.stop();
-    assert.deepEqual(rig.jumps('A'), []);
+    assert.deepEqual(rig.jumps('A'), [], 'repeated stale readings never anchor');
+    exact(placement(rig, a, 'A'), 'stale stamps place nothing differently');
   });
 });
 
