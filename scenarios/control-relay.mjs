@@ -10,6 +10,15 @@
 // copying (the browser sees what the host wrote) but reads no further frames, and the
 // driver fails the run. The browser-to-host direction never passes through here.
 //
+// When the browser closes its end of the pipe, the relay learns it from its next forward,
+// which fails (EPIPE): it logs `outputError` with the frames that forward did not deliver
+// (`undelivered`, never counted as observed) and closes the FIFO, so the host's following
+// write fails as it would without the relay. The one difference from production: the host's
+// first write after the close still succeeds (into the FIFO) instead of failing. Node has no
+// way to poll a pipe's write end for the hangup (libuv will not read a write-only pipe), and
+// the browser closes the control port only when the host's session is over, so this is
+// documented rather than worked around.
+//
 //   node control-relay.mjs <fifo> <log.jsonl>
 import { closeSync, createReadStream, openSync, writeSync } from 'node:fs';
 import os from 'node:os';
@@ -43,9 +52,9 @@ export class FrameReader {
       let message;
       try { message = JSON.parse(decoder.decode(body)); }
       catch (error) { return this.fail(`frame ${this.count} (${length} bytes): ${error.message}`, frames); }
-      frames.push({ index: this.count++, atWall, bytes: length, message });
       this.buffer = this.buffer.subarray(4 + length);
       this.offset += 4 + length;
+      frames.push({ index: this.count++, atWall, bytes: length, end: this.offset, message });
     }
     return frames;
   }
@@ -79,12 +88,13 @@ export function frameRecord({ index, atWall, bytes, message }) {
   return record;
 }
 
-// Blocking write of the whole chunk (a pipe may take part of it, or be non-blocking).
+// Blocking write of the whole chunk (a pipe may take part of it, or be non-blocking). On a
+// failure, error.written is how much of the chunk went out first.
 function writeAll(fd, chunk) {
   const pause = new Int32Array(new SharedArrayBuffer(4));
   for (let at = 0; at < chunk.length;) {
     try { at += writeSync(fd, chunk, at, chunk.length - at); }
-    catch (error) { if (error.code !== 'EAGAIN') throw error; Atomics.wait(pause, 0, 0, 1); }
+    catch (error) { if (error.code !== 'EAGAIN') { error.written = at; throw error; } Atomics.wait(pause, 0, 0, 1); }
   }
 }
 
@@ -97,20 +107,29 @@ export function relay(input, logPath, { output = 1 } = {}) {
   const report = () => { if (reader.failure && !reported) { reported = true; note({ unparsable: reader.failure.reason, offset: reader.failure.offset, atWall: Date.now() }); } };
   return new Promise(resolve => {
     const stream = createReadStream(input, { highWaterMark: 65536 });
-    const finish = code => { try { closeSync(log); } catch {} resolve(code); };
+    let finished = false;
+    const finish = code => { if (finished) return; finished = true; try { closeSync(log); } catch {} resolve(code); };
+    // The browser end is gone: stop reading (closing the FIFO), so the host meets a closed pipe as it would.
+    const closed = (outputError, undelivered) => {
+      if (finished) return;
+      note({ outputError, atWall: Date.now(), bytes: total, undelivered });
+      stream.destroy(); finish(1);
+    };
     stream.on('data', chunk => {
+      if (finished) return;
       const atWall = Date.now();
-      for (const frame of reader.push(chunk, atWall)) note(frameRecord(frame));
+      const frames = reader.push(chunk, atWall);
+      for (const frame of frames) note(frameRecord(frame));
       report();
       try { writeAll(output, chunk); total += chunk.length; }
       catch (error) {
-        // The browser end is gone: stop reading, so the host meets a closed pipe as it would.
-        note({ outputError: error.code || error.message, atWall: Date.now(), bytes: total });
-        stream.destroy(); finish(1);
+        const sent = total + (error.written ?? 0);
+        closed(error.code || error.message, frames.filter(frame => frame.end > sent).map(frame => frame.index));
       }
     });
-    stream.on('error', error => { note({ inputError: error.code || error.message, atWall: Date.now(), bytes: total }); finish(1); });
+    stream.on('error', error => { if (!finished) { note({ inputError: error.code || error.message, atWall: Date.now(), bytes: total }); finish(1); } });
     stream.on('end', () => {
+      if (finished) return;
       reader.end(); report();
       note({ end: true, atWall: Date.now(), bytes: total, frames: reader.count });
       finish(reader.failure ? 3 : 0);

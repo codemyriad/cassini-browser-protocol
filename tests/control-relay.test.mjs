@@ -6,12 +6,14 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
-import { open, mkdtemp, readFile, rm } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { closeSync, constants, openSync, readSync } from 'node:fs';
+import { mkdir, open, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { FrameReader, frameRecord, isResumeRequest, MAX_FRAME } from '../scenarios/control-relay.mjs';
-import { controlConnections, parentPid, resumeRequests, RELAY, stopRelays, verifyControlPipe, writeNativeHost } from '../scenarios/native-launcher.mjs';
+import { controlConnections, parentPid, resumeRequests, RELAY, RELAY_START_MS, stopRelays, verifyControlPipe, writeNativeHost } from '../scenarios/native-launcher.mjs';
 import { poll } from '../scenarios/folder-clock.mjs';
 
 const scratch = await mkdtemp(path.join(os.tmpdir(), 'control-relay-'));
@@ -142,18 +144,20 @@ test('the relay still forwards an unparsable frame unchanged, logs it and exits 
   assert.match(cut.entries.find(e => 'unparsable' in e).unparsable, /input ended inside frame 0/);
 });
 
-// A stand-in control host: prints [pid, ppid, argv] on stderr's stead (a file), writes the
-// frames it is given (base64 in argv) to stdout, then waits for the browser to close stdin.
+// A stand-in control host: prints [pid, ppid, argv, umask] on stderr's stead (a file),
+// writes the frames it is given (base64 in argv) to stdout, then keeps what the browser
+// sends on stdin and, once the browser closes it, writes those bytes to <file>.stdin.
 const HOST = `const fs=require('fs');const [out,...frames]=process.argv.slice(1, process.argv.indexOf('--browser'));
-fs.writeFileSync(out,JSON.stringify({pid:process.pid,ppid:process.ppid,argv:process.argv.slice(process.argv.indexOf('--browser'))}));
-for(const f of frames)fs.writeSync(1,Buffer.from(f,'base64'));process.stdin.on('data',()=>{}).on('end',()=>process.exit(0));`;
+fs.writeFileSync(out,JSON.stringify({pid:process.pid,ppid:process.ppid,argv:process.argv.slice(process.argv.indexOf('--browser')),umask:process.umask()}));
+for(const f of frames)fs.writeSync(1,Buffer.from(f,'base64'));const got=[];
+process.stdin.on('data',c=>got.push(c)).on('end',()=>{fs.writeFileSync(out+'.stdin',Buffer.concat(got));process.exit(0)});`;
 
-async function observedHost(name) {
+async function observedHost(name, { node, plain = false } = {}) {
   const directory = path.join(scratch, name);
   const host = await writeNativeHost({ manifestDirectory: path.join(directory, 'NativeMessagingHosts'), launcherDirectory: path.join(directory, "it's here"),
-    pidDirectory: path.join(directory, 'pids'), observe: path.join(directory, 'control pipe'), name: 'io.example.control',
-    command: [process.execPath, '-e', HOST], allowedOrigins: ['chrome-extension://abc/'] });
-  hosts.push(host);
+    pidDirectory: path.join(directory, 'pids'), observe: plain ? null : path.join(directory, 'control pipe'), name: 'io.example.control',
+    command: [process.execPath, '-e', HOST], allowedOrigins: ['chrome-extension://abc/'], ...(node ? { node } : {}) });
+  if (!plain) hosts.push(host);
   return host;
 }
 // Launch as the browser does: the launcher is the test process's direct child.
@@ -180,8 +184,11 @@ test('the observing launcher execs the host as the browser\'s child, numbers con
     assert.ok(run.out.bytes().equals(run.expected), 'host-to-browser bytes arrive unchanged');
     assert.equal(await parentPid(run.child.pid), process.pid);
   }
-  // The browser-to-host direction is the host's own stdin: a byte written there reaches it.
-  first.child.stdin.write('x');
+  // The browser-to-host direction is the host's own stdin: what the browser writes there,
+  // a frame larger than a pipe buffer included, reaches the host byte for byte.
+  const toHost = Buffer.concat([frame({ type: 'command', action: 'stop', requestId: 'b-1' }),
+    frame({ type: 'command', filler: randomBytes(200000).toString('base64') }), Buffer.from('x')]);
+  first.child.stdin.write(toHost);
   let connections = await poll(async () => {
     const value = await verifyControlPipe(host, process.pid, 'test');
     return value.length === 2 && value.every(c => c.resumes.length) && value[1].resumes.length === 2 ? value : null;
@@ -202,6 +209,9 @@ test('the observing launcher execs the host as the browser\'s child, numbers con
     .map(r => [r.atMs, r.connection, r.requestId]), [[200, 2, 'c'], [300, 1, 'a'], [300, 1, 'b'], [300, 2, 'd']]);
   // The browser closes the port: each host exits, its relay sees the end of input and exits.
   for (const run of [first, second]) { const exit = exited(run.child); run.child.stdin.end(); assert.deepEqual(await exit, { code: 0, signal: null }); await run.out.done; }
+  const sha = bytes => createHash('sha256').update(bytes).digest('hex');
+  assert.equal(sha(await readFile(path.join(scratch, 'first.json.stdin'))), sha(toHost), 'browser-to-host bytes arrive unchanged');
+  assert.equal((await readFile(path.join(scratch, 'second.json.stdin'))).length, 0);
   connections = await poll(async () => { const value = await controlConnections(host); return value.every(c => c.ended) ? value : null; },
     'both relays end with their input', BOUND, { pollMs: 5 });
   assert.deepEqual(connections.map(c => [c.live, c.parent, c.frames.length]), [[false, null, 2], [false, null, 3]]);
@@ -246,4 +256,119 @@ test('a relay whose input never ends is stopped by stopRelays', async () => {
     catch { return process.platform === 'linux'; }
   }, 'the relay exits', BOUND, { pollMs: 5 });
   await holder.close();
+});
+
+test('the host runs with the browser\'s umask, not the launcher\'s private one', async () => {
+  for (const plain of [true, false]) {
+    const host = await observedHost(plain ? 'umask-plain' : 'umask-observed', { plain });
+    const report = path.join(scratch, `umask-${plain}.json`);
+    // The browser's umask (027 here) is what the production host would inherit.
+    const run = await launch(host, report, [frame({ type: 'hello' })],
+      (launcher, args) => spawn('/bin/sh', ['-c', 'umask 027; exec "$0" "$@"', launcher, ...args], { stdio: ['pipe', 'pipe', 'inherit'] }));
+    assert.equal(run.report.umask, 0o027, `${plain ? 'plain' : 'observing'} launcher`);
+    assert.equal(run.report.pid, run.child.pid, 'the shell exec\'d the launcher, which exec\'d the host');
+    const exit = exited(run.child); run.child.stdin.end(); await exit;
+  }
+});
+
+test('a relay that never starts, or stops before its input ends, fails the run', async () => {
+  // The relay's interpreter fails at once: the launcher's exec then waits on the FIFO forever.
+  const host = await observedHost('relay-never-starts', { node: '/bin/false' });
+  const child = track(spawn(host.launcher, ['--browser'], { stdio: ['pipe', 'pipe', 'inherit'] }));
+  const [pending] = await poll(async () => { const value = await controlConnections(host); return value[0]?.pid ? value : null; },
+    'the launcher records the connection', BOUND, { pollMs: 5 });
+  assert.equal(pending.pid, child.pid);
+  assert.equal(pending.relay, null);
+  assert.equal(pending.live, false, 'the host never ran: the launcher waits in open()');
+  // Within the bound it may still be starting; past it the run fails and says why.
+  await verifyControlPipe(host, process.pid, 'setup', { now: pending.launchedWall + RELAY_START_MS - 1 });
+  await assert.rejects(verifyControlPipe(host, process.pid, 'record', { now: pending.launchedWall + RELAY_START_MS + 1 }),
+    /record: control connection 1's relay did not start within 30000 ms of the launch/);
+  child.kill('SIGKILL'); await exited(child);
+
+  // A relay killed while its host still writes to it.
+  const crash = await observedHost('relay-crash');
+  const run = await launch(crash, path.join(scratch, 'crash.json'), [frame({ type: 'hello' })]);
+  const [connection] = await poll(async () => { const value = await controlConnections(crash); return value[0]?.relay ? value : null; },
+    'the relay starts', BOUND, { pollMs: 5 });
+  await verifyControlPipe(crash, process.pid, 'record');
+  process.kill(connection.relay, 'SIGKILL');
+  await poll(async () => { try { process.kill(connection.relay, 0); } catch { return true; }
+    return (await readFile(`/proc/${connection.relay}/stat`, 'utf8').catch(() => ') Z')).split(') ')[1].startsWith('Z'); },
+  'the relay is gone', BOUND, { pollMs: 5 });
+  await assert.rejects(verifyControlPipe(crash, process.pid, 'kill'), new RegExp(`kill: control connection 1's relay ${connection.relay} stopped before the end of its input`));
+  const exit = exited(run.child); run.child.stdin.end(); await exit;
+});
+
+test('an input error fails the run; frames a failed forward never delivered are not resume requests', async () => {
+  const observe = path.join(scratch, 'synthetic');
+  const host = { observe, command: ['/nonexistent/host'] };
+  await mkdir(path.join(observe, '1'), { recursive: true });
+  await writeFile(path.join(observe, '1', 'host'), `999999 ${process.pid}\n`);
+  const r = (frame, requestId) => ({ frame, atWall: 1000 + frame, bytes: 9, type: 'command', action: 'start', requestId, resumeCapture: { captureId: 'c', timelineOriginMs: 1 } });
+  const write = entries => writeFile(path.join(observe, '1', 'frames.jsonl'), entries.map(e => JSON.stringify(e) + '\n').join(''));
+  await write([{ relay: 999998, startedWall: 1 }, r(0, 'a'), r(1, 'b'), { outputError: 'EPIPE', atWall: 1002, bytes: 13, undelivered: [1] }]);
+  const [connection] = await verifyControlPipe(host, process.pid, 'stop');
+  assert.deepEqual(connection.resumes.map(f => f.requestId), ['a'], 'the undelivered frame is not observed');
+  assert.equal(connection.frames.length, 2);
+  await write([{ relay: 999998, startedWall: 1 }, { inputError: 'EIO', atWall: 2, bytes: 0 }]);
+  await assert.rejects(verifyControlPipe(host, process.pid, 'stop'), /stop: control connection 1's relay could not read the host's output: .*EIO/);
+});
+
+// The browser's end of a host's stdout as Chrome makes it on POSIX: a real pipe (Node's
+// spawn would give a socketpair). A FIFO opened at both ends is one.
+async function browserPipe(name) {
+  const fifo = path.join(scratch, `${name}.stdout`);
+  execFileSync('mkfifo', [fifo]);
+  const reader = openSync(fifo, constants.O_RDONLY | constants.O_NONBLOCK), writer = openSync(fifo, constants.O_WRONLY);
+  const received = [];
+  return {
+    writer,
+    received: () => { for (;;) { const b = Buffer.alloc(65536); let n; try { n = readSync(reader, b); } catch (error) { if (error.code === 'EAGAIN') break; throw error; } if (!n) break; received.push(b.subarray(0, n)); } return Buffer.concat(received); },
+    close: () => closeSync(reader),
+  };
+}
+
+// A host that writes one resume request per byte the browser sends and reports each write's result.
+const TICKER = `const fs=require('fs');const out=process.argv[1];let n=0;
+process.stdin.on('data',c=>{for(const _ of c){const b=Buffer.from(JSON.stringify({type:'command',action:'start',requestId:'t'+n,resumeCapture:{captureId:'c',timelineOriginMs:1}}));
+const h=Buffer.alloc(4);h.writeUInt32LE(b.length);let r='ok';try{fs.writeSync(1,Buffer.concat([h,b]))}catch(e){r=e.code}fs.appendFileSync(out,r+'\\n');n++}}).on('end',()=>process.exit(0));`;
+
+test('when the browser closes its end, the host meets a closed pipe one write later and the lost frame is not observed', { skip: !LE }, async () => {
+  const results = {};
+  for (const plain of [true, false]) {
+    const directory = path.join(scratch, plain ? 'close-plain' : 'close-observed');
+    const host = await writeNativeHost({ manifestDirectory: directory, pidDirectory: path.join(directory, 'pids'),
+      observe: plain ? null : path.join(directory, 'control pipe'), name: 'io.example.control',
+      command: [process.execPath, '-e', TICKER], allowedOrigins: [] });
+    if (!plain) hosts.push(host);
+    const report = path.join(directory, 'writes.txt');
+    const pipe = await browserPipe(plain ? 'close-plain' : 'close-observed');
+    const child = track(spawn(host.launcher, [report], { stdio: ['pipe', pipe.writer, 'inherit'] }));
+    closeSync(pipe.writer);  // the launched host (and its relay) hold the only write ends
+    const writes = async n => poll(async () => { const t = await readFile(report, 'utf8').catch(() => ''); const l = t.split('\n').filter(Boolean); return l.length >= n ? l : null; },
+      `the host reports ${n} write(s)`, BOUND, { pollMs: 5 });
+    child.stdin.write('a');
+    await writes(1);
+    await poll(() => pipe.received().length > 0, 'the browser reads the first frame', BOUND, { pollMs: 5 });
+    pipe.close();  // the browser closes its end of the host's stdout
+    child.stdin.write('b');
+    let lines = await writes(2);
+    if (!plain) {
+      // The relay forwards that frame, fails, and closes the FIFO; only then does the host's
+      // next write fail.
+      const connections = await poll(async () => { const value = await controlConnections(host); return value[0]?.outputError ? value : null; },
+        'the relay logs the failed forward', BOUND, { pollMs: 5 });
+      child.stdin.write('c');
+      lines = await writes(3);
+      assert.deepEqual([connections[0].outputError.outputError, connections[0].outputError.undelivered], ['EPIPE', [1]]);
+      assert.deepEqual(connections[0].frames.map(f => f.requestId), ['t0', 't1'], 'both frames were read');
+      assert.deepEqual(resumeRequests(connections, 0, Date.now()).map(r => r.requestId), ['t0'], 'only the delivered one is a resume request');
+      await verifyControlPipe(host, process.pid, 'stop');
+    }
+    results[plain ? 'plain' : 'observed'] = lines;
+    const exit = exited(child); child.stdin.end(); await exit;
+  }
+  assert.deepEqual(results.plain, ['ok', 'EPIPE'], 'without the relay the first write after the close fails');
+  assert.deepEqual(results.observed, ['ok', 'ok', 'EPIPE'], 'through the relay the second one does (documented)');
 });

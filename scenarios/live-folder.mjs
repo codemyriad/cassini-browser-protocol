@@ -67,7 +67,13 @@ export async function runLiveFolder({ meeting, remote, app, worker, out, log = c
   let requests = null, browserPid = null;
   const session = at => at - origin;
   // Every control host the browser's child, every frame readable (resumeObservation.process, unusable).
-  const pipe = async label => verifyControlPipe(app.controlHost, browserPid, label);
+  // notes.controlParents keeps, per check, each connection's launch parent and its parent then
+  // (null once exited), so the parent-pid proof can be read back from the evidence.
+  const pipe = async label => {
+    const connections = await verifyControlPipe(app.controlHost, browserPid, label);
+    (notes.controlParents ??= {})[label] = connections.map(c => ({ connection: c.connection, pid: c.pid, launchParent: c.launchParent, parent: c.parent }));
+    return connections;
+  };
   const step = (name, requested, observed) => {
     actions[name] = { requestedWall: requested, observedWall: observed };
     log(`live-folder: ${name} requested ${origin === null ? '-' : session(requested)} observed ${origin === null ? '-' : session(observed)} (session ms)`);
@@ -94,6 +100,7 @@ export async function runLiveFolder({ meeting, remote, app, worker, out, log = c
     assert.ok(app.controlHost?.observe, 'setup: the adapter registers its control host through the observing launcher (observe)');
     browserPid = await app.browserPid();
     assert.ok(Number.isInteger(browserPid) && browserPid > 1, `setup: the browser pid, got ${browserPid}`);
+    notes.browserPid = browserPid;  // what every control host's parent is checked against
     // The meeting tab, as the extension sees it: its cassiniSessions[] entry names the recording.
     const tabs = await worker.evaluate(async url => (await chrome.tabs.query({})).filter(t => t.url === url).map(t => t.id), meeting.url());
     assert.equal(tabs.length, 1, `setup: exactly one tab shows the meeting ${meeting.url()}, found ${JSON.stringify(tabs)}`);
@@ -251,7 +258,8 @@ export async function runLiveFolder({ meeting, remote, app, worker, out, log = c
     const connections = await pipe('stop');
     requests = resumeRequests(connections, origin, actions.stop.observedWall);
     notes.controlConnections = connections.map(c => ({ connection: c.connection, pid: c.pid, launchParent: c.launchParent,
-      frames: c.frames.length, resumes: c.resumes.length }));
+      live: c.live, parent: c.parent, frames: c.frames.length, resumes: c.resumes.length,
+      ...(c.outputError ? { outputError: c.outputError } : {}) }));
     log(`live-folder: ${requests.length} resume request(s) on the control pipe: ${JSON.stringify(requests)}`);
     if (app.saved) await app.saved(status.path);
     const after = await app.folders();

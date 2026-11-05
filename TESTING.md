@@ -191,12 +191,21 @@ own: the adapter passes the pages and the extension's service worker.
   `<observe>/<n>` (mkdir, so connections count from 1 in launch order), records `$$ $PPID`
   there, makes a FIFO in it, starts `scenarios/control-relay.mjs` detached (stdin
   `/dev/null`, stdout the browser's pipe) and execs the host with only its stdout into the
-  FIFO. The relay copies the FIFO to the browser byte for byte, one blocking write per read,
-  logs each native-messaging frame (`Date.now()` once the frame is whole, before
-  forwarding) and exits at the end of its input; an unreadable frame is logged and still
-  forwarded. At setup, record, kill, restore and stop the driver fails the run if a control
-  host's launch parent or live parent is not `browserPid()`, or a relay logged an
-  unparsable frame; after the stop observation it writes `resumeRequests` in pipe order.
+  FIFO. The launcher keeps its files private with `umask 077` and gives the host the
+  browser's umask back before the exec. The relay copies the FIFO to the browser byte for
+  byte, one blocking write per read, logs each native-messaging frame (`Date.now()` once
+  the frame is whole, before forwarding) and exits at the end of its input; an unreadable
+  frame is logged and still forwarded. When the browser closes its end, the relay learns it
+  from the next forward (EPIPE), logs `outputError` with the frames it did not deliver
+  (`undelivered`, never counted) and closes the FIFO: the host's first write after the
+  close still succeeds into the FIFO, its next one fails as without the relay (Node cannot
+  poll a pipe's write end for the hangup). At setup, record, kill, restore and stop the
+  driver fails the run if a control host's launch parent or live parent is not
+  `browserPid()`, a relay logged an unparsable frame or an input error, a relay has not
+  started within `RELAY_START_MS` of its launch (the host then waits on the FIFO), or a
+  relay stopped before the end of its input; `notes.browserPid` and
+  `notes.controlParents` keep what each check saw. After the stop observation it writes
+  `resumeRequests` in pipe order.
 - The mute is held until A's own frames cover `MUTE_MS`; on every poll A must keep one
   span, stay open and see no `othersSource` event. Me on waits for the microphone span
   that starts at the `me:true` selection's `atMs`.
@@ -207,7 +216,9 @@ own: the adapter passes the pages and the extension's service worker.
 `node --test tests/control-relay.test.mjs` checks the frame reader across chunk
 boundaries, the relay's byte-exact passthrough, unparsable and cut-off frames, and the
 observing launcher (the host stays the spawner's child, connections in launch order, the
-parent check, resume requests in pipe order, stuck relays stopped) with no browser.
+parent check, resume requests in pipe order, stuck relays stopped, the browser-to-host
+bytes untouched, the host's umask, a relay that never starts or dies, the browser closing
+its end on a real pipe) with no browser.
 Protocol CI runs both with `node --check` of every scenario. There is no Playwright run of the
 driver here (no protocol host can resume or select): GNOME's `live-folder` job and the
 Mac self-test run it against the real writers.
