@@ -303,17 +303,33 @@ test('a relay that never starts, or stops before its input ends, fails the run',
   const exit = exited(run.child); run.child.stdin.end(); await exit;
 });
 
-// A frame's evidence time is its monotonic stamp (scenarios/session-clock.mjs); a logged frame
-// without one fails the run instead of dropping out of the resume requests.
-test('a frame without a monotonic stamp fails the run', async () => {
-  const observe = path.join(scratch, 'unstamped');
-  const host = { observe, command: ['/nonexistent/host'] };
-  await mkdir(path.join(observe, '1'), { recursive: true });
-  await writeFile(path.join(observe, '1', 'host'), `999999 ${process.pid}\n`);
-  await writeFile(path.join(observe, '1', 'frames.jsonl'), [{ relay: 999998, startedWall: 1 },
-    { frame: 0, atWall: 2, bytes: 9, type: 'command', action: 'start', requestId: 'a', resumeCapture: { captureId: 'c', timelineOriginMs: 1 } }]
-    .map(entry => JSON.stringify(entry) + '\n').join(''));
-  await assert.rejects(verifyControlPipe(host, process.pid, 'stop', { running: async () => false }), /stop: control connection 1's frame 0 has no monotonic stamp \(atMono\)/);
+// A frame's evidence time is its monotonic stamp (scenarios/session-clock.mjs). A logged frame whose
+// atMono is missing, null or not a number fails the run, naming its connection and frame, whether it
+// is a resume request or an ordinary frame; resumeRequests itself refuses it before filtering or
+// sorting (a missing stamp would drop the request, a null one place it at time zero).
+test('a frame without a finite monotonic stamp fails the run, resume request or not', async () => {
+  const resume = { type: 'command', action: 'start', requestId: 'a', resumeCapture: { captureId: 'c', timelineOriginMs: 1 } };
+  const hello = { type: 'hello', action: null, requestId: null };
+  const stamps = [['missing', {}], ['null', { atMono: null }], ['a string', { atMono: '12' }], ['a boolean', { atMono: true }]];
+  let n = 0;
+  for (const [kind, fields] of [['resume request', resume], ['ordinary frame', hello]]) {
+    for (const [what, stamp] of stamps) {
+      const observe = path.join(scratch, `unstamped-${n++}`), host = { observe, command: ['/nonexistent/host'] };
+      await mkdir(path.join(observe, '1'), { recursive: true });
+      await writeFile(path.join(observe, '1', 'host'), `999999 ${process.pid}\n`);
+      const frames = [{ frame: 0, atWall: 2, atMono: 2, bytes: 9, ...hello }, { frame: 1, atWall: 3, bytes: 9, ...fields, ...stamp }];
+      await writeFile(path.join(observe, '1', 'frames.jsonl'), [{ relay: 999998, startedWall: 1 }, ...frames].map(entry => JSON.stringify(entry) + '\n').join(''));
+      const shown = 'atMono' in stamp ? JSON.stringify(stamp.atMono) : 'missing';
+      await assert.rejects(verifyControlPipe(host, process.pid, 'stop', { running: async () => false }),
+        new RegExp(`^Error: stop: control connection 1's frame 1 has no monotonic stamp \\(atMono ${shown.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\)$`), `${kind}, ${what}`);
+      if (kind === 'resume request') {
+        const [connection] = await controlConnections(host);
+        assert.throws(() => resumeRequests([connection], 0, Number.MAX_SAFE_INTEGER), /control connection 1's frame 1 has no monotonic stamp/, `resumeRequests: ${what}`);
+      }
+    }
+  }
+  // A stamped resume request still counts.
+  assert.deepEqual(resumeRequests([{ connection: 1, resumes: [{ frame: 0, atMono: 1500, ...resume }] }], 1000, 2000).map(r => r.atMs), [500]);
 });
 
 test('an input error fails the run; a resume request a failed forward never delivered is kept, marked undelivered', async () => {
