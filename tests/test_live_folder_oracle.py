@@ -176,6 +176,8 @@ class LiveFolderOracle(unittest.TestCase):
                        lambda e: e.update(timelineOriginMs=1793880000000.5),
                        lambda e: e['resumeRequests'][0].update(via='app-log'),
                        lambda e: e['resumeRequests'][0].pop('captureId'),
+                       # The driver always writes lostAtMs (null when the frame had none).
+                       lambda e: e['resumeRequests'][0].pop('lostAtMs'),
                        lambda e: e['resumeRequests'][0].pop('connection'),
                        lambda e: e['resumeRequests'][0].update(connection=0),
                        lambda e: e['resumeRequests'][0].update(connection=True),
@@ -196,6 +198,53 @@ class LiveFolderOracle(unittest.TestCase):
         for connection, rules in ((2, []), (1, ['O3.resumeOnce'])):
             with self.subTest(connection=connection):
                 process, result = self.evidence_case(second(connection))
+                self.assertEqual(failed(result)[1], rules, process.stdout)
+
+    def test_the_ask_names_the_committed_loss_and_stamps_across_clocks_are_not_compared(self):
+        # R94, live-folder run 42045085356: GNOME asked only after its durable commit, yet the relay
+        # stamped the ask 13.29 ms before system/lost's atMs (96013.86 against 96027.15): the writer
+        # places the loss at its change time, after A's frames, whose output-time stamps lead the
+        # session clock (D61). The ask's lostAtMs, copied from the app's own session.json, names
+        # the committed loss exactly: that proves the order, with no band on the stamps.
+        lost = make.LOST_MS
+        self.assertEqual(json.loads((self.root / 'base/evidence.json').read_text())['resumeRequests'][0]['lostAtMs'], lost)
+
+        def ask(**fields):
+            return lambda e: e['resumeRequests'][0].update(fields)
+        for at in (lost - 13.29, lost - 13.29 - 1000, lost, 99500):
+            with self.subTest(atMs=at):
+                process, result = self.evidence_case(ask(atMs=at, lostAtMs=lost))
+                self.assertEqual((process.returncode, failed(result)[1]), (0, []), process.stdout + process.stderr)
+        measured = result['checks'][3]['measured']['O3.resumeAt']['value']
+        self.assertEqual((measured['lostAtMs'], measured['lostAndRestoredMs']), ([lost], [lost, 99500]))
+        # Any other lostAtMs fails, off by any amount, even with the ask well inside the loss.
+        for value in (lost + 1e-6, lost - 1e-6, lost + 0.01, lost - 0.01, lost + 13.29, lost - 13.29,
+                      95400, 99500, 0, 2 * lost):
+            with self.subTest(lostAtMs=value):
+                process, result = self.evidence_case(ask(atMs=lost - 13.29, lostAtMs=value))
+                self.assertEqual(failed(result)[1], ['O3.resumeAt'], process.stdout)
+                process, result = self.evidence_case(ask(lostAtMs=value))
+                self.assertEqual(failed(result)[1], ['O3.resumeAt'], process.stdout)
+        # Missing (the frame had none: the driver writes null) or not a number: still a request, failed.
+        for value in (None, str(lost), True, [lost], dict(atMs=lost)):
+            with self.subTest(lostAtMs=value):
+                process, result = self.evidence_case(ask(lostAtMs=value))
+                self.assertEqual(failed(result)[1], ['O3.resumeAt'], process.stdout)
+        # The upper bound stays: an ask after browser/restored fails.
+        process, result = self.evidence_case(ask(atMs=99500.01))
+        self.assertEqual(failed(result)[1], ['O3.resumeAt'], process.stdout)
+        # Every request naming this recording must name the loss: a reconnect's ask too.
+        process, result = self.evidence_case(lambda e: e['resumeRequests'].append(
+            dict(e['resumeRequests'][0], atMs=98410.25, requestId='resume-2', connection=2, lostAtMs=None)))
+        self.assertEqual(failed(result)[1], ['O3.resumeAt'], process.stdout)
+        # Mac's none/lost at the transport loss is not the commit: an ask naming it fails there too.
+        folder, evidence = self.copy('mac-loss-form')
+        for value, rules in ((lost, []), (95400, ['O3.resumeAt'])):
+            with self.subTest(form='mac-loss-form', lostAtMs=value):
+                document = json.loads(evidence.read_text())
+                document['resumeRequests'][0]['lostAtMs'] = value
+                evidence.write_text(json.dumps(document))
+                process, result = run_check(folder, evidence, evidence.with_name('mac.result.json'))
                 self.assertEqual(failed(result)[1], rules, process.stdout)
 
     def test_an_undelivered_resume_request_still_counts(self):

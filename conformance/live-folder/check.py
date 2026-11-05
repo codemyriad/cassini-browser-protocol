@@ -124,7 +124,7 @@ def load_evidence(path):
         for index, request in enumerate(requests):
             if not (isinstance(request, dict) and _number(request.get('atMs')) and request.get('via') == VIA and
                     type(request.get('connection')) is int and request['connection'] >= 1 and
-                    {'requestId', 'captureId', 'timelineOriginMs'} <= set(request) and
+                    {'requestId', 'captureId', 'timelineOriginMs', 'lostAtMs'} <= set(request) and
                     type(request.get('delivered', True)) is bool):
                 problems.append(f'resumeRequests[{index}]')
     if problems:
@@ -585,9 +585,15 @@ class Run:
         connections = [r['connection'] for r in every]
         rule('resumeOnce', bool(every) and len(mine) == len(every) and len(set(connections)) == len(connections),
              dict(requests=observed, recording=[self.e['captureId'], self.e['timelineOriginMs']]))
+        # R94: causal order, never stamps across clocks. The host names the committed loss it asks to
+        # resume (resumeCapture.lostAtMs, copied from its own session.json), which it can know only
+        # once that system/lost is written, so an exact match proves the ask followed the commit.
+        # The relay's atMs and the writer's lost atMs are on different clocks (browser frames carry
+        # output-time stamps that lead the session clock, D61): no lower bound, no tolerance band.
         seam = self.resume_seam()
-        rule('resumeAt', seam is not None and bool(mine) and all(seam[0] <= r['atMs'] <= seam[1] for r in mine),
-             dict(atMs=[r['atMs'] for r in mine], lostAndRestoredMs=seam))
+        rule('resumeAt', seam is not None and bool(mine) and all(
+            _number(r['lostAtMs']) and r['lostAtMs'] == seam[0] and r['atMs'] <= seam[1] for r in mine),
+             dict(atMs=[r['atMs'] for r in mine], lostAtMs=[r['lostAtMs'] for r in mine], lostAndRestoredMs=seam))
 
     # O4 remote with no packets ---------------------------------------------------------------
     def o4(self, rule):

@@ -112,7 +112,8 @@ one entry:
 "timelineOriginMs": 1793880000000,
 "resumeRequests": [
   {"atMs": 97210.5, "via": "control-pipe", "connection": 1, "requestId": "resume-1",
-   "captureId": "<resumeCapture.captureId as written>", "timelineOriginMs": 1793880000000}
+   "captureId": "<resumeCapture.captureId as written>", "timelineOriginMs": 1793880000000,
+   "lostAtMs": 95912.5}
 ]
 ```
 
@@ -120,7 +121,16 @@ one entry:
 the session timeline (origin `timelineOriginMs`, mapped once). `connection` numbers the control host that wrote it, in launch order
 from 1: each launch is one control connection with its own hello, and D52.5 allows one ask
 per loss and control connection (a reconnect asks once more). The identity a request must name (`captureId`, `timelineOriginMs`) is
-the one the extension's service worker holds for the recording, read at record. This is
+the one the extension's service worker holds for the recording, read at record. `lostAtMs`
+is the frame's `resumeCapture.lostAtMs` as written, `null` when the frame has none: the
+`atMs` of the committed loss the host asks to resume, copied from its own `session.json`
+(SPEC-CONTROL R94). It is on the folder's clock and is never compared with `atMs`, which is
+the relay's: the writer places system/lost at its own change time, and browser frames carry
+output-time stamps that lead the session clock (D61), so a correct ask can be stamped on the
+pipe before the system/lost it follows (live-folder run 42045085356: 13.3 ms). The exact
+`lostAtMs` is what proves the order: a host knows that `atMs` only once it has written it.
+A request without a finite `lostAtMs` is still recorded (the host asked), and O3.resumeAt
+fails it. This is
 independent of the app under test: they are the bytes its control host wrote, copied by a
 driver process before the extension reads them, so neither the app's own reports nor the
 extension's checks, coalescing or refusal can hide or add one; and the host runs as in
@@ -172,7 +182,7 @@ O3.resumeOnce too: the host asked. Any other `delivered` value makes the evidenc
 | O3.system | exactly one placed system track (a system track with no start is left out); it starts at lost (SPEC S-6) and ends within EDGE_MS of restored |
 | O3.refusals | no `startRejected` refusal and no `resumeRefused` detail |
 | O3.resumeOnce | the evidence shows at least one resume request, every one names this recording (its `captureId` and `timelineOriginMs` equal the evidence's), and no two come from the same control connection (D52.5: once per loss and control connection; the scenario has one loss) |
-| O3.resumeAt | every request naming this recording is at or after the committed loss (the last system/lost before the first browser/restored) and at or before that browser/restored; there is at least one |
+| O3.resumeAt | every request naming this recording names the committed loss (the last system/lost before the first browser/restored): its `lostAtMs` is a number exactly equal to that system/lost's `atMs`; and it is at or before that browser/restored; there is at least one (R94: causal order, no comparison of pipe and folder stamps) |
 | O4.keys | every remote track has a `sourceTrackId`, and there are exactly 2 |
 | O4.outcomeRows | exactly 2 `captureOutcome.sources` rows, one per key, each listing exactly that key's placed track ids, both `captured` (so no `neverAudio`); strict: a row that also lists a track with no start fails |
 | O4.evidence | `maxSourceCount` 3, slot C `connected` with 0 packets received |
@@ -256,7 +266,8 @@ that always passes turns the self-test red. Without jsonschema (macOS
 | no-resume | no resume request on the pipe (the folder still shows the restore) | O3.resumeOnce, O3.resumeAt |
 | duplicate-resume | a second request at 98410.25 on the same control connection | O3.resumeOnce |
 | wrong-capture-resume | the one request names captureId `live-folder-another` | O3.resumeOnce, O3.resumeAt |
-| early-resume | the one request at 95600, after the kill and before system/lost committed | O3.resumeAt |
+| early-resume | the one request at 95600, after the kill and before system/lost committed, so it names no loss (`lostAtMs` null: the frame had none) | O3.resumeAt |
+| wrong-lost-resume | the one request (at 97210.5, in time) names `lostAtMs` 95400, the transport loss, not the committed system/lost at 95912.5 | O3.resumeAt |
 | shifted-piece | span-b1 in two WAVs, the second placed 20 s late (ends at 115350, the track at 95350) | O0.pieces |
 | overlapping-piece | span-b1 in two WAVs, the second placed 1 s early, over the first | O0.pieces |
 | pre-restore-declaration | Mac's writer today: A's and B's new wire ids declared between system/lost and browser/restored, each an ended 0-frame track with no `startOffsetMs`/`endOffsetMs`, bound to its key (SPEC-legal) | O0.offsets, O4.outcomeRows (the strict ones; no group errors) |
