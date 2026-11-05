@@ -133,7 +133,10 @@ the least-squares line of the last 24 of them (about four seconds; from five rea
 it learns the rate as the readings come, steady drift stays within 50 ms of it, and a rate that
 changes with no jump is followed within seconds (a stall soon after is measured from the new
 rate); otherwise the line keeps its slope and is re-centred on the readings no faster than 2 ms
-per rendered second. Steadiness is judged over the last 64 readings, so a discontinuity keeps
+per rendered second. The line takes a fitted slope only once its standard error is within 0.01
+(20 ms over two seconds); until then it keeps the slope it has (none at first) and is re-centred
+on the readings, so a slope fitted to a few jittered readings is not extrapolated over the frames
+a renderer catch-up returns. Steadiness is judged over the last 64 readings, so a discontinuity keeps
 the line from following while it is among them. Readings are steady when
 no consecutive pair's move off the slope stands out from the others': farther from their median
 move than 25 ms or six times the median distance from it, whichever is larger. A discontinuity
@@ -147,9 +150,18 @@ not follow the readings (rendering returning part of a stall is credit, not a ra
 more than 50 ms from the line opens a hold. It is drift when it continues the trend of the
 readings before it (their least-squares line, from at least four of the last 64 readings,
 extended over the held readings, agrees with them within 20 ms on average) or, once at least
-four readings are held, when their own line meets the last reading before them within 20 ms (a
-rate that changed with no jump); and, either way, when the readings of that line are steady.
-The line then takes that slope and nothing re-anchors. Anything else is a step. When the level rises by more
+four readings are held, when their own line meets the last reading before them within 20 ms plus
+twice their scatter about that line (a rate that changed with no jump); and, either way, when the
+readings of that line are steady and its slope is a rate: at most 0.2 ms per rendered
+millisecond (rendering at 85% of real time is 0.18) beyond twice its standard error.
+The line then takes that slope and nothing re-anchors. Stalls on consecutive batches (a stutter)
+make a staircase that a line fits as well as a rate: a staircase steeper than that settles as
+steps. A rate that changed by more than 0.05 is provisional for two seconds of rendering: a hold
+that opens then, whose readings' own line keeps nearer to the slope before the change than to
+the changed one, is rendering going back to its rate at once, so the change was a stutter. When
+its readings sit more than 50 ms from the line before the change on average, the context
+re-anchors by that mean, and the line goes back to the earlier slope. Such a hold settles only
+once four readings are held. Anything else is a step. When the level rises by more
 than 50 ms against its tracked value (or, for the first fresh stamp, against the calibration
 seed plus the roundTrip uncertainty) and a fresh stamp read at least 100 ms later agrees within
 20 ms, the context re-anchors forward by the smaller agreeing step (while fewer than four
@@ -158,7 +170,10 @@ readings before the hold, from the line: a rate that changed with no jump creeps
 its last readings sit near the held ones and the hold runs on); a rise that neither confirms
 nor reverts within one second of opening settles at its smallest reading, and one whose readings
 keep crossing the level settles at no step then. The line moves to the reading the step was
-taken at, so a rise that continues past it is judged again. (After a renderer
+taken at, so a rise that continues past it is judged again: when the latest reading of the
+settled hold sits beyond the step by more than 20 ms (a second stall one batch after the first,
+or a stutter going on), it opens a new hold at once, judged from the reading the step was taken
+at, and held chunks rendered before that reading are sent. (After a renderer
 stall the page reads a backlog of chunks within a millisecond while rendering catches up, so
 stamps read together are no confirmation.) A span that stops during an unsettled rise places
 its own held chunks at the rise's smallest reading and leaves the rise open for the context's
@@ -175,6 +190,30 @@ span's first chunks (up to four, or one second) while its context has no positiv
 yet; a chunk is never moved after it is sent. A resumed suspension re-anchors by its wall estimate from the frame it began at
 and reseeds the level; a rise still unsettled then is kept, moved by the same estimate. The lost time reaches the host as an offset jump (see Gap ranges); the
 extension never fills it with zeros and sends no warning for it.
+
+Known limits of the D61.1 detector (0.2.15; measured on the extension's scripted device, uniform
+stamp jitter, Mac's review of #61 and the GNOME explorations):
+- A loss is seen only above the jitter. A 60 ms stall in the first half second, or under ±12–20 ms
+  of jitter, can be missed (about one in five 60 ms stalls 0.5–5 s into drift). With ±15–20 ms of jitter a
+  stall early in a session gets a second jump of 50–90 ms 1.5–5 s later in 1–6% of runs, and a
+  100 ms stall is occasionally missed.
+- Session start: with ±20 ms of jitter 1–2% of sessions get a jump of 60–85 ms within about
+  3.5 s, with no stall.
+- Rendering at 85% from the start under ±15 or ±20 ms of jitter: 4% or 8% of sessions get
+  jumps of 50–240 ms in their first 3 s while the line learns the rate.
+- A renderer catch-up 1 s into a session under ±15–20 ms of jitter is mis-sized by more than
+  50 ms in up to 10% of sessions; 2 s or later, in up to 2%.
+- A rate swinging ±20000 ppm every few seconds under 8–20 ms of jitter gets forward jumps of
+  50–77 ms with no stall (3–13% of 10-minute runs for a sine, more for a square wave). A
+  ±20000 ppm reversal followed by a stall 2 s later misses the 50 ms bound in 2–9% of cases at
+  5–10 ms of jitter. Real clocks do not swing like this; ±12000 ppm reversals stay within it.
+- A stutter is re-anchored in full, but one gentler than 0.2 (steps of up to about 30 ms per
+  batch) is re-anchored only when rendering goes back to its rate, so the chunks rendered during
+  it are placed early by up to its loss. One that lasts more than two seconds of rendering is a
+  rate change, which is drift. Steps the jitter does not separate from a rate (10 × 20 ms) are
+  partly followed as one (194 of 200 ms re-anchored).
+- Periodic small losses near the steadiness bound (about 30 ms every 2–3 s) are re-anchored in
+  a share that depends on the jitter, never more than what was lost.
 
 Since extension 0.2.13 (D68.1) every capture context keeps real time. A browser moves an
 AudioContext whose output has been all zeros for about 30 s onto a timer, which can run far

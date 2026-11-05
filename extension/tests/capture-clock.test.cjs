@@ -201,7 +201,7 @@ test('the companion that keeps capture on real time and re-anchors only a stall 
   const [major, minor, patch] = version.split('.').map(Number);
   assert.ok(major > 0 || minor > 2 || (minor === 2 && patch >= 15), `manifest version ${version}`);
   assert.match(source, /export function keepRealTime\(context\)/, 'capture.js keeps each context on real time');
-  assert.match(source, /export const STALL_STEP_MS = 50, STALL_AGREE_MS = 20, STALL_CONFIRM_MS = 100, STALL_CENTER = 0.002, STALL_SPREAD = 6;/, 'capture.js re-anchors a render stall, not drift');
+  assert.match(source, /export const STALL_STEP_MS = 50, STALL_AGREE_MS = 20, STALL_CONFIRM_MS = 100, STALL_CENTER = 0.002, STALL_SPREAD = 6, STALL_SLOPE = 0.2, STALL_STUTTER = 0.05;/, 'capture.js re-anchors a render stall, not drift');
 });
 
 test('ten-second source budget pipelines four requests, counts drops and leaves other sources running', async () => {
@@ -943,4 +943,110 @@ test('D61.1: a stall during steady drift re-anchors by the stall alone (12000 pp
       assert.ok(Math.abs(jumps[0] - stall) < 0.001, `${ppm} ppm: jump ${jumps[0]}, stall ${stall}`);
     });
   }
+});
+
+// Mac's review of #61 (d9691ea). A stutter, stalls on consecutive batches, makes a staircase of
+// readings that a line fits as well as a rate: d9691ea took 4 x 200 ms (a slope of 1.17) as a
+// rate that changed with no jump and re-anchored none of the 800 ms. A rate of more than
+// STALL_SLOPE (0.2: rendering at 85% is 0.18) is no clock rate, so it settles as steps, as in
+// 0.2.14; a slower one is provisional, and readings that go back to the old rate show the
+// stutter's whole loss. Chunks stay held about a second at most.
+const sum = values => values.reduce((total, value) => total + value, 0);
+test('D61.1: a stutter (stalls on consecutive batches) re-anchors its whole loss, at any rate', async () => {
+  for (const ppm of [0, 12000, -12000]) for (const [ms, count] of [[200, 4], [100, 5], [60, 6], [30, 8], [30, 12], [100, 10]]) {
+    await device(async rig => {
+      const a = await rig.start('A');
+      let rendered = 0;
+      const render = async () => {
+        await rig.render({ drift: perBatch(ppm) }); rendered++;
+        assert.ok(rendered - rig.audio('A').length <= 7, `held ${rendered - rig.audio('A').length} at batch ${rendered}`);
+      };
+      for (let i = 0; i < 60; i++) await render();
+      for (let k = 0; k < count; k++) { rig.stall(ms); await render(); }
+      for (let i = 0; i < 60; i++) await render();
+      await a.stop();
+      const jumps = rig.jumps('A'), errors = placement(rig, a, 'A');
+      assert.ok(jumps.every(jump => jump > 0), `${ppm} ppm, ${count} x ${ms} ms: ${report(jumps)}`);
+      assert.ok(Math.abs(sum(jumps) - count * ms) < 1, `${ppm} ppm, ${count} x ${ms} ms: ${report(jumps)}`);
+      close(errors.at(-1), -perBatch(ppm) * rendered + sum(jumps) - count * ms, `${ppm} ppm, ${count} x ${ms} ms: the last chunk is off by the drift alone`);
+    });
+  }
+});
+
+// d9691ea settled the first hold at its smallest reading once a reading came more than SETTLE_MS
+// after it opened, and started the line's trail at a reading that already held the second stall,
+// so that stall became the baseline: 150, then 1000 ms one batch later, jumped 150 and lost 1000.
+// A latest reading beyond the settled step by more than STALL_AGREE_MS opens a new hold at once.
+test('D61.1: a second stall one batch after another re-anchors both (150 then 1000 ms, three 400 ms)', async () => {
+  for (const ppm of [0, 12000, -12000]) for (const stalls of [[150, 1000], [60, 830], [150, 2000], [500, 1000], [400, 400, 400]]) {
+    await device(async rig => {
+      const a = await rig.start('A');
+      for (let i = 0; i < 60; i++) await rig.render({ drift: perBatch(ppm) });
+      for (const ms of stalls) { rig.stall(ms); await rig.render({ drift: perBatch(ppm) }); }
+      for (let i = 0; i < 60; i++) await rig.render({ drift: perBatch(ppm) });
+      await a.stop();
+      const jumps = rig.jumps('A');
+      assert.ok(jumps.every(jump => jump > 0), `${ppm} ppm, ${stalls.join(' + ')} ms: ${report(jumps)}`);
+      assert.ok(Math.abs(sum(jumps) - sum(stalls)) < 0.01, `${ppm} ppm, ${stalls.join(' + ')} ms: ${report(jumps)}`);
+    });
+  }
+});
+
+// Both, under jitter: every session re-anchors the loss within a step.
+test('D61.1: stutters and stalls one batch apart under +-15 ms jitter re-anchor their loss within 50 ms', async () => {
+  const cases = { '4 x 200': [200, 200, 200, 200], '5 x 100': Array(5).fill(100), '8 x 30': Array(8).fill(30), '12 x 30': Array(12).fill(30), '150 + 1000': [150, 1000], '3 x 400': [400, 400, 400] };
+  for (const [name, stalls] of Object.entries(cases)) for (let seed = 0; seed < 10; seed++) {
+    let s = 9000 + seed;
+    const random = () => (s = (s * 1103515245 + 12345) % 2147483648) / 2147483648;
+    await device(async rig => {
+      rig.dev.noise = () => (random() * 2 - 1) * 15;
+      const a = await rig.start('A');
+      for (let i = 0; i < 60; i++) await rig.render();
+      for (const ms of stalls) { rig.stall(ms); await rig.render(); }
+      for (let i = 0; i < 60; i++) await rig.render();
+      await a.stop();
+      const jumps = rig.jumps('A');
+      assert.ok(Math.abs(sum(jumps) - sum(stalls)) <= STEP_BOUND, `${name} ms, seed ${seed}: ${report(jumps)}`);
+    });
+  }
+});
+
+// Mac's minors 2 and 5 are known limits (SPEC D61.1); these bound them, on fixed seeds, so they do
+// not grow. At 85% under +-15 and +-20 ms jitter d9691ea jumped in 61 of 200 sessions while the
+// line learned the rate (the slope bound and the junction now allow for the fit's scatter): at
+// most 25. A renderer catch-up one second into a session under the same jitter: d9691ea
+// mis-sized 33 of 100 by more than a step, extrapolating a slope fitted to six jittered readings
+// over the caught-up frames (the line now takes a fitted slope only once its standard error is
+// within FOLLOW_SE): at most 15.
+test('D61.1: known limits under +-15 and +-20 ms jitter stay bounded (85% rendering, early catch-up)', async () => {
+  let jumped = 0, missized = 0;
+  for (const jitter of [15, 20]) for (let seed = 0; seed < 100; seed++) {
+    let s = 5000 + seed;
+    const random = () => (s = (s * 1103515245 + 12345) % 2147483648) / 2147483648;
+    await device(async rig => {
+      rig.dev.noise = () => (random() * 2 - 1) * jitter;
+      const a = await rig.start('A');
+      for (let i = 0; i < 176; i++) await rig.render({ drift: 30 });
+      await a.stop();
+      if (rig.jumps('A').length) jumped++;
+    });
+  }
+  for (const jitter of [15, 20]) for (let seed = 0; seed < 50; seed++) {
+    let s = 6000 + seed;
+    const random = () => (s = (s * 1103515245 + 12345) % 2147483648) / 2147483648;
+    await device(async rig => {
+      rig.dev.noise = () => (random() * 2 - 1) * jitter;
+      const a = await rig.start('A');
+      for (let i = 0; i < 6; i++) await rig.render();
+      const base = rig.dev.level;
+      rig.stall(2000);
+      while (rig.dev.level > base + 170 + 8192 / 48) await rig.catchUp();
+      rig.dev.level = base + 170;
+      for (let i = 0; i < 100; i++) await rig.render();
+      await a.stop();
+      if (Math.abs(sum(rig.jumps('A')) - 170) > STEP_BOUND) missized++;
+    });
+  }
+  assert.ok(jumped <= 25, `85% rendering: ${jumped} of 200 sessions jumped`);
+  assert.ok(missized <= 15, `early catch-up: ${missized} of 100 mis-sized by more than a step`);
 });
