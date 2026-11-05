@@ -194,12 +194,13 @@ test('each capture context keeps real time with one inaudible constant into its 
 });
 
 // D39 installers replace an installed companion only with a strictly newer one, so the D68.1
-// capture fix ships as 0.2.13 or later.
-test('the companion that keeps capture on real time is 0.2.13 or later', () => {
+// capture fix shipped as 0.2.13 and the D61.1 stall re-anchor ships as 0.2.14 or later.
+test('the companion that keeps capture on real time and re-anchors a stall is 0.2.14 or later', () => {
   const { version } = JSON.parse(require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'manifest.json'), 'utf8'));
   const [major, minor, patch] = version.split('.').map(Number);
-  assert.ok(major > 0 || minor > 2 || (minor === 2 && patch >= 13), `manifest version ${version}`);
+  assert.ok(major > 0 || minor > 2 || (minor === 2 && patch >= 14), `manifest version ${version}`);
   assert.match(source, /export function keepRealTime\(context\)/, 'capture.js keeps each context on real time');
+  assert.match(source, /export const STALL_STEP_MS = 50, STALL_AGREE_MS = 20, STALL_CONFIRM_MS = 100;/, 'capture.js re-anchors a render stall');
 });
 
 test('ten-second source budget pipelines four requests, counts drops and leaves other sources running', async () => {
@@ -263,4 +264,398 @@ test('ten-second source budget pipelines four requests, counts drops and leaves 
       else delete globalThis[key];
     }
   }
+});
+
+// D61.1: a scripted device for render stalls. `level` is the render instant minus the render
+// position (ms). Rendering moves the wall clock and the render position together; a stall moves
+// only the wall clock, so it raises the level by the rendered time it lost. Each rendered chunk
+// restamps getOutputTimestamp (the audio thread's pair); a stall leaves the last stamp in place.
+// Truth for a frame is the level when it was rendered plus its position: that is where the
+// session timeline (origin 100000 = performance 0 here) places it.
+async function device(run, { stamps = true, outputLatency = 0, retries = [] } = {}) {
+  const originals = new Map(['AudioContext', 'AudioWorkletNode', 'performance'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
+  const wall = Date.now;
+  const dev = { ct: 0.1, level: 1000, outputLatency, stamps, state: 'running', noise: () => 0, extra: 0, suspendMs: 0 };
+  let now = dev.level + dev.ct * 1000;
+  const nodes = [], packets = [], warnings = [], failures = [], contexts = [], timers = [];
+  const restamp = () => {
+    dev.stamp = dev.stamps ? { contextTime: dev.ct, performanceTime: dev.level + dev.ct * 1000 + dev.outputLatency * 1000 + dev.noise() + dev.extra } : { contextTime: 0, performanceTime: 0 };
+    dev.extra = 0;
+  };
+  restamp();
+  class GraphNode { connect(target) { return target; } disconnect() {} }
+  class Context {
+    sampleRate = 48000; baseLatency = 0; destination = new GraphNode(); listeners = new Set();
+    audioWorklet = { addModule: async () => {} };
+    constructor() { contexts.push(this); }
+    get currentTime() { return dev.ct; }
+    get state() { return dev.state; }
+    get outputLatency() { return dev.outputLatency; }
+    createMediaStreamSource() { return new GraphNode(); }
+    createGain() { return Object.assign(new GraphNode(), { gain: { value: 1 } }); }
+    createConstantSource() { return Object.assign(new GraphNode(), { offset: { value: 1 }, start() {} }); }
+    addEventListener(_name, fn) { this.listeners.add(fn); }
+    removeEventListener(_name, fn) { this.listeners.delete(fn); }
+    getOutputTimestamp() { return { ...dev.stamp }; }
+    // A suspension lasts suspendMs of wall time; the device then stamps again.
+    async resume() { if (dev.state === 'suspended') { now += dev.suspendMs; dev.level += dev.suspendMs; dev.state = 'running'; restamp(); } }
+    async close() {}
+  }
+  class Worklet extends GraphNode {
+    connect(target) { queueMicrotask(() => this.port.onmessage?.({ data: { ready: true } })); return target; }
+    constructor() {
+      super(); nodes.push(this);
+      Object.assign(this, { armed: false, next: 0, stopped: false, chunks: [], queued: [] });
+      this.port = { onmessage: null, postMessage: message => {
+        if (message === 'start') { this.armed = true; this.next = Math.round(dev.ct * 48000); }
+        if (message === 'clock') queueMicrotask(() => this.port.onmessage?.({ data: { clockFrame: Math.round(dev.ct * 48000) } }));
+        if (message === 'stop') { this.stopped = true; this.port.onmessage?.({ data: { stopped: true } }); }
+      } };
+    }
+  }
+  Object.defineProperty(globalThis, 'performance', { configurable: true, value: { timeOrigin: 5, now: () => now } });
+  Date.now = () => 100000 + now;
+  globalThis.AudioContext = Context; globalThis.AudioWorkletNode = Worklet;
+  const tick = () => new Promise(resolve => setImmediate(resolve));
+  try {
+    const { capture } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+    let shared;
+    const rig = {
+      dev, nodes, packets, warnings, failures, timers, tick, contexts,
+      get now() { return now; },
+      async start(id, { own = false } = {}) {
+        shared ??= new Context();
+        const recorder = await capture({ stream: {}, id, label: id, kind: 'local', origin: 100000, workletURL: '', reportOutcomes: true,
+          sharedContext: own ? undefined : shared, send: async packet => packets.push(packet),
+          fail: message => failures.push(message), warn: (message, details) => warnings.push(details?.kind ?? message),
+          schedule: (fn, ms) => { timers.push(fn); return timers.length; }, cancel: () => {}, retryDelayMs: 0 });
+        const requested = now;
+        return Object.assign(recorder, { requested, node: nodes.at(-1) });
+      },
+      // Render one 8192-frame batch on every armed worklet; `queue(node)` keeps it from the page.
+      async render({ queue = () => false, drift = 0 } = {}) {
+        now += 8192 / 48;
+        dev.ct += 8192 / 48000;
+        dev.level += drift;
+        restamp();
+        for (const node of nodes) {
+          if (!node.armed || node.stopped) continue;
+          const chunk = { frame: node.next, truth: dev.level + node.next / 48 + dev.outputLatency * 1000 };
+          node.next += 8192;
+          if (queue(node)) node.queued.push(chunk); else rig.deliver(node, chunk);
+        }
+        await tick();
+      },
+      deliver(node, chunk) {
+        node.chunks.push(chunk);
+        node.port.onmessage?.({ data: { pcm: new ArrayBuffer(8192 * 2), frame: chunk.frame } });
+      },
+      async flushQueued() { for (const node of nodes) for (const chunk of node.queued.splice(0)) rig.deliver(node, chunk); await tick(); },
+      // After a renderer stall, rendering catches up faster than real time: the page reads a
+      // backlog of batches within a millisecond, and the level falls by nearly a batch each.
+      async catchUp() {
+        now += 0.5; dev.ct += 8192 / 48000; dev.level -= 8192 / 48 - 0.5;
+        restamp();
+        for (const node of nodes) if (node.armed && !node.stopped) { rig.deliver(node, { frame: node.next, truth: NaN }); node.next += 8192; }
+        await tick();
+      },
+      // Rendering stops: the wall clock goes on, frames and stamps do not.
+      stall(ms) { now += ms; dev.level += ms; },
+      audio(id) { return packets.filter(packet => packet.type === 'audio' && packet.id === id); },
+      // Offset deltas beyond render-frame spacing, i.e. the jumps a host writes as gaps.
+      jumps(id) {
+        const chunks = rig.audio(id);
+        return chunks.slice(1).map((chunk, i) => chunk.offsetMs - chunks[i].offsetMs - 8192 / 48).filter(delta => Math.abs(delta) > 0.001);
+      },
+    };
+    await run(rig);
+    assert.deepEqual(failures, []);
+    assert.deepEqual(warnings, retries, 'D61.1 adds no warning: the host records the jump');
+  } finally {
+    Date.now = wall;
+    for (const [key, descriptor] of originals) {
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else delete globalThis[key];
+    }
+  }
+}
+// Each sent chunk of `id` against the truth of the chunk its worklet delivered in that order.
+function placement(rig, recorder, id) {
+  const sent = rig.audio(id);
+  return sent.map((packet, i) => packet.offsetMs - recorder.node.chunks[i].truth);
+}
+const exact = (errors, message, within = 0.001) => assert.ok(errors.every(error => Math.abs(error) < within), `${message}: ${errors.map(e => e.toFixed(3)).join(', ')}`);
+
+test('D61.1: a steady device places every chunk exactly as before, stamps fresh or constant', async () => {
+  await device(async rig => {
+    const a = await rig.start('A');
+    for (let i = 0; i < 20; i++) await rig.render();
+    await a.stop();
+    exact(placement(rig, a, 'A'), 'fresh stamps on a steady level');
+    assert.deepEqual(rig.jumps('A'), []);
+  });
+  // A stamp that never moves after calibration: every reading is stale, offsets are today's.
+  await device(async rig => {
+    const a = await rig.start('A');
+    const frozen = { ...rig.dev.stamp };
+    rig.dev.noise = () => 0;
+    for (let i = 0; i < 20; i++) { await rig.render(); rig.dev.stamp = frozen; }
+    await a.stop();
+    exact(placement(rig, a, 'A'), 'constant stamp');
+    assert.equal(rig.audio('A').length, 20);
+  });
+});
+
+test('D61.1: ordinary jitter and drift never re-anchor (2 h at +-3 ms and 100 ppm; +-15 ms)', async () => {
+  let seed = 7;
+  const random = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  for (const [jitter, ppm, chunks] of [[3, 100, Math.ceil(7200 * 48000 / 8192)], [15, 0, 3000], [15, -100, 3000]]) {
+    await device(async rig => {
+      rig.dev.noise = () => (random() * 2 - 1) * jitter;
+      const a = await rig.start('A');
+      for (let i = 0; i < chunks; i++) await rig.render({ drift: 8192 / 48 * ppm / 1e6 });
+      await a.stop();
+      assert.equal(rig.audio('A').length, chunks);
+      assert.deepEqual(rig.jumps('A'), [], `jitter ${jitter} ms, drift ${ppm} ppm: no anchor`);
+    });
+  }
+});
+
+test('D61.1: a stall that holds re-anchors once, by the stamp step, from the stalled frame', async () => {
+  await device(async rig => {
+    const a = await rig.start('A');
+    for (let i = 0; i < 10; i++) await rig.render();
+    rig.stall(491);
+    for (let i = 0; i < 10; i++) await rig.render();
+    await a.stop();
+    const jumps = rig.jumps('A');
+    assert.equal(jumps.length, 1); assert.ok(Math.abs(jumps[0] - 491) < 0.001, `jump ${jumps[0]}`);
+    exact(placement(rig, a, 'A'), 'every chunk, before and after');
+  });
+});
+
+test('D61.1: a renderer catch-up (5001, then 3365 twice) re-anchors by 3365 and never moves back', async () => {
+  await device(async rig => {
+    const a = await rig.start('A');
+    for (let i = 0; i < 6; i++) await rig.render();
+    rig.stall(3365);
+    rig.dev.extra = 5001 - 3365; // the first stamp after resume briefly shows the whole stall
+    for (let i = 0; i < 8; i++) await rig.render();
+    await a.stop();
+    const jumps = rig.jumps('A');
+    assert.equal(jumps.length, 1); assert.ok(Math.abs(jumps[0] - 3365) < 0.001, `jump ${jumps[0]}`);
+    exact(placement(rig, a, 'A'), 'every chunk');
+  });
+});
+
+test('D61.1: a renderer catch-up burst re-anchors by what stays lost, not by stamps read during the burst', async () => {
+  await device(async rig => {
+    const a = await rig.start('A');
+    for (let i = 0; i < 6; i++) await rig.render();
+    rig.stall(2000);
+    // 1830 ms of frames come back in one burst; 170 ms stay lost.
+    while (rig.dev.level > 1000 + 170 + 8192 / 48) await rig.catchUp();
+    rig.dev.level = 1170;
+    for (let i = 0; i < 8; i++) await rig.render();
+    await a.stop();
+    const jumps = rig.jumps('A');
+    assert.equal(jumps.length, 1); assert.ok(Math.abs(jumps[0] - 170) < 0.001, `jump ${jumps[0]}`);
+    const errors = placement(rig, a, 'A').filter(error => !Number.isNaN(error));
+    exact(errors, 'every chunk outside the burst');
+  });
+});
+
+test('D61.1: a transient that reverts, a fall then an equal rise, and a latency change move nothing', async () => {
+  // One stamp 300 ms high, then back.
+  await device(async rig => {
+    const a = await rig.start('A');
+    for (let i = 0; i < 4; i++) await rig.render();
+    rig.dev.extra = 300; await rig.render();
+    for (let i = 0; i < 4; i++) await rig.render();
+    await a.stop();
+    assert.deepEqual(rig.jumps('A'), []);
+  });
+  // A confirmed fall of 300 is never applied; the later rise of 300 it offsets nets to zero.
+  await device(async rig => {
+    const a = await rig.start('A');
+    for (let i = 0; i < 4; i++) await rig.render();
+    rig.dev.level -= 300;
+    for (let i = 0; i < 4; i++) await rig.render();
+    rig.stall(300);
+    for (let i = 0; i < 4; i++) await rig.render();
+    await a.stop();
+    assert.deepEqual(rig.jumps('A'), []);
+  });
+  // A device switch: performanceTime rises with outputLatency, the render level does not.
+  await device(async rig => {
+    const a = await rig.start('A');
+    for (let i = 0; i < 4; i++) await rig.render();
+    rig.dev.outputLatency += 0.15;
+    for (let i = 0; i < 4; i++) await rig.render();
+    await a.stop();
+    assert.deepEqual(rig.jumps('A'), []);
+  });
+  // A stale stamp (same contextTime) never counts, whatever performanceTime it carries.
+  await device(async rig => {
+    const a = await rig.start('A');
+    for (let i = 0; i < 4; i++) await rig.render();
+    for (let i = 0; i < 4; i++) {
+      const stamp = { ...rig.dev.stamp };
+      await rig.render();
+      rig.dev.stamp = { contextTime: stamp.contextTime, performanceTime: stamp.performanceTime + 2000 };
+    }
+    await a.stop();
+    assert.deepEqual(rig.jumps('A'), []);
+  });
+});
+
+test('D61.1: on a shared context a stall that A saw also places B and a later C, with the same facts', async () => {
+  await device(async rig => {
+    const a = await rig.start('A');
+    for (let i = 0; i < 6; i++) await rig.render();
+    rig.stall(1984);
+    for (let i = 0; i < 6; i++) await rig.render();
+    const b = await rig.start('B');
+    for (let i = 0; i < 4; i++) await rig.render();
+    const c = await rig.start('C');
+    for (let i = 0; i < 4; i++) await rig.render();
+    for (const recorder of [a, b, c]) await recorder.stop();
+    exact(placement(rig, a, 'A'), 'A');
+    exact(placement(rig, b, 'B'), 'B');
+    exact(placement(rig, c, 'C'), 'C');
+    assert.deepEqual(rig.jumps('B'), []); assert.deepEqual(rig.jumps('C'), []);
+    const facts = rig.packets.filter(packet => packet.type === 'track').map(clockFields);
+    assert.equal(facts.length, 3);
+    for (const fact of facts) assert.deepEqual(fact, facts[0]);
+  });
+});
+
+test('D61.1: B started on an idle context during a stall waits for the fresh stamp and starts right', async () => {
+  await device(async rig => {
+    const a = await rig.start('A');
+    for (let i = 0; i < 4; i++) await rig.render();
+    await a.stop();
+    rig.stall(2000);                 // nothing renders; the stamp B reads on joining is stale
+    const b = await rig.start('B');
+    for (let i = 0; i < 6; i++) await rig.render();
+    await b.stop();
+    exact(placement(rig, b, 'B'), 'B from its first chunk');
+    assert.deepEqual(rig.jumps('B'), []);
+  });
+});
+
+test('D61.1: chunks rendered before the stall and queued past it keep their mapping', async () => {
+  await device(async rig => {
+    const a = await rig.start('A'), b = await rig.start('B');
+    for (let i = 0; i < 4; i++) await rig.render();
+    const late = node => node === a.node;
+    await rig.render({ queue: late });   // A's batch, rendered before the stall, is still on its way;
+    rig.stall(800);                       // B's arrival read the clock past it
+    await rig.render({ queue: late });   // the first batch rendered after the stall
+    await rig.flushQueued();              // A's queued batches arrive after the rise is seen
+    for (let i = 0; i < 4; i++) await rig.render();
+    await a.stop(); await b.stop();
+    exact(placement(rig, a, 'A'), 'A: the queued pre-stall batch old, later ones new');
+    exact(placement(rig, b, 'B'), 'B');
+    for (const id of ['A', 'B']) {
+      const jumps = rig.jumps(id);
+      assert.equal(jumps.length, 1); assert.ok(Math.abs(jumps[0] - 800) < 0.001, `${id} jump ${jumps[0]}`);
+    }
+  });
+});
+
+test('D61.1: a freeze between a roundTrip calibration and the first stamp moves the whole span, with no jump', async () => {
+  await device(async rig => {
+    const a = await rig.start('A');
+    assert.equal(rig.packets.find(packet => packet.type === 'track').clockMethod, 'roundTrip');
+    rig.stall(1500);
+    rig.dev.stamps = true;
+    for (let i = 0; i < 8; i++) await rig.render();
+    await a.stop();
+    exact(placement(rig, a, 'A'), 'from the first chunk');
+    assert.deepEqual(rig.jumps('A'), []);
+  }, { stamps: false });
+});
+
+test('D61.1: a suspension re-anchors exactly once, by its wall estimate, from the suspended frame', async () => {
+  await device(async rig => {
+    const a = await rig.start('A');
+    for (let i = 0; i < 4; i++) await rig.render();
+    rig.dev.suspendMs = 700; rig.dev.state = 'suspended';
+    for (const fn of [...rig.contexts[0].listeners]) fn();
+    await rig.tick();
+    assert.equal(rig.dev.state, 'running');
+    for (let i = 0; i < 6; i++) await rig.render();
+    await a.stop();
+    const jumps = rig.jumps('A');
+    assert.equal(jumps.length, 1); assert.ok(Math.abs(jumps[0] - 700) < 0.001, `jump ${jumps[0]}`);
+    exact(placement(rig, a, 'A'), 'every chunk');
+  });
+});
+
+test('D61.1: Stop during an unsettled rise sends the held chunks, placed, before trackEnd', async () => {
+  await device(async rig => {
+    const a = await rig.start('A');
+    for (let i = 0; i < 4; i++) await rig.render();
+    rig.stall(500);
+    await rig.render();
+    assert.equal(rig.audio('A').length, 4, 'the chunk after the rise is held');
+    await a.stop();
+    assert.equal(rig.audio('A').length, 5);
+    const end = rig.packets.findIndex(packet => packet.type === 'trackEnd');
+    assert.ok(end > rig.packets.lastIndexOf(rig.audio('A').at(-1)), 'audio before trackEnd');
+    exact(placement(rig, a, 'A'), 'settled at its one reading');
+  });
+});
+
+test('D61.1: a span that fails during an unsettled rise drops what it held', async () => {
+  await device(async rig => {
+    const a = await rig.start('A');
+    for (let i = 0; i < 4; i++) await rig.render();
+    rig.stall(500);
+    await rig.render();
+    rig.nodes[0].onprocessorerror();
+    await a.stop();
+    assert.equal(rig.audio('A').length, 4);
+  }, { retries: ['retry', 'Audio capture stopped unexpectedly.'] });
+});
+
+test('D61.1: held chunks count toward the ten-second source buffer', async () => {
+  await device(async rig => {
+    const a = await rig.start('A');
+    for (let i = 0; i < 4; i++) await rig.render();
+    rig.stall(500);
+    await rig.render();                  // the rise opens; this chunk is held
+    const node = rig.nodes[0];
+    for (let i = 0; i < 60; i++) { rig.deliver(node, { frame: node.next, truth: NaN }); node.next += 8192; }
+    await rig.tick();
+    assert.equal(rig.audio('A').length, 4, 'nothing is sent while the rise is unsettled');
+    assert.equal(a.droppedFrames, 3 * 8192, '58 held chunks fill ten seconds');
+    await rig.render();                  // the rise holds: what was held is placed and sent
+    await a.stop();
+    // The chunk that confirmed the rise arrived while the 58 were still pending: dropped too.
+    assert.equal(a.droppedFrames, 4 * 8192);
+    assert.equal(rig.audio('A').length, 4 + 58);
+    const offsets = rig.audio('A').map(packet => packet.offsetMs);
+    assert.ok(offsets.every((offset, i) => i === 0 || offset > offsets[i - 1]));
+  }, { retries: ['gap', 'gap', 'gap', 'gap'] });
+});
+
+test('D61.1: a re-anchor of more than 60 s retires the span and the retry starts on the new anchor', async () => {
+  await device(async rig => {
+    const a = await rig.start('A');
+    for (let i = 0; i < 4; i++) await rig.render();
+    rig.stall(70000);
+    await rig.render(); await rig.render();
+    assert.equal(a.state, 'retrying');
+    await rig.timers.pop()();          // the retry (earlier timers are the start bounds)
+    for (let i = 0; i < 4; i++) await rig.render();
+    await a.stop();
+    const tracks = rig.packets.filter(packet => packet.type === 'track');
+    assert.equal(tracks.length, 2);
+    assert.deepEqual(clockFields(tracks[1]), clockFields(tracks[0]));
+    const retried = { node: rig.nodes[1] };
+    assert.equal(rig.audio(tracks[1].id).length, 4);
+    exact(placement(rig, retried, tracks[1].id), 'the retry, on the new anchor');
+  }, { retries: ['retry', 'recovered'] });
 });

@@ -18,4 +18,4 @@ PA
   test -S "$runtime/pulse.sock"
   export PULSE_SERVER="unix:$runtime/pulse.sock"
 fi
-node /source/tests/capture-render-stall.mjs
+STALL_OUT=${STALL_OUT:-/out/stall.jsonl} node "${STALL_SCRIPT:-/source/tests/capture-render-stall.mjs}"
