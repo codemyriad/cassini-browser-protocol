@@ -128,20 +128,30 @@ steady slow rate is clock drift, not lost audio. The audio is continuous, so sta
 capture clock. Only discontinuities (stalls) re-anchor or count as gaps. Bounded drift is
 accepted."). So offsets follow render frames at any steady rate, faster or slower than real
 time (a device 1.2% slow, as Apple's virtual sound device runs, gets no jump), and only a
-discontinuity re-anchors. The line is re-centred on the readings no faster than 2 ms per
-rendered second, which absorbs jitter within 50 ms and a small slope error but never a stall,
-so losses below 50 ms per reading still add up. A reading more than 50 ms from the line is
-drift when it continues the trend of the readings before it (their least-squares line, from at
-least four of the last 64 readings, extended over the held readings, agrees with them within
-20 ms on average) or, once at least four readings are held, when their own line meets the last
-reading before them within 20 ms (a rate that changed with no jump); and, either way, when
-between every two consecutive readings of that line the level moved by its slope times the
-rendered time within 25 ms (a stall is a discontinuity, even one below 50 ms). The line then
-takes that slope and nothing re-anchors. Anything else is a step. When the level rises by more
+discontinuity re-anchors. While the readings within 50 ms of the line are steady, the line is
+their least-squares line (over the last 64 of them, from five on), so it learns the rate as the
+readings come and steady drift stays within 50 ms of it; otherwise the line keeps its slope and
+is re-centred on the readings no faster than 2 ms per rendered second. Readings are steady when
+no consecutive pair's move off the slope stands out from the others': farther from their median
+move than 25 ms or six times the median distance from it, whichever is larger. A discontinuity
+stands out; jitter of any size moves every pair alike. So a loss is seen only above the jitter:
+losses that form a steady rate, or that the jitter hides, are drift and follow the capture
+clock, while small stalls that stand out (45 ms ones under 3 ms of jitter) still add up to a
+step. A reading within 50 ms that stands out from the line is suspect: the line does not follow
+it, and a hold that opens next starts at it. Within two seconds of a re-anchor the line does
+not follow the readings (rendering returning part of a stall is credit, not a rate). A reading
+more than 50 ms from the line opens a hold. It is drift when it continues the trend of the
+readings before it (their least-squares line, from at least four of the last 64 readings,
+extended over the held readings, agrees with them within 20 ms on average) or, once at least
+four readings are held, when their own line meets the last reading before them within 20 ms (a
+rate that changed with no jump); and, either way, when the readings of that line are steady.
+The line then takes that slope and nothing re-anchors. Anything else is a step. When the level rises by more
 than 50 ms against its tracked value (or, for the first fresh stamp, against the calibration
 seed plus the roundTrip uncertainty) and a fresh stamp read at least 100 ms later agrees within
 20 ms, the context re-anchors forward by the smaller agreeing step (while fewer than four
-readings precede the rise and fewer are held, an agreeing pair settles nothing yet); a rise that neither confirms
+readings are held, only when the pair sits more than 50 ms beyond the mean of the last four
+readings before the hold, from the line: a rate that changed with no jump creeps up to 50 ms, so
+its last readings sit near the held ones and the hold runs on); a rise that neither confirms
 nor reverts within one second of opening settles at its smallest reading, and one whose readings
 keep crossing the level settles at no step then. The line moves to the reading the step was
 taken at, so a rise that continues past it is judged again. (After a renderer
@@ -151,9 +161,10 @@ its own held chunks at the rise's smallest reading and leaves the rise open for 
 other and later spans. The re-anchor
 applies from the stalled frame (the frame of the last fresh stamp before the rise, or the first
 chunk still held, whichever is later) for every span on the context, current and later.
-Offsets never move backward: a confirmed fall that is not drift is never applied and only
-offsets a later rise, and so does any fall that opens within two seconds of a re-anchor or of
-such a fall (rendering returning part of what a stall lost, not a rate).
+Offsets never move backward: a confirmed fall that is not drift is never applied; it is credit
+that offsets a later rise. A fall that opens within two seconds of a re-anchor or of such a fall
+(rendering returning part of what a stall lost, not a rate) offsets the next rise whenever it
+comes; any other fall offsets only a rise that settles within two seconds of it.
 The origin mapping is never re-read, and the clock facts are unchanged, so all spans still
 repeat the same values. Chunks that arrive while a rise is unsettled are held, and so are a
 span's first chunks (up to four, or one second) while its context has no positive output stamp

@@ -79,24 +79,33 @@ function resumeSuspended(context) {
 // the last reading plus a slope per rendered millisecond.
 // Steady drift (0.2.15, the decision on #56): a steady rate is clock drift, not lost audio. The
 // audio is continuous, so offsets follow the capture clock (render frames) at any rate, and only
-// a discontinuity re-anchors. The line is re-centred on the readings no faster than STALL_CENTER
-// (2 ms per rendered second), which absorbs jitter and a small slope error but never a stall, so
-// losses below STALL_STEP_MS per reading still add up to a step. A reading beyond STALL_STEP_MS
-// from the line opens a hold, which is then told apart:
+// a discontinuity re-anchors. While the in-band readings (within STALL_STEP_MS of the line) are
+// steady, the line is their least-squares line, over up to TRAIL_READINGS of them from
+// SETTLE_READINGS + 1 on, so it learns the rate as the readings come and steady drift stays in
+// the band; otherwise the line keeps its slope and is re-centred no faster than STALL_CENTER
+// (2 ms per rendered second). Readings are steady when no consecutive pair's move off the slope
+// stands out from the others': farther from their median move than half a step or STALL_SPREAD
+// times the median distance from it, whichever is larger. A discontinuity stands out, while
+// jitter of any size moves every pair alike. So a loss is seen only above the jitter: losses
+// that form a steady rate, or that the jitter hides, are drift; small stalls that stand out
+// (45 ms ones under 3 ms of jitter) still add up to a step. An in-band reading that stands out
+// from the line is suspect: the line does not follow it, and a hold that opens next starts at it.
+// The line does not follow within STALL_RECOVER_MS of a re-anchor. A reading beyond
+// STALL_STEP_MS from the line opens a hold, which is then told apart:
 // - drift: the excursion continues the trend of the readings before it (their least-squares line,
 //   over at least SETTLE_READINGS of up to TRAIL_READINGS readings, extended over the held ones,
 //   agrees with them within STALL_AGREE_MS on average), or, once at least SETTLE_READINGS readings
 //   are held, the held readings' own line meets the last reading before them within
 //   STALL_AGREE_MS (a rate that changed with no jump, such as rendering at 85% from some
-//   point on); and between every two consecutive readings of that line the level moved by its
-//   slope times the rendered time, within half a step (a stall is a discontinuity, even one
-//   below a step: a staircase of small stalls is no slope). The line takes that slope, nothing
+//   point on); and the readings of that line are steady. The line takes that slope, nothing
 //   re-anchors and no credit is taken.
 // - a step: anything else. A rise beyond STALL_STEP_MS that holds on a later fresh stamp, read
 //   at least STALL_CONFIRM_MS later (agreeing within STALL_AGREE_MS), re-anchors the context
 //   forward by the smaller agreeing step from the line, from the stalled frame on. While fewer
-//   than SETTLE_READINGS readings precede the hold and fewer are held, a step and a ramp cannot
-//   be told apart yet, so an agreeing pair settles nothing and the hold runs on.
+//   than SETTLE_READINGS readings are held, an agreeing pair settles only a discontinuity at the
+//   junction: the pair sits more than a step beyond the last SETTLE_READINGS in-band readings
+//   (from the line). A rate that changed with no jump creeps up to the band, so its last in-band
+//   readings sit near the held ones and the hold runs on until its own line can tell.
 // The wall separation matters after a renderer stall: the page then reads a backlog of chunks
 // within a millisecond while rendering catches up faster than real time, so their stamps fall
 // steadily and neighbours agree by chance. A rise that neither confirms nor reverts settles at
@@ -105,15 +114,17 @@ function resumeSuspended(context) {
 // span's held chunks, at its smallest reading, and stays open for the context's other and later
 // spans. A rise seen first against the calibration seed (plus the roundTrip uncertainty) is a
 // freeze between calibration and the first device callbacks. Offsets never move backward: a
-// confirmed fall that is no drift only offsets a later rise, and so does a fall that opens within
-// STALL_RECOVER_MS of a re-anchor or of such a fall, ramp or not: rendering returning part of
-// what a stall lost, not a rate. The origin is never re-read and the clock facts never change.
+// confirmed fall that is no drift is credit that offsets a later rise. A fall that opens within
+// STALL_RECOVER_MS of a re-anchor or of such a fall, ramp or not, is rendering returning part of
+// what a stall lost, not a rate: its credit waits for the next rise. Any other fall's credit
+// offsets only a rise that settles within STALL_RECOVER_MS of it. The origin is never re-read
+// and the clock facts never change.
 // The lost time reaches the host as an offset jump, its `jump` gap.
-export const STALL_STEP_MS = 50, STALL_AGREE_MS = 20, STALL_CONFIRM_MS = 100, STALL_CENTER = 0.002;
+export const STALL_STEP_MS = 50, STALL_AGREE_MS = 20, STALL_CONFIRM_MS = 100, STALL_CENTER = 0.002, STALL_SPREAD = 6;
 const SETTLE_READINGS = 4, SETTLE_MS = 1000, TRAIL_READINGS = 64, STALL_RECOVER_MS = 2000;
 function clockRecord({ level0, seedSlack, seedTime, stampTime, ...measured }) {
   return { ...measured, anchors: [{ fromFrame: 0, addMs: 0 }], level: level0, slope: 0, seedSlack, seeded: false,
-    lastStampTime: stampTime, ref: { contextTime: seedTime }, trail: [], pending: null, credit: 0, recovered: -Infinity, spans: new Set() };
+    lastStampTime: stampTime, ref: { contextTime: seedTime }, trail: [], pending: null, credit: 0, creditUntil: Infinity, recovered: -Infinity, spans: new Set() };
 }
 function offsetFor(clock, frame) {
   let addMs = 0;
@@ -133,14 +144,38 @@ function fit(readings) {
   const slope = tx / tt;
   return { slope, at: contextTime => mx + slope * ((contextTime - t0) * 1000 - mt) };
 }
+const median = values => {
+  const sorted = [...values].sort((a, b) => a - b), mid = sorted.length >> 1;
+  return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
+};
+// Whether values stand out from the rest: farther from their median than half a step or
+// STALL_SPREAD times the median distance from it, whichever is larger. A discontinuity stands
+// out from the values around it; jitter of any size spreads them all alike.
+function outliers(values, candidates = values) {
+  const center = median(values), bound = Math.max(STALL_STEP_MS / 2, STALL_SPREAD * median(values.map(value => Math.abs(value - center))));
+  return candidates.some(value => Math.abs(value - center) > bound);
+}
 // Whether readings rise steadily: between consecutive ones the level moves by the slope times
-// the rendered time, within half a step. A discontinuity (a stall, even one below a step) does not.
+// the rendered time, and no pair's move off the slope stands out from the others'.
 function steady(readings, slope) {
-  for (let i = 1; i < readings.length; i++) {
-    const moved = readings[i].x - readings[i - 1].x - slope * (readings[i].contextTime - readings[i - 1].contextTime) * 1000;
-    if (Math.abs(moved) > STALL_STEP_MS / 2) return false;
-  }
-  return true;
+  const moved = [];
+  for (let i = 1; i < readings.length; i++) moved.push(readings[i].x - readings[i - 1].x - slope * (readings[i].contextTime - readings[i - 1].contextTime) * 1000);
+  return !moved.length || !outliers(moved);
+}
+// The line follows the trail: while the in-band readings are steady it is their least-squares
+// line, so it learns a rate from SETTLE_READINGS readings on and steady drift never leaves the
+// band. Not on a reading that stands out from the line, as the trail before it sits around the
+// line: it is suspect, maybe the first of a loss seen through the jitter, and the readings after
+// it tell (a hold that opens next takes it). Not within STALL_RECOVER_MS of a re-anchor:
+// rendering returning part of a stall is credit, not a rate.
+function follow(clock, reading) {
+  const trail = clock.trail;
+  if (trail.length <= SETTLE_READINGS) return;
+  const off = trail.map(earlier => earlier.x - line(clock, earlier.contextTime));
+  if (outliers(off.slice(0, -1), off.slice(-1))) { reading.suspect = true; return; }
+  if (performance.now() - clock.recovered <= STALL_RECOVER_MS) return;
+  const trend = fit(trail);
+  if (trend && steady(trail, trend.slope)) { clock.slope = trend.slope; clock.level = trend.at(reading.contextTime); }
 }
 // Whether the held readings are drift, and the line that follows it.
 function drift(clock, held) {
@@ -161,7 +196,7 @@ function settlement(clock, readings) {
   const ramp = recovering ? null : drift(clock, clock.pending.readings);
   if (ramp) return { ramp, anchor: null };
   const steps = readings.map(reading => reading.x - line(clock, reading.contextTime));
-  const step = sign > 0 ? Math.min(...steps) : Math.max(...steps), total = clock.credit + step, before = clock.ref;
+  const step = sign > 0 ? Math.min(...steps) : Math.max(...steps), total = (performance.now() <= clock.creditUntil ? clock.credit : 0) + step, before = clock.ref;
   if (!(total > 0)) return { step, total, recovering, anchor: null };
   // Frames before the last fresh stamp were rendered before the stall: queued chunks of
   // them keep their mapping. Chunks a span already admitted are never moved.
@@ -178,7 +213,13 @@ function settle(clock, readings) {
     // continuous loss) is still a deviation, judged next.
     clock.level = line(clock, last.contextTime) + step; clock.trail = [last];
     if (anchor) { clock.anchors.push(anchor); clock.credit = 0; clock.recovered = performance.now(); }
-    else { clock.credit = total; if (recovering) clock.recovered = performance.now(); }
+    else {
+      // Credit from a recovery offsets the next rise whenever it comes; from any other fall
+      // (rendering ahead of the wall with no stall before it) only a rise within STALL_RECOVER_MS.
+      clock.credit = total;
+      if (recovering) { clock.recovered = performance.now(); clock.creditUntil = Infinity; }
+      else if (step < 0) clock.creditUntil = performance.now() + STALL_RECOVER_MS;
+    }
   }
   clock.ref = last; clock.pending = null; clock.seeded = true;
 }
@@ -194,21 +235,38 @@ function read(clock, reading) {
     clock.ref = reading; clock.pending = null; clock.seeded = true;
     clock.trail.push(reading);
     if (clock.trail.length > TRAIL_READINGS) clock.trail.shift();
+    follow(clock, reading);
     return;
   }
   const sign = Math.sign(deviation), pending = clock.pending;
   if (!pending || pending.sign !== sign) {
     // A flip keeps the time the context has been unsettled: the bound is per hold, not per sign.
-    clock.pending = pending ? { sign, readings: [reading], since: pending.since, flipped: true } : { sign, readings: [reading], since: performance.now() };
+    if (pending) { clock.pending = { sign, readings: [reading], since: pending.since, flipped: true }; return; }
+    // Suspect readings just before a hold are its first: the line and the junction go back to
+    // the last reading before them.
+    const suspects = [];
+    while (clock.trail.length > 1 && clock.trail.at(-1).suspect && Math.sign(clock.trail.at(-1).x - line(clock, clock.trail.at(-1).contextTime)) === sign) suspects.unshift(clock.trail.pop());
+    if (suspects.length) { clock.level = line(clock, clock.trail.at(-1).contextTime); clock.ref = clock.trail.at(-1); }
+    clock.pending = { sign, readings: [...suspects, reading], since: performance.now() };
     return;
   }
   const previous = pending.readings.findLast(earlier => reading.at - earlier.at >= STALL_CONFIRM_MS);
   pending.readings.push(reading);
-  // With too few readings on either side to tell a step from a ramp, the hold runs on.
-  const judged = clock.trail.length >= SETTLE_READINGS || pending.readings.length >= SETTLE_READINGS;
   // Agreement is against the line: under drift, two readings of one step differ by the slope.
   const agree = previous && Math.abs(reading.x - previous.x - clock.slope * (reading.contextTime - previous.contextTime) * 1000) <= STALL_AGREE_MS;
-  if (agree && judged) settle(clock, [previous, reading]);
+  if (agree && judged(clock, [previous, reading], sign)) settle(clock, [previous, reading]);
+}
+// Whether a hold can be told apart yet. With SETTLE_READINGS held, their own line says. Before
+// that, only a discontinuity at the junction: the agreeing readings sit off the line by more than
+// half a step beyond where the last SETTLE_READINGS in-band readings sat. A rate that changed with
+// no jump creeps up to the band, so its last in-band readings already sit near the held ones.
+function judged(clock, readings, sign) {
+  if (clock.pending.readings.length >= SETTLE_READINGS) return true;
+  const recent = clock.trail.slice(-SETTLE_READINGS);
+  if (recent.length < SETTLE_READINGS) return false;
+  const off = reading => reading.x - line(clock, reading.contextTime);
+  const step = sign > 0 ? Math.min(...readings.map(off)) : Math.max(...readings.map(off));
+  return sign * (step - recent.reduce((sum, reading) => sum + off(reading), 0) / recent.length) > STALL_STEP_MS;
 }
 function observe(context, clock) {
   if (!clock?.anchors) return;
