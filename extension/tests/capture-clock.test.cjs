@@ -187,7 +187,8 @@ test('each capture context keeps real time with one inaudible constant into its 
     assert.equal(context.constants.length, 1, `${label}: one constant per context`);
     const [constant] = context.constants;
     assert.equal(constant.offset.value, 6e-8, `${label}: -144 dBFS, below one 16-bit step`);
-    assert.deepEqual(constant.targets, [context.destination], `${label}: into the destination only`);
+    assert.equal(constant.targets.length, 1, `${label}: one connection`);
+    assert.equal(constant.targets[0], context.destination, `${label}: into the destination itself`);
     assert.ok(constant.started, `${label}: started`);
   }
 });

@@ -16,8 +16,9 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
 
 const AUDIO_SECONDS = 45;   // well past the suspender's 30 s
-const BOUND_SECONDS = 75;   // a context at the hosted timer's 0.5 needs about 60 s for 45 s of audio
-const MIN_RATE = 0.97;      // audio seconds per wall second, from the first frame
+const AFTER_SECONDS = 31;   // the rate is measured from here on, after the suspender would engage
+const BOUND_SECONDS = 90;   // from the capture's start, before any audio too
+const MIN_RATE = 0.97;      // audio seconds per wall second after AFTER_SECONDS of audio
 
 const server = createServer(async (request, response) => {
   if (request.url === '/') { response.end('<!doctype html><title>Capture keeps real time</title><body>'); return; }
@@ -32,10 +33,13 @@ try {
   browser = await chromium.launch({ headless: true, args: ['--autoplay-policy=no-user-gesture-required'] });
   const page = await browser.newPage();
   await page.goto(address);
-  const frames = [];  // [wall ms, frames] per audio packet, recorded in Node
-  let failure = null;
-  await page.exposeFunction('recordAudio', count => { frames.push([Date.now(), count]); });
+  const arrivals = [];  // [wall ms, cumulative frames] at each audio packet, recorded in Node
+  const retries = [];
+  let failure = null, frames = 0;
+  await page.exposeFunction('recordAudio', count => { frames += count; arrivals.push([Date.now(), frames]); });
   await page.exposeFunction('recordFailure', message => { failure = message; });
+  await page.exposeFunction('recordRetry', message => { retries.push(message); });
+  const started = Date.now();
   await page.evaluate(async () => {
     const { capture } = await import('/capture.js');
     // A source track from its own context; its content and pace do not matter here.
@@ -43,21 +47,27 @@ try {
     oscillator.connect(output); oscillator.start(); await source.resume();
     const send = async packet => { if (packet.type === 'audio') await window.recordAudio(atob(packet.pcm).length / 2); };
     window.capturing = await capture({ stream: output.stream, id: 'real-time', label: 'Real time', kind: 'local', origin: Date.now(),
-      workletURL: location.origin + '/pcm-worklet.js', send, fail: message => window.recordFailure(String(message)) });
+      workletURL: location.origin + '/pcm-worklet.js', send, fail: message => window.recordFailure(String(message)),
+      warn: message => window.recordRetry(String(message)) });
   });
-  // Event wait: until the capture holds AUDIO_SECONDS of frames, bounded in wall time.
-  const total = () => frames.reduce((sum, [, count]) => sum + count, 0) / 48000;
+  // Event wait: until the capture holds AUDIO_SECONDS of frames, bounded from the capture's start
+  // (so a capture that never delivers audio fails here too, with its retries).
   for (;;) {
     assert.equal(failure, null, `capture failed: ${failure}`);
-    if (total() >= AUDIO_SECONDS) break;
-    const elapsed = frames.length ? (Date.now() - frames[0][0]) / 1000 : 0;
-    assert.ok(elapsed < BOUND_SECONDS, `only ${total().toFixed(1)} s of audio after ${elapsed.toFixed(1)} s: the capture context fell behind real time`);
+    if (frames / 48000 >= AUDIO_SECONDS) break;
+    const elapsed = (Date.now() - started) / 1000;
+    assert.ok(elapsed < BOUND_SECONDS, `only ${(frames / 48000).toFixed(1)} s of audio after ${elapsed.toFixed(1)} s` +
+      (retries.length ? `; capture retries: ${JSON.stringify(retries)}` : ': the capture context fell behind real time'));
     await new Promise(resolve => setTimeout(resolve, 250));
   }
-  const wall = (frames.at(-1)[0] - frames[0][0]) / 1000, audio = total();
-  const rate = audio / wall;
-  console.log(`capture-real-time: ${audio.toFixed(2)} s of audio in ${wall.toFixed(2)} s of wall time (rate ${rate.toFixed(3)})`);
-  assert.ok(rate >= MIN_RATE, `the capture clock ran at ${rate.toFixed(3)} of real time (minimum ${MIN_RATE})`);
+  // The rate after the suspender would engage: between the first arrival past AFTER_SECONDS of audio
+  // and the last, both counted at arrival, so no packet's frames are credited before its time.
+  const from = arrivals.find(([, total]) => total / 48000 >= AFTER_SECONDS), to = arrivals.at(-1);
+  const audio = (to[1] - from[1]) / 48000, wall = (to[0] - from[0]) / 1000, rate = audio / wall;
+  const overall = (to[1] - arrivals[0][1]) / 48000 / ((to[0] - arrivals[0][0]) / 1000);
+  console.log(`capture-real-time: after ${AFTER_SECONDS} s, ${audio.toFixed(2)} s of audio in ${wall.toFixed(2)} s of wall time ` +
+    `(rate ${rate.toFixed(3)}; overall ${overall.toFixed(3)}; retries ${retries.length})`);
+  assert.ok(rate >= MIN_RATE, `after ${AFTER_SECONDS} s the capture clock ran at ${rate.toFixed(3)} of real time (minimum ${MIN_RATE})`);
   await page.evaluate(() => window.capturing.stop());
 } finally {
   await browser?.close();
