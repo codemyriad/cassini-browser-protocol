@@ -40,7 +40,7 @@ import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { connectReceiveSlots, muteSlot, switchReceiveSlot } from './product-topologies.mjs';
 import { eventsOf, extent, folderClock, poll, tracksOf } from './folder-clock.mjs';
-import { monotonic, sessionClock } from './session-clock.mjs';
+import { monotonic, sessionClock, wallPair } from './session-clock.mjs';
 import { controlConnections, RELAY_START_MS, resumeRequests, stopLaunchers, stopRelays, verifyControlPipe } from './native-launcher.mjs';
 
 const ORACLE = path.resolve(import.meta.dirname, '../conformance/live-folder');
@@ -97,7 +97,7 @@ export function runOracle({ python = 'python3', oracle = ORACLE, folder, evidenc
 // relayStartMs, cleanupMs and checkMs are the control relay's start bound, cleanup()'s bound
 // and check.py's (tests shorten them).
 export async function runLiveFolder({ meeting, remote, app, worker, out, log = console.log, python = 'python3',
-  relayStartMs = RELAY_START_MS, cleanupMs = CLEANUP_MS, checkMs = CHECK_MS }) {
+  relayStartMs = RELAY_START_MS, cleanupMs = CLEANUP_MS, checkMs = CHECK_MS, clocks = {} }) {
   let failed = true, recordAsked = false, stopAsked = false;
   try {
     const value = await scenario();
@@ -134,7 +134,11 @@ export async function runLiveFolder({ meeting, remote, app, worker, out, log = c
     const { constants: C, bounds, pollMs, oracle } = await loadScenario();
     // Every requested and observed time is a monotonic reading (scenarios/session-clock.mjs), mapped
     // onto the session timeline once the extension's origin is known: the apps' timeline too.
-    const now = monotonic;
+    // clocks ({mono, wall}) replaces both readings in the driver's tests only.
+    const now = clocks.mono ?? monotonic;
+    // Where the wall clock stood, read from before Record until the extension reports the origin,
+    // so sessionClock maps the origin at its own instant (scenarios/session-clock.mjs).
+    const pairs = [], sample = () => { pairs.push(wallPair(clocks)); };
     const actions = {}, notes = { steps: [] };
     let origin = null, timeline = null, clock = null, captureId = null, maxSourceCount = 0, slotC = null, before = null, newFolders = null;
     let requests = null, browserPid = null;
@@ -193,31 +197,36 @@ export async function runLiveFolder({ meeting, remote, app, worker, out, log = c
         'setup: the browser started a control host through the observing launcher', bounds.setup, { pollMs });
 
       // 1. Record.
+      sample();
       let requested = now();
       recordAsked = true;
       await app.record();
-      const status = await poll(async () => { const value = await app.snapshot(); return value?.path && value.captureId ? value : null; },
+      sample();
+      const status = await poll(async () => { sample(); const value = await app.snapshot(); return value?.path && value.captureId ? value : null; },
         'record: the app reports the recording folder and capture id', bounds.record, { pollMs });
       notes.appCaptureId = status.captureId;
       clock = folderClock(status.path, { pollMs });
       const keyA = await clock.waitFolder(manifest => {
+        sample();
         const track = remoteTracks(manifest).find(t => lengthMs(t) >= 1000);
         return track?.sourceTrackId;
       }, 'record: A has 1000 ms of frames', bounds.record);
       const recorded = now();
       // The recording's identity and timeline origin, as the extension's service worker holds
       // them for the meeting tab: app-neutral, and what a resume request must name.
-      const entry = await poll(() => worker.evaluate(async tab => {
+      const entry = await poll(() => { sample(); return worker.evaluate(async tab => {
         const { cassiniSessions = [] } = await chrome.storage.session.get('cassiniSessions');
         const found = cassiniSessions.filter(s => s.tabId === tab);
         return found.length ? found : null;
-      }, meetingTab), 'record: the extension holds a cassiniSessions entry for the meeting tab', bounds.record, { pollMs });
+      }, meetingTab); }, 'record: the extension holds a cassiniSessions entry for the meeting tab', bounds.record, { pollMs });
       assert.equal(entry.length, 1, `record: one cassiniSessions entry for the meeting tab, found ${JSON.stringify(entry)}`);
       assert.ok(typeof entry[0].captureId === 'string' && entry[0].captureId, `record: the entry's captureId ${JSON.stringify(entry[0])}`);
       assert.ok(Number.isSafeInteger(entry[0].startedAt) && entry[0].startedAt >= 0, `record: the entry's startedAt ${JSON.stringify(entry[0])}`);
       ({ captureId, startedAt: origin } = entry[0]);
-      // SPEC: the wall-clock origin is mapped onto the monotonic clock once; never the wall clock again.
-      timeline = sessionClock(origin);
+      // SPEC: the wall-clock origin is mapped onto the monotonic clock once, at its own instant
+      // (the pairs read since before Record bracket it); never the wall clock again.
+      timeline = sessionClock(origin, { pairs, ...clocks });
+      notes.originPairs = pairs.length;
       if (notes.appCaptureId !== captureId) log(`live-folder: the app reports captureId ${notes.appCaptureId}, the extension ${captureId}`);
       step('record', requested, recorded);
       await pipe('record');

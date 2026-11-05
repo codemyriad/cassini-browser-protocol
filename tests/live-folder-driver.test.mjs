@@ -12,7 +12,7 @@ import test from 'node:test';
 import { eventsOf, extent, F, folderClock, S } from '../scenarios/folder-clock.mjs';
 import { controlConnections, hostPids, livePids, processArgv, RELAY, runsCommand, stopLaunchers, stopRelays, writeNativeHost } from '../scenarios/native-launcher.mjs';
 import * as driver from '../scenarios/live-folder.mjs';
-import { sessionClock } from '../scenarios/session-clock.mjs';
+import { sessionClock, wallPair } from '../scenarios/session-clock.mjs';
 const { loadScenario, runLiveFolder } = driver;
 import { poll } from '../scenarios/folder-clock.mjs';
 
@@ -59,14 +59,18 @@ test('a drifting or stepping wall clock never changes the oracle\'s verdicts', a
     let t = 0;  // true session ms
     const mono = () => 7_000_000 + t;
     const wall = () => origin + t * (1 + drift) + (t >= 50_000 ? step : 0);
-    const anchor = t = base.actions.record.observedAtMs;  // the driver maps the origin when it reads it, at record
-    const clock = sessionClock(origin, { wall, mono });
+    // The driver reads pairs from before Record (record.requested) until it learns the origin,
+    // at record observed, and maps the origin at its own instant (t = 0).
+    const pairs = [];
+    for (t = base.actions.record.requestedAtMs; t < base.actions.record.observedAtMs; t += 50) pairs.push(wallPair({ wall, mono }));
+    t = base.actions.record.observedAtMs;
+    const clock = sessionClock(origin, { pairs, wall, mono });
     const measured = via => ({ ...base,
       actions: Object.fromEntries(Object.entries(base.actions).map(([key, a]) => [key, { requestedAtMs: via(a.requestedAtMs), observedAtMs: via(a.observedAtMs) }])),
       resumeRequests: base.resumeRequests.map(r => ({ ...r, atMs: via(r.atMs) })) });
     const monotonicRun = measured(ms => { t = ms; return clock.at(mono()); });
-    // Only the drift before the mapping remains.
-    const bound = drift * anchor + 0.01;
+    // Mapped at the origin's own instant, no drift remains (wall readings are whole ms).
+    const bound = 1;
     for (const [key, a] of Object.entries(monotonicRun.actions)) {
       assert.ok(Math.abs(a.requestedAtMs - base.actions[key].requestedAtMs) <= bound, `${name}: ${key} requested ${a.requestedAtMs}`);
       assert.ok(Math.abs(a.observedAtMs - base.actions[key].observedAtMs) <= bound, `${name}: ${key} observed ${a.observedAtMs}`);
@@ -79,6 +83,56 @@ test('a drifting or stepping wall clock never changes the oracle\'s verdicts', a
     assert.ok(viaWall.includes('O5.selection') && viaWall.some(id => !before.includes(id)),
       `${name}: a wall-clock session clock changes verdicts (me:true falls before the request, as on the hosted VM): ${JSON.stringify(viaWall)}`);
   }
+});
+
+// Mac #149: an app maps the origin when its recording starts, the driver about 2.35 s later, and
+// a hosted VM's wall clock slewed 510 ppm in between. A mapping read when the driver learns the
+// origin put the driver's meOff request 1.2 ms after the app's selection, which the app stamped
+// at once (O5.selection). The synthetic run's meOff is moved to 0.2 ms before its selection: mapped
+// at its own instant from the pairs read since before Record, the origin keeps every verdict; a
+// mapping read 2.4 s late (the old sessionClock) fails O5.selection.
+test('a slewing wall clock never moves the origin the driver learns late (Mac #149)', async () => {
+  const folder = await synthetic(), out = path.dirname(folder);
+  const base = JSON.parse(await readFile(path.join(out, 'evidence.json'), 'utf8')), origin = base.timelineOriginMs;
+  const session = JSON.parse(await readFile(path.join(folder, 'session.json'), 'utf8'));
+  const off = session.events.find(e => e.type === 'selection' && e.me === false);
+  const tight = { ...base, actions: { ...base.actions, meOff: { ...base.actions.meOff, requestedAtMs: off.atMs - 0.2 } } };
+  const verdicts = async (evidence, name) => {
+    const file = path.join(out, `${name}.evidence.json`), result = path.join(out, `${name}.result.json`);
+    await writeFile(file, JSON.stringify(evidence, null, 1) + '\n');
+    await driver.runOracle({ folder, evidence: file, result, ms: 60000 });
+    const checks = JSON.parse(await readFile(result, 'utf8')).checks;
+    return checks.flatMap(check => Object.entries(check.measured).filter(([, rule]) => !rule.passed).map(([id]) => id)).sort();
+  };
+  const truth = await verdicts(tight, 'tight');
+  assert.ok(!truth.includes('O5.selection'), `the true times pass O5.selection: ${JSON.stringify(truth)}`);
+  let t = 0;  // true session ms
+  const mono = () => 7_000_000 + t, wall = () => origin + t * (1 + 510e-6);
+  const learned = 2400;
+  const pairs = [];
+  for (t = base.actions.record.requestedAtMs; t < learned; t += 50) pairs.push(wallPair({ wall, mono }));
+  t = learned;
+  const late = sessionClock(origin, { wall, mono }), atOrigin = sessionClock(origin, { pairs, wall, mono });
+  const measured = clock => ({ ...tight, actions: Object.fromEntries(Object.entries(tight.actions).map(([key, a]) =>
+    [key, { requestedAtMs: (t = a.requestedAtMs, clock.at(mono())), observedAtMs: (t = a.observedAtMs, clock.at(mono())) }])) });
+  const fixed = measured(atOrigin);
+  assert.ok(Math.abs(fixed.actions.meOff.requestedAtMs - tight.actions.meOff.requestedAtMs) < 0.05, `meOff ${fixed.actions.meOff.requestedAtMs}`);
+  assert.deepEqual(await verdicts(fixed, 'at-origin'), truth, 'mapped at its own instant: every verdict kept');
+  const old = await verdicts(measured(late), 'late');
+  assert.ok(old.includes('O5.selection'), `a mapping read 2.4 s late fails O5.selection, as on Mac #149: ${JSON.stringify(old)}`);
+});
+
+// Bracketing: interpolated between the two readings around the origin, from the nearest one
+// without a bracket, and a wall step between readings never picks a reading across it.
+test('sessionClock places the origin between the readings that bracket it', () => {
+  let t = 0;
+  const mono = () => 1000 + t, wall = () => 5_000_000 + 2 * t;  // a wall clock twice as fast: any error shows
+  const pairs = [];
+  for (t = -100; t <= 100; t += 40) pairs.push(wallPair({ wall, mono }));
+  t = 5000;
+  assert.equal(sessionClock(5_000_000 + 2 * 30, { pairs, wall, mono }).originMono, 1030, 'between -20 and 60: interpolated');
+  assert.equal(sessionClock(5_000_000 - 2 * 300, { pairs, wall, mono }).originMono, 1000 - 100 - 2 * 200, 'before every reading: from the first');
+  assert.equal(sessionClock(5_000_000 + 2 * 5000, { wall, mono }).originMono, 1000 + 5000, 'no pairs: the reading now, as before');
 });
 
 // The driver and its folder clock never read the wall clock: every time they record or wait on
@@ -249,6 +303,40 @@ test('a failure after Record stops the recording, runs cleanup once and stops th
   assert.ok(record.requestedAtMs >= -BOUND && record.requestedAtMs <= record.observedAtMs && record.observedAtMs < BOUND,
     `record on the session timeline: ${JSON.stringify(record)}`);
   await holder.close();
+});
+
+// The real driver maps the origin at its own instant (Mac #149): an extension takes the origin
+// when Record starts and the driver learns it at least 300 ms later, on a wall clock running 5 %
+// fast. Mapped when it is learned, the record request would sit 15 ms or more after the origin;
+// mapped from the pairs the driver reads since before Record, it sits where it was asked, just
+// before the origin.
+test('the driver maps the origin at the instant it was taken, not when it learns it', async () => {
+  const run = await controlRun('origin-instant');
+  await poll(async () => { const c = await controlConnections(run.host); return c[0]?.relay && c[0].frames.length ? c : null; },
+    'the relay starts and logs the hello', BOUND, { pollMs: 5 });
+  const folder = await synthetic();
+  const { monotonic } = await import('../scenarios/session-clock.mjs');
+  const mono = monotonic, wall = () => 1_700_000_000_000 + mono() * 1.05;
+  let originAt = null, origin = null;
+  const { app, calls } = fakeApp(run, {
+    async record() { calls.record++; originAt = mono(); origin = Math.round(wall()); },
+    snapshot: async () => (originAt !== null && mono() - originAt >= 300 ? { path: folder, captureId: 'capture-test' } : null),
+    async selectMe() { throw new Error('injected failure after Record'); },
+  });
+  const late = {
+    async evaluate(fn) {
+      const source = String(fn);
+      if (source.includes('cassiniSessions')) return [{ tabId: 7, captureId: 'capture-test', startedAt: origin }];
+      return worker(0).evaluate(fn);
+    },
+  };
+  await assert.rejects(runLiveFolder({ meeting: page, remote: page, app, worker: late, out: run.out, log: () => {}, clocks: { mono, wall } }),
+    /injected failure after Record/);
+  const partial = JSON.parse(await readFile(path.join(run.out, 'evidence.partial.json'), 'utf8'));
+  const record = partial.actions.record;
+  assert.ok(record.requestedAtMs > -2 && record.requestedAtMs < 1, `record requested at the origin's instant: ${JSON.stringify(record)}`);
+  assert.ok(record.observedAtMs >= 300, `record observed after the 300 ms wait: ${JSON.stringify(record)}`);
+  assert.ok(partial.notes.originPairs >= 3, `pairs read across Record: ${partial.notes.originPairs}`);
 });
 
 test('a failure during the control launcher\'s startup runs cleanup once and kills the launcher waiting on its FIFO', async () => {

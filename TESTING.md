@@ -204,7 +204,11 @@ own: the adapter passes the pages and the extension's service worker.
   the origin the extension holds (a wall-clock `Date.now()`) is mapped onto the system's
   monotonic clock once, as SPEC requires of capturing documents, and the wall clock is never
   read again, so a drifting or stepping wall clock (a hosted VM's ran 500 ppm fast) moves no
-  requested or observed time. They are app-neutral: the `chrome.storage.session` `cassiniSessions[]` entry of
+  requested or observed time. The mapping is at the origin's own instant: the driver reads
+  (monotonic, wall) pairs from before Record until the extension reports the origin and places
+  it between the two that bracket it, as an app that maps it when recording starts does. One
+  read when the driver learns the origin, 2.35 s later on a wall clock slewing 510 ppm, put a
+  selection the app stamped at once 1.2 ms before its request (Mac #149, O5.selection). They are app-neutral: the `chrome.storage.session` `cassiniSessions[]` entry of
   the meeting tab gives the evidence's `captureId` and integer `timelineOriginMs`.
 - Mute: asked once F(A) and the session clock both reach `MUTE_START_MS`, unmuted once both
   reach `mute.requested + MUTE_MS` (O2.muteStart, O2.duration).
