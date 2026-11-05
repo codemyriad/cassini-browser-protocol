@@ -1,0 +1,65 @@
+// D68.1 regression check: a capture longer than 30 s keeps real time.
+//
+// Chromium moves an AudioContext whose output has been all zeros for about 30 s (its silent sink
+// suspender) off the audio device onto a timer. On hosted macOS that timer delivers 30-50% of
+// real time. The extension's capture graph outputs silence by design, and the worklet stamps every
+// frame by its context's render clock, so a suspended capture context makes every track's frames
+// and timestamps fall behind the session. This drives the production capture() (extension/capture.js
+// and pcm-worklet.js, served as the page loads them) for 45 s of audio and checks it took real time.
+// The input does not matter: the capture context's own render clock sets the frames.
+import assert from 'node:assert/strict';
+import { createServer } from 'node:http';
+import { readFile } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
+
+const AUDIO_SECONDS = 45;   // well past the suspender's 30 s
+const BOUND_SECONDS = 75;   // a context at the hosted timer's 0.5 needs about 60 s for 45 s of audio
+const MIN_RATE = 0.97;      // audio seconds per wall second, from the first frame
+
+const server = createServer(async (request, response) => {
+  if (request.url === '/') { response.end('<!doctype html><title>Capture keeps real time</title><body>'); return; }
+  if (!['/capture.js', '/pcm-worklet.js'].includes(request.url)) { response.writeHead(404).end(); return; }
+  response.setHeader('Content-Type', 'text/javascript');
+  response.end(await readFile(path.join(root, 'extension', request.url.slice(1))));
+});
+await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+const address = `http://127.0.0.1:${server.address().port}/`;
+let browser;
+try {
+  browser = await chromium.launch({ headless: true, args: ['--autoplay-policy=no-user-gesture-required'] });
+  const page = await browser.newPage();
+  await page.goto(address);
+  const frames = [];  // [wall ms, frames] per audio packet, recorded in Node
+  let failure = null;
+  await page.exposeFunction('recordAudio', count => { frames.push([Date.now(), count]); });
+  await page.exposeFunction('recordFailure', message => { failure = message; });
+  await page.evaluate(async () => {
+    const { capture } = await import('/capture.js');
+    // A source track from its own context; its content and pace do not matter here.
+    const source = new AudioContext({ sampleRate: 48000 }), oscillator = source.createOscillator(), output = source.createMediaStreamDestination();
+    oscillator.connect(output); oscillator.start(); await source.resume();
+    const send = async packet => { if (packet.type === 'audio') await window.recordAudio(atob(packet.pcm).length / 2); };
+    window.capturing = await capture({ stream: output.stream, id: 'real-time', label: 'Real time', kind: 'local', origin: Date.now(),
+      workletURL: location.origin + '/pcm-worklet.js', send, fail: message => window.recordFailure(String(message)) });
+  });
+  // Event wait: until the capture holds AUDIO_SECONDS of frames, bounded in wall time.
+  const total = () => frames.reduce((sum, [, count]) => sum + count, 0) / 48000;
+  for (;;) {
+    assert.equal(failure, null, `capture failed: ${failure}`);
+    if (total() >= AUDIO_SECONDS) break;
+    const elapsed = frames.length ? (Date.now() - frames[0][0]) / 1000 : 0;
+    assert.ok(elapsed < BOUND_SECONDS, `only ${total().toFixed(1)} s of audio after ${elapsed.toFixed(1)} s: the capture context fell behind real time`);
+    await new Promise(resolve => setTimeout(resolve, 250));
+  }
+  const wall = (frames.at(-1)[0] - frames[0][0]) / 1000, audio = total();
+  const rate = audio / wall;
+  console.log(`capture-real-time: ${audio.toFixed(2)} s of audio in ${wall.toFixed(2)} s of wall time (rate ${rate.toFixed(3)})`);
+  assert.ok(rate >= MIN_RATE, `the capture clock ran at ${rate.toFixed(3)} of real time (minimum ${MIN_RATE})`);
+  await page.evaluate(() => window.capturing.stop());
+} finally {
+  await browser?.close();
+  server.close();
+}
