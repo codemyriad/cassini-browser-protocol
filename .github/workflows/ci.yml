@@ -12,7 +12,8 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   contract:
-    runs-on: ubuntu-24.04
+    # CM_RUNNER=hetzner moves the job to the cm-hetzner runners; any other value keeps ubuntu-24.04.
+    runs-on: ${{ vars.CM_RUNNER == 'hetzner' && fromJSON('["self-hosted","cm-hetzner"]') || 'ubuntu-24.04' }}
     # p95 3.2 min over 178 green runs (2026-10-29..11-04), slowest 6.1 min: 10 min is about 3x p95.
     timeout-minutes: 10
     steps:
