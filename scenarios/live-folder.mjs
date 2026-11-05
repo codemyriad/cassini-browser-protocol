@@ -48,6 +48,10 @@ const ORACLE = path.resolve(import.meta.dirname, '../conformance/live-folder');
 export const CLEANUP_MS = 60000;
 // Bound on check.py: one that does not finish is killed and fails the run (then torn down).
 export const CHECK_MS = 300000;
+// While Record runs, the wall clock is read this often (a reading, never a wait), so the origin the
+// extension takes then lies between two readings this close: a wall-clock step there is told from
+// a slew, and never interpolated across (scenarios/session-clock.mjs).
+export const ORIGIN_SAMPLE_MS = 10;
 
 // promise, or a rejection naming label once ms pass (the timer never outlives it).
 function bounded(promise, ms, label) {
@@ -139,6 +143,8 @@ export async function runLiveFolder({ meeting, remote, app, worker, out, log = c
     // Where the wall clock stood, read from before Record until the extension reports the origin,
     // so sessionClock maps the origin at its own instant (scenarios/session-clock.mjs).
     const pairs = [], sample = () => { pairs.push(wallPair(clocks)); };
+    let sampling = null;
+    const stopSampling = () => { clearInterval(sampling); sampling = null; };
     const actions = {}, notes = { steps: [] };
     let origin = null, timeline = null, clock = null, captureId = null, maxSourceCount = 0, slotC = null, before = null, newFolders = null;
     let requests = null, browserPid = null;
@@ -198,6 +204,7 @@ export async function runLiveFolder({ meeting, remote, app, worker, out, log = c
 
       // 1. Record.
       sample();
+      sampling = setInterval(sample, ORIGIN_SAMPLE_MS);
       let requested = now();
       recordAsked = true;
       await app.record();
@@ -225,6 +232,7 @@ export async function runLiveFolder({ meeting, remote, app, worker, out, log = c
       ({ captureId, startedAt: origin } = entry[0]);
       // SPEC: the wall-clock origin is mapped onto the monotonic clock once, at its own instant
       // (the pairs read since before Record bracket it); never the wall clock again.
+      stopSampling();
       timeline = sessionClock(origin, { pairs, ...clocks });
       notes.originPairs = pairs.length;
       if (notes.appCaptureId !== captureId) log(`live-folder: the app reports captureId ${notes.appCaptureId}, the extension ${captureId}`);
@@ -362,6 +370,7 @@ export async function runLiveFolder({ meeting, remote, app, worker, out, log = c
       try { result = JSON.parse(await readFile(resultFile, 'utf8')); } catch (error) { if (error.code !== 'ENOENT') throw error; }
       return { code: run.code, result, folder: status.path, evidence: evidenceFile, stdout: run.stdout, stderr: run.stderr };
     } catch (error) {
+      stopSampling();
       // Whatever was reached, for the failure's evidence; check.py never sees a partial run.
       notes.failure = error.stack;
       notes.folder = clock?.describe();

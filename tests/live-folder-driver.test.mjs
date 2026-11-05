@@ -122,17 +122,64 @@ test('a slewing wall clock never moves the origin the driver learns late (Mac #1
   assert.ok(old.includes('O5.selection'), `a mapping read 2.4 s late fails O5.selection, as on Mac #149: ${JSON.stringify(old)}`);
 });
 
-// Bracketing: interpolated between the two readings around the origin, from the nearest one
-// without a bracket, and a wall step between readings never picks a reading across it.
-test('sessionClock places the origin between the readings that bracket it', () => {
+// Bracketing: interpolated between the two readings around the origin. A wall-clock step is never
+// interpolated across (Codex on #58: readings at -100 and +100 ms with a +2000 ms step at the
+// origin put it 90.91 ms off): the origin is placed on the side of the step it was read on. It
+// is never placed before the first pair or after the reading now, so a step back that leaves its
+// wall time once in that window still maps; an origin no stretch places, or one a step near it
+// lets both sides place, throws.
+test('sessionClock places the origin between the readings that bracket it, never across a wall step', () => {
   let t = 0;
-  const mono = () => 1000 + t, wall = () => 5_000_000 + 2 * t;  // a wall clock twice as fast: any error shows
-  const pairs = [];
-  for (t = -100; t <= 100; t += 40) pairs.push(wallPair({ wall, mono }));
+  const mono = () => 1000 + t, near = (actual, expected, message, within = 1e-6) => assert.ok(Math.abs(actual - expected) < within, `${message}: ${actual}`);
+  const readings = (wall, times) => times.map(at => { t = at; return wallPair({ wall, mono }); });
+  const slewing = () => 5_000_000 + t * (1 + 500e-6);
+  let pairs = readings(slewing, [-100, -60, -20, 20, 60, 100]);
   t = 5000;
-  assert.equal(sessionClock(5_000_000 + 2 * 30, { pairs, wall, mono }).originMono, 1030, 'between -20 and 60: interpolated');
-  assert.equal(sessionClock(5_000_000 - 2 * 300, { pairs, wall, mono }).originMono, 1000 - 100 - 2 * 200, 'before every reading: from the first');
-  assert.equal(sessionClock(5_000_000 + 2 * 5000, { wall, mono }).originMono, 1000 + 5000, 'no pairs: the reading now, as before');
+  near(sessionClock(5_000_000 + 30 * (1 + 500e-6), { pairs, wall: slewing, mono }).originMono, 1030, 'between -20 and 60: interpolated');
+  assert.throws(() => sessionClock(5_000_000 - 300 * (1 + 500e-6), { pairs, wall: slewing, mono }), /fits no stretch/, 'before the first pair');
+  near(sessionClock(5_000_000 + 5000 * (1 + 500e-6), { wall: slewing, mono }).originMono, 6000, 'no pairs: the reading now, as before');
+  // A 2000 ppm slew (no step) across a 2 s gap between readings is a slew: interpolated.
+  const fast = () => Math.floor(5_000_000 + t * 1.002);
+  pairs = readings(fast, [0, 2000, 2100]);
+  t = 2400;
+  near(sessionClock(Math.floor(5_000_000 + 1000 * 1.002), { pairs, wall: fast, mono }).originMono, 2000, 'a fast slew across a 2 s gap', 1.5);
+  // A +2000 ms step at t = 0, readings at -100 and +100: the origin read just before the step
+  // (5_000_000) or just after it (5_002_000) is t = 0 either way; a wall time it skipped fits none.
+  const forward = () => 5_000_000 + t + (t >= 0 ? 2000 : 0);
+  pairs = readings(forward, [-100, 100]);
+  t = 2400;
+  near(sessionClock(5_000_000, { pairs, wall: forward, mono }).originMono, 1000, 'read before the step');
+  near(sessionClock(5_002_000, { pairs, wall: forward, mono }).originMono, 1000, 'read after the step');
+  assert.throws(() => sessionClock(5_001_000, { pairs, wall: forward, mono }), /fits no stretch/, 'a wall time the step skipped');
+  // The mirror: a -2000 ms step at t = 0. The origin's wall time comes round again only after
+  // the reading now, so it is t = 0.
+  const back = () => 5_000_000 + t - (t >= 0 ? 2000 : 0);
+  pairs = readings(back, [-100, 100]);
+  t = 200;
+  near(sessionClock(5_000_000, { pairs, wall: back, mono }).originMono, 1000, 'a step back after the origin');
+  // Readings on to 2400 ms: wall times from just before the step come round again inside them.
+  pairs = readings(back, Array.from({ length: 26 }, (_, i) => -100 + 100 * i));
+  t = 2500;
+  assert.throws(() => sessionClock(5_000_000 - 50, { pairs, wall: back, mono }), /stepped near the origin/, 'two instants read that wall time');
+  near(sessionClock(5_000_000 + 300, { pairs, wall: back, mono }).originMono, 1000 + 2300, 'a wall time read only after the step back');
+  // A +50 ms step at t = 0 with readings 100 ms apart, the origin read at t = -1: both sides of
+  // the step could have read it, so it throws, naming a step (not a step back).
+  const small = () => 5_000_000 + t + (t >= 0 ? 50 : 0);
+  pairs = readings(small, [-500, -400, -300, -200, -100, 0, 100, 200, 300, 400, 500]);
+  t = 2400;
+  assert.throws(() => sessionClock(4_999_999, { pairs, wall: small, mono }), /stepped near the origin/, 'a step smaller than the reading gap');
+  // Review of #58: a +100 ms step just after the origin, at the end of a 3 s gap, on a wall clock
+  // slewing 1000 ppm. The side the origin was read on lands just past its window; it must not
+  // lose to the other side silently, 100 ms off. It throws (the driver reads every 10 ms during
+  // Record, so its gaps are never this long).
+  pairs = [{ mono: 0, wall: 5_000_000 }, { mono: 3000, wall: 5_003_103 }, { mono: 3100, wall: 5_003_203 }];
+  t = 2200;
+  assert.throws(() => sessionClock(5_003_002, { pairs, wall: () => 5_003_303, mono: () => 3200 }), /stepped near the origin/, 'never the far side, silently');
+  // A reader descheduled mid-reading (its midpoint 2 ms off, spread 5 ms) is no step: the origin
+  // maps within that uncertainty instead of throwing.
+  pairs = [{ mono: 900, wall: 4_999_900, spread: 0 }, { mono: 1002, wall: 5_000_000, spread: 5 }, { mono: 1100, wall: 5_000_100, spread: 0 }];
+  t = 200;
+  near(sessionClock(5_000_050, { pairs, wall: () => 5_000_000 + t, mono }).originMono, 1050, 'a slow reading, no step', 2);
 });
 
 // The driver and its folder clock never read the wall clock: every time they record or wait on
@@ -243,7 +290,8 @@ const worker = origin => ({
     const source = String(fn);
     if (source.includes('getManifest')) return '0.0.0-test';
     if (source.includes('tabs.query')) return [7];
-    if (source.includes('cassiniSessions')) return [{ tabId: 7, captureId: 'capture-test', startedAt: origin }];
+    // origin may be a function: the extension takes the origin at Record, after the driver's first pair.
+    if (source.includes('cassiniSessions')) return [{ tabId: 7, captureId: 'capture-test', startedAt: typeof origin === 'function' ? origin() : origin }];
     throw new Error(`unexpected service worker call ${source}`);
   },
 });
@@ -282,12 +330,14 @@ test('a failure after Record stops the recording, runs cleanup once and stops th
   // browser closes: only stopRelays ends it.
   const holder = await open(path.join(run.host.observe, '1', 'out'), 'w');
   const folder = await synthetic();
+  let origin = null;
   const { app, calls } = fakeApp(run, {
+    async record() { calls.record++; origin = Date.now(); },
     snapshot: async () => (calls.record ? { path: folder, captureId: 'capture-test' } : null),
     async selectMe() { throw new Error('injected failure after Record'); },
   });
   const logged = [];
-  await assert.rejects(runLiveFolder({ meeting: page, remote: page, app, worker: worker(Date.now()), out: run.out, log: line => logged.push(line) }),
+  await assert.rejects(runLiveFolder({ meeting: page, remote: page, app, worker: worker(() => origin), out: run.out, log: line => logged.push(line) }),
     /injected failure after Record/);
   assert.deepEqual([calls.record, calls.stop, calls.cleanup], [1, 1, [{ failed: true }]], 'Record asked, so Stop asked; cleanup once');
   assert.equal(await exitOf(run.browser).then(r => r.code), 0, 'the host saw its stdin end and exited');
@@ -305,22 +355,22 @@ test('a failure after Record stops the recording, runs cleanup once and stops th
   await holder.close();
 });
 
-// The real driver maps the origin at its own instant (Mac #149): an extension takes the origin
-// when Record starts and the driver learns it at least 300 ms later, on a wall clock running 5 %
-// fast. Mapped when it is learned, the record request would sit 15 ms or more after the origin;
-// mapped from the pairs the driver reads since before Record, it sits where it was asked, just
-// before the origin.
+// The real driver maps the origin at its own instant (Mac #149). Its clocks are injected and
+// advanced by the test, never by real time (E1): the extension takes the origin at Record, and
+// the app's snapshot is released only after the test moves the clocks on 10 s, on a wall clock
+// slewing 510 ppm and read in whole ms. Mapped when it is learned, the Record request would sit
+// 5 ms after the origin; mapped from the pairs the driver read since before Record, it sits at it.
 test('the driver maps the origin at the instant it was taken, not when it learns it', async () => {
   const run = await controlRun('origin-instant');
   await poll(async () => { const c = await controlConnections(run.host); return c[0]?.relay && c[0].frames.length ? c : null; },
     'the relay starts and logs the hello', BOUND, { pollMs: 5 });
   const folder = await synthetic();
-  const { monotonic } = await import('../scenarios/session-clock.mjs');
-  const mono = monotonic, wall = () => 1_700_000_000_000 + mono() * 1.05;
-  let originAt = null, origin = null;
+  let t = 0, origin = null, recorded, release;
+  const mono = () => 50_000 + t, wall = () => Math.floor(1_700_000_000_000 + t * (1 + 510e-6));
+  const asked = new Promise(resolve => { recorded = resolve; }), released = new Promise(resolve => { release = resolve; });
   const { app, calls } = fakeApp(run, {
-    async record() { calls.record++; originAt = mono(); origin = Math.round(wall()); },
-    snapshot: async () => (originAt !== null && mono() - originAt >= 300 ? { path: folder, captureId: 'capture-test' } : null),
+    async record() { calls.record++; origin = wall(); recorded(); },
+    async snapshot() { await released; return { path: folder, captureId: 'capture-test' }; },
     async selectMe() { throw new Error('injected failure after Record'); },
   });
   const late = {
@@ -330,13 +380,59 @@ test('the driver maps the origin at the instant it was taken, not when it learns
       return worker(0).evaluate(fn);
     },
   };
-  await assert.rejects(runLiveFolder({ meeting: page, remote: page, app, worker: late, out: run.out, log: () => {}, clocks: { mono, wall } }),
-    /injected failure after Record/);
+  const running = runLiveFolder({ meeting: page, remote: page, app, worker: late, out: run.out, log: () => {}, clocks: { mono, wall } });
+  await asked;
+  t = 10_000;
+  release();
+  await assert.rejects(running, /injected failure after Record/);
   const partial = JSON.parse(await readFile(path.join(run.out, 'evidence.partial.json'), 'utf8'));
   const record = partial.actions.record;
-  assert.ok(record.requestedAtMs > -2 && record.requestedAtMs < 1, `record requested at the origin's instant: ${JSON.stringify(record)}`);
-  assert.ok(record.observedAtMs >= 300, `record observed after the 300 ms wait: ${JSON.stringify(record)}`);
+  assert.ok(Math.abs(record.requestedAtMs) < 0.5, `record requested at the origin's instant: ${JSON.stringify(record)}`);
+  assert.equal(record.observedAtMs, 10_000, `record observed when the test moved the clocks on: ${JSON.stringify(record)}`);
   assert.ok(partial.notes.originPairs >= 3, `pairs read across Record: ${partial.notes.originPairs}`);
+});
+
+// The driver reads the wall clock all through Record (ORIGIN_SAMPLE_MS), so a step during a long
+// Record call is told from the origin around it. Here the injected clocks move only when the
+// driver reads the wall clock while Record runs: 10 ms a reading. The extension takes the origin
+// at t = 1000, the wall clock steps +300 ms at t = 1500 and Record returns at t = 2000. With only
+// the readings before and after Record, both sides of the step would place the origin and the
+// run would throw; read throughout, the Record request sits 1000 ms before the origin.
+test('the driver reads the wall clock all through Record, so a step during it is no ambiguity', async () => {
+  const run = await controlRun('origin-step');
+  await poll(async () => { const c = await controlConnections(run.host); return c[0]?.relay && c[0].frames.length ? c : null; },
+    'the relay starts and logs the hello', BOUND, { pollMs: 5 });
+  const folder = await synthetic();
+  let t = 0, origin = null, recording = false, done;
+  const reached = new Promise(resolve => { done = resolve; });
+  const reading = () => Math.floor(1_700_000_000_000 + t * (1 + 510e-6)) + (t >= 1500 ? 300 : 0);
+  const mono = () => 50_000 + t;
+  const wall = () => {
+    if (recording) {
+      t += 10;
+      if (t === 1000) origin = reading();
+      if (t >= 2000) done();
+    }
+    return reading();
+  };
+  const { app, calls } = fakeApp(run, {
+    async record() {
+      calls.record++; recording = true;
+      // Bounded only so a driver that never reads the clock during Record fails instead of hanging.
+      await poll(() => (t >= 2000 ? true : null), 'the driver reads the wall clock while Record runs', BOUND, { pollMs: 5 });
+      await reached; recording = false;
+    },
+    snapshot: async () => ({ path: folder, captureId: 'capture-test' }),
+    async selectMe() { throw new Error('injected failure after Record'); },
+  });
+  await assert.rejects(runLiveFolder({ meeting: page, remote: page, app, worker: worker(() => origin), out: run.out, log: () => {}, clocks: { mono, wall } }),
+    /injected failure after Record/);
+  const partial = JSON.parse(await readFile(path.join(run.out, 'evidence.partial.json'), 'utf8'));
+  // Within the readings' own uncertainty: the clocks move inside each reading, so its monotonic
+  // midpoint is 5 ms from the instant it read (its spread). Without readings through Record the
+  // run throws instead (both sides of the step place the origin).
+  assert.ok(Math.abs(partial.actions.record.requestedAtMs + 1000) <= 5, `record requested 1000 ms before the origin: ${JSON.stringify(partial.actions.record)}`);
+  assert.ok(partial.notes.originPairs >= 200, `pairs read through Record: ${partial.notes.originPairs}`);
 });
 
 test('a failure during the control launcher\'s startup runs cleanup once and kills the launcher waiting on its FIFO', async () => {
