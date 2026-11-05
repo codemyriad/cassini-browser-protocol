@@ -14,7 +14,7 @@ async function bounded(promise, message, schedule = setTimeout, cancel = clearTi
 
 // D68.1: Chromium moves an AudioContext whose output has been all zeros for about 30 s (its
 // silent sink suspender) off the audio device onto a timer, which on some machines delivers far
-// less than real time (0.3-0.5 on hosted macOS). The capture graph's output is silent by design,
+// less than real time (0.3-0.5 on some CI virtual machines). The capture graph's output is silent by design,
 // and the worklet stamps every frame by its context's render clock, so every track would fall
 // behind the session. An inaudible constant (6e-8, -144 dBFS, below one 16-bit step) into the
 // destination keeps the context on the device clock. Once per context, shared ones included;
