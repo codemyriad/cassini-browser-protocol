@@ -194,13 +194,14 @@ test('each capture context keeps real time with one inaudible constant into its 
 });
 
 // D39 installers replace an installed companion only with a strictly newer one, so the D68.1
-// capture fix shipped as 0.2.13 and the D61.1 stall re-anchor ships as 0.2.14 or later.
-test('the companion that keeps capture on real time and re-anchors a stall is 0.2.14 or later', () => {
+// capture fix shipped as 0.2.13, the D61.1 stall re-anchor as 0.2.14, and D61.1 steady drift
+// (no re-anchor for a steady rate) ships as 0.2.15 or later.
+test('the companion that keeps capture on real time and re-anchors only a stall is 0.2.15 or later', () => {
   const { version } = JSON.parse(require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'manifest.json'), 'utf8'));
   const [major, minor, patch] = version.split('.').map(Number);
-  assert.ok(major > 0 || minor > 2 || (minor === 2 && patch >= 14), `manifest version ${version}`);
+  assert.ok(major > 0 || minor > 2 || (minor === 2 && patch >= 15), `manifest version ${version}`);
   assert.match(source, /export function keepRealTime\(context\)/, 'capture.js keeps each context on real time');
-  assert.match(source, /export const STALL_STEP_MS = 50, STALL_AGREE_MS = 20, STALL_CONFIRM_MS = 100, STALL_DRIFT = 0.002;/, 'capture.js re-anchors a render stall');
+  assert.match(source, /export const STALL_STEP_MS = 50, STALL_AGREE_MS = 20, STALL_CONFIRM_MS = 100, STALL_CENTER = 0.002;/, 'capture.js re-anchors a render stall, not drift');
 });
 
 test('ten-second source budget pipelines four requests, counts drops and leaves other sources running', async () => {
@@ -725,7 +726,7 @@ test('D61.1: losses below the step per reading still add up to a re-anchor (ten 
     for (let k = 0; k < 10; k++) { rig.stall(45); for (let i = 0; i < 3; i++) await rig.render(); }
     await a.stop();
     const errors = placement(rig, a, 'A');
-    // Main corrected none of the 450 ms. What drift tracking absorbs is bounded by STALL_DRIFT.
+    // Main corrected none of the 450 ms. What re-centring absorbs is bounded by STALL_CENTER.
     assert.ok(errors.every(error => error <= 0.001 && error > -STEP_BOUND), `errors ${errors.map(e => e.toFixed(1))}`);
     assert.ok(Math.abs(errors.at(-1)) < 10, `last error ${errors.at(-1)}`);
   });
@@ -768,19 +769,75 @@ test('D61.1: stamps that keep crossing the level hold chunks at most about a sec
   });
 });
 
-test('D61.1: rendering steadily slower than real time is re-anchored as it goes, never left to accumulate', async () => {
-  await device(async rig => {
-    const a = await rig.start('A');
-    for (let i = 0; i < 4; i++) await rig.render();
-    // 30 ms lost per 171 ms batch (rendering at 85% of real time): 1.8 s over the run.
-    for (let i = 0; i < 60; i++) {
-      await rig.render({ drift: 30 });
-      assert.ok(rig.audio('A').length >= 4 + i + 1 - 7, `held ${4 + i + 1 - rig.audio('A').length} at batch ${i}`);
-    }
-    await a.stop();
-    const errors = placement(rig, a, 'A');
-    assert.ok(rig.jumps('A').every(jump => jump > 0), 'offsets never move backward');
-    // What is left is at most a second of loss plus one step, never the 1.8 s.
-    assert.ok(errors.every(error => error <= 0.001 && error > -(30 * 48000 / 8192 + STEP_BOUND)), `errors ${errors.map(e => e.toFixed(0))}`);
-  });
+// D61.1 steady drift (decision on #56, 0.2.15): a steady rate is clock drift, not lost audio. The
+// audio is continuous, so offsets follow the capture clock (render frames) at any rate; only a
+// discontinuity re-anchors. 12000 ppm is Apple's virtual sound device: 0.2.14 re-anchored it by
+// about 121 jumps of 50 ms per ten minutes.
+const TEN_MINUTES = Math.ceil(600 * 48000 / 8192);
+const perBatch = ppm => 8192 / 48 * ppm / 1e6;
+const report = jumps => `${jumps.length} jumps, ${jumps.reduce((sum, jump) => sum + jump, 0).toFixed(0)} ms in all`;
+
+test('D61.1: steady drift follows the capture clock with no jump (10 min at 12000 ppm slow and fast)', async () => {
+  for (const ppm of [12000, -12000]) {
+    await device(async rig => {
+      const a = await rig.start('A');
+      for (let i = 0; i < TEN_MINUTES; i++) await rig.render({ drift: perBatch(ppm) });
+      await a.stop();
+      const jumps = rig.jumps('A');
+      assert.equal(jumps.length, 0, `${ppm} ppm: ${report(jumps)}`);
+      assert.equal(rig.audio('A').length, TEN_MINUTES);
+      // Offsets are render frames on the calibration: the drift stays in the placement, bounded.
+      const errors = placement(rig, a, 'A');
+      close(errors.at(-1), -perBatch(ppm) * TEN_MINUTES, `${ppm} ppm: the last chunk is off by the drift alone`);
+    });
+  }
+});
+
+test('D61.1: steady drift with jitter never re-anchors (10 min at 12000 ppm, +-3 ms and +-12 ms as Pulse reads)', async () => {
+  let seed = 11;
+  const random = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  for (const [ppm, jitter] of [[12000, 3], [-12000, 3], [12000, 12], [-12000, 12]]) {
+    await device(async rig => {
+      rig.dev.noise = () => (random() * 2 - 1) * jitter;
+      const a = await rig.start('A');
+      for (let i = 0; i < TEN_MINUTES; i++) await rig.render({ drift: perBatch(ppm) });
+      await a.stop();
+      const jumps = rig.jumps('A');
+      assert.equal(jumps.length, 0, `${ppm} ppm, jitter ${jitter} ms: ${report(jumps)}`);
+    });
+  }
+});
+
+test('D61.1: rendering steadily at 85% or 115% of real time is drift too: no jump, chunks held at most about a second', async () => {
+  for (const drift of [30, -30]) {
+    await device(async rig => {
+      const a = await rig.start('A');
+      for (let i = 0; i < 4; i++) await rig.render();
+      // 30 ms per 171 ms batch, 1.8 s over the run.
+      for (let i = 0; i < 60; i++) {
+        await rig.render({ drift });
+        assert.ok(rig.audio('A').length >= 4 + i + 1 - 7, `held ${4 + i + 1 - rig.audio('A').length} at batch ${i}`);
+      }
+      await a.stop();
+      const jumps = rig.jumps('A');
+      assert.equal(jumps.length, 0, `${drift} ms per batch: ${report(jumps)}`);
+      assert.equal(rig.audio('A').length, 64);
+    });
+  }
+});
+
+test('D61.1: a stall during steady drift re-anchors by the stall alone (12000 ppm slow and fast, 0.5 s and 2 s)', async () => {
+  for (const ppm of [12000, -12000]) for (const stall of [500, 2000]) {
+    await device(async rig => {
+      const a = await rig.start('A');
+      const minute = Math.ceil(60 * 48000 / 8192);
+      for (let i = 0; i < minute; i++) await rig.render({ drift: perBatch(ppm) });
+      rig.stall(stall);
+      for (let i = 0; i < minute; i++) await rig.render({ drift: perBatch(ppm) });
+      await a.stop();
+      const jumps = rig.jumps('A');
+      assert.equal(jumps.length, 1, `${ppm} ppm, ${stall} ms stall: ${report(jumps)}`);
+      assert.ok(Math.abs(jumps[0] - stall) < 0.001, `${ppm} ppm: jump ${jumps[0]}, stall ${stall}`);
+    });
+  }
 });

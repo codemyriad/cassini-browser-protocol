@@ -122,14 +122,28 @@ Since extension 0.2.14 (D61.1) a render stall re-anchors its context. While rend
 the frames it never renders are never counted, so render frames alone would place every later
 chunk early by the stall, on every span of that context. The extension tracks the level
 performanceTime - contextTime*1000 - outputLatency*1000 of each fresh getOutputTimestamp (one
-whose contextTime moved). It tolerates jitter within 50 ms and follows drift no faster than 2 ms
-per rendered second, so a loss spread over many small steps (rendering slower than real time)
-still adds up. When the level rises by more
+whose contextTime moved) as a line: a level and a slope per rendered millisecond.
+Since extension 0.2.15 a steady rate is clock drift, not lost audio (the coordinator's decision on #56: "a
+steady slow rate is clock drift, not lost audio. The audio is continuous, so stamps follow the
+capture clock. Only discontinuities (stalls) re-anchor or count as gaps. Bounded drift is
+accepted."). So offsets follow render frames at any steady rate, faster or slower than real
+time (a device 1.2% slow, as Apple's virtual sound device runs, gets no jump), and only a
+discontinuity re-anchors. The line is re-centred on the readings no faster than 2 ms per
+rendered second, which absorbs jitter within 50 ms and a small slope error but never a stall,
+so losses below 50 ms per reading still add up. A reading more than 50 ms from the line is
+drift when it continues the trend of the readings before it (their least-squares line, from at
+least four of the last 64 readings, extended over the held readings, agrees with them within
+20 ms on average) or, once at least four readings are held, when their own line meets the last
+reading before them within 20 ms (a rate that changed with no jump); and, either way, when
+between every two consecutive readings of that line the level moved by its slope times the
+rendered time within 25 ms (a stall is a discontinuity, even one below 50 ms). The line then
+takes that slope and nothing re-anchors. Anything else is a step. When the level rises by more
 than 50 ms against its tracked value (or, for the first fresh stamp, against the calibration
 seed plus the roundTrip uncertainty) and a fresh stamp read at least 100 ms later agrees within
-20 ms, the context re-anchors forward by the smaller agreeing step; a rise that neither confirms
+20 ms, the context re-anchors forward by the smaller agreeing step (while fewer than four
+readings precede the rise and fewer are held, an agreeing pair settles nothing yet); a rise that neither confirms
 nor reverts within one second of opening settles at its smallest reading, and one whose readings
-keep crossing the level settles at no step then. The level becomes the reading the step was
+keep crossing the level settles at no step then. The line moves to the reading the step was
 taken at, so a rise that continues past it is judged again. (After a renderer
 stall the page reads a backlog of chunks within a millisecond while rendering catches up, so
 stamps read together are no confirmation.) A span that stops during an unsettled rise places
@@ -137,7 +151,9 @@ its own held chunks at the rise's smallest reading and leaves the rise open for 
 other and later spans. The re-anchor
 applies from the stalled frame (the frame of the last fresh stamp before the rise, or the first
 chunk still held, whichever is later) for every span on the context, current and later.
-Offsets never move backward: a confirmed fall is never applied and only offsets a later rise.
+Offsets never move backward: a confirmed fall that is not drift is never applied and only
+offsets a later rise, and so does any fall that opens within two seconds of a re-anchor or of
+such a fall (rendering returning part of what a stall lost, not a rate).
 The origin mapping is never re-read, and the clock facts are unchanged, so all spans still
 repeat the same values. Chunks that arrive while a rise is unsettled are held, and so are a
 span's first chunks (up to four, or one second) while its context has no positive output stamp
@@ -467,7 +483,8 @@ New writers always write the key, so `gaps: []` means no gaps and a missing key 
   only a little received audio separates two of them.
 - `kind` is diagnostic and open. Host-derived kinds: `jump` (browser offset jump; overflow,
   suspension and stalls look the same on the wire; since extension 0.2.14 a browser render
-  stall reaches the host as a `jump` too, with no producer tag), `input` (native host-time gap), `prefix`
+  stall reaches the host as a `jump` too, with no producer tag; since 0.2.15 steady clock drift
+  never does), `input` (native host-time gap), `prefix`
   (selection boundary to the first frame, browser or native, never in gapFrames), `writer` (below). `dropped` and `suspended` are
   reserved for a later producer tag. Readers treat every kind as absence.
 - Budget: at most 1000 ranges per track, then one `{atMs, kind:"overflow"}` at the next gap,
