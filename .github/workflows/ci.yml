@@ -14,7 +14,8 @@ jobs:
   launcher-paths:
     # Light gate for launcher-macos: did this change touch the launcher, the relay, their
     # tests, what those tests import or read, or this workflow? Unknown base: run it.
-    runs-on: ${{ vars.CM_RUNNER == 'hetzner' && fromJSON('["self-hosted","cm-hetzner"]') || 'ubuntu-24.04' }}
+    # A light job: a constant GitHub-hosted label (the CM_RUNNER selector stays the contract job's).
+    runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
       changed: ${{ steps.paths.outputs.changed }}
