@@ -69,8 +69,9 @@ test('a drifting or stepping wall clock never changes the oracle\'s verdicts', a
       actions: Object.fromEntries(Object.entries(base.actions).map(([key, a]) => [key, { requestedAtMs: via(a.requestedAtMs), observedAtMs: via(a.observedAtMs) }])),
       resumeRequests: base.resumeRequests.map(r => ({ ...r, atMs: via(r.atMs) })) });
     const monotonicRun = measured(ms => { t = ms; return clock.at(mono()); });
-    // Mapped at the origin's own instant, no drift remains (wall readings are whole ms).
-    const bound = 1;
+    // Mapped at the origin's own instant, no drift remains: this wall clock is linear and unrounded,
+    // so the mapping is exact up to floating point (#58 review: a 0.9 ms error must fail here).
+    const bound = 0.01;
     for (const [key, a] of Object.entries(monotonicRun.actions)) {
       assert.ok(Math.abs(a.requestedAtMs - base.actions[key].requestedAtMs) <= bound, `${name}: ${key} requested ${a.requestedAtMs}`);
       assert.ok(Math.abs(a.observedAtMs - base.actions[key].observedAtMs) <= bound, `${name}: ${key} observed ${a.observedAtMs}`);
