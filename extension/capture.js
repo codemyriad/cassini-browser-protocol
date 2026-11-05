@@ -80,18 +80,21 @@ function resumeSuspended(context) {
 // Steady drift (0.2.15, the decision on #56): a steady rate is clock drift, not lost audio. The
 // audio is continuous, so offsets follow the capture clock (render frames) at any rate, and only
 // a discontinuity re-anchors. While the in-band readings (within STALL_STEP_MS of the line) are
-// steady, the line is their least-squares line, over up to TRAIL_READINGS of them from
-// SETTLE_READINGS + 1 on, so it learns the rate as the readings come and steady drift stays in
-// the band; otherwise the line keeps its slope and is re-centred no faster than STALL_CENTER
-// (2 ms per rendered second). Readings are steady when no consecutive pair's move off the slope
-// stands out from the others': farther from their median move than half a step or STALL_SPREAD
-// times the median distance from it, whichever is larger. A discontinuity stands out, while
-// jitter of any size moves every pair alike. So a loss is seen only above the jitter: losses
-// that form a steady rate, or that the jitter hides, are drift; small stalls that stand out
-// (45 ms ones under 3 ms of jitter) still add up to a step. An in-band reading that stands out
-// from the line is suspect: the line does not follow it, and a hold that opens next starts at it.
-// The line does not follow within STALL_RECOVER_MS of a re-anchor. A reading beyond
-// STALL_STEP_MS from the line opens a hold, which is then told apart:
+// steady, the line is the least-squares line of the last FOLLOW_READINGS of them (about four
+// seconds), from SETTLE_READINGS + 1 on, so it learns the rate as the readings come, follows a
+// rate that changes within a few seconds, and steady drift stays in the band; otherwise the line
+// keeps its slope and is re-centred no faster than STALL_CENTER (2 ms per rendered second).
+// Steadiness is judged over the whole trail (up to TRAIL_READINGS readings), so a discontinuity
+// keeps the line from following until it leaves the trail. Readings are steady when no
+// consecutive pair's move off the slope stands out from the others': farther from their median
+// move than half a step or STALL_SPREAD times the median distance from it, whichever is larger.
+// A discontinuity stands out, while jitter of any size moves every pair alike. So a loss is seen
+// only above the jitter: losses that form a steady rate, or that the jitter hides, are drift;
+// small stalls that stand out (45 ms ones under 3 ms of jitter) still add up to a step. An
+// in-band reading that stands out from the last FOLLOW_READINGS readings' distances to the line
+// is suspect: the line does not follow it, and a hold that opens next starts at it. The line
+// does not follow within STALL_RECOVER_MS of a re-anchor. A reading beyond STALL_STEP_MS from
+// the line opens a hold, which is then told apart:
 // - drift: the excursion continues the trend of the readings before it (their least-squares line,
 //   over at least SETTLE_READINGS of up to TRAIL_READINGS readings, extended over the held ones,
 //   agrees with them within STALL_AGREE_MS on average), or, once at least SETTLE_READINGS readings
@@ -121,7 +124,7 @@ function resumeSuspended(context) {
 // and the clock facts never change.
 // The lost time reaches the host as an offset jump, its `jump` gap.
 export const STALL_STEP_MS = 50, STALL_AGREE_MS = 20, STALL_CONFIRM_MS = 100, STALL_CENTER = 0.002, STALL_SPREAD = 6;
-const SETTLE_READINGS = 4, SETTLE_MS = 1000, TRAIL_READINGS = 64, STALL_RECOVER_MS = 2000;
+const SETTLE_READINGS = 4, SETTLE_MS = 1000, TRAIL_READINGS = 64, FOLLOW_READINGS = 24, STALL_RECOVER_MS = 2000;
 function clockRecord({ level0, seedSlack, seedTime, stampTime, ...measured }) {
   return { ...measured, anchors: [{ fromFrame: 0, addMs: 0 }], level: level0, slope: 0, seedSlack, seeded: false,
     lastStampTime: stampTime, ref: { contextTime: seedTime }, trail: [], pending: null, credit: 0, creditUntil: Infinity, recovered: -Infinity, spans: new Set() };
@@ -162,19 +165,24 @@ function steady(readings, slope) {
   for (let i = 1; i < readings.length; i++) moved.push(readings[i].x - readings[i - 1].x - slope * (readings[i].contextTime - readings[i - 1].contextTime) * 1000);
   return !moved.length || !outliers(moved);
 }
-// The line follows the trail: while the in-band readings are steady it is their least-squares
-// line, so it learns a rate from SETTLE_READINGS readings on and steady drift never leaves the
-// band. Not on a reading that stands out from the line, as the trail before it sits around the
+// The line follows the trail: while the in-band readings are steady it is the least-squares
+// line of the last FOLLOW_READINGS of them, so it learns a rate from SETTLE_READINGS readings on,
+// steady drift never leaves the band, and a rate that changes with no jump is followed within a
+// few seconds instead of lagging behind a fit that still holds the old rate (a stall then is
+// measured from the new rate, and the rate change is not misjudged as a step). Steadiness is
+// judged over the whole trail, so a discontinuity anywhere in it keeps the line from following.
+// Not on a reading that stands out from the line, as the readings before it sit around the
 // line: it is suspect, maybe the first of a loss seen through the jitter, and the readings after
 // it tell (a hold that opens next takes it). Not within STALL_RECOVER_MS of a re-anchor:
 // rendering returning part of a stall is credit, not a rate.
 function follow(clock, reading) {
   const trail = clock.trail;
   if (trail.length <= SETTLE_READINGS) return;
-  const off = trail.map(earlier => earlier.x - line(clock, earlier.contextTime));
+  const recent = trail.slice(-FOLLOW_READINGS);
+  const off = recent.map(earlier => earlier.x - line(clock, earlier.contextTime));
   if (outliers(off.slice(0, -1), off.slice(-1))) { reading.suspect = true; return; }
   if (performance.now() - clock.recovered <= STALL_RECOVER_MS) return;
-  const trend = fit(trail);
+  const trend = fit(recent);
   if (trend && steady(trail, trend.slope)) { clock.slope = trend.slope; clock.level = trend.at(reading.contextTime); }
 }
 // Whether the held readings are drift, and the line that follows it.
@@ -258,7 +266,7 @@ function read(clock, reading) {
 }
 // Whether a hold can be told apart yet. With SETTLE_READINGS held, their own line says. Before
 // that, only a discontinuity at the junction: the agreeing readings sit off the line by more than
-// half a step beyond where the last SETTLE_READINGS in-band readings sat. A rate that changed with
+// a step beyond where the last SETTLE_READINGS in-band readings sat. A rate that changed with
 // no jump creeps up to the band, so its last in-band readings already sit near the held ones.
 function judged(clock, readings, sign) {
   if (clock.pending.readings.length >= SETTLE_READINGS) return true;

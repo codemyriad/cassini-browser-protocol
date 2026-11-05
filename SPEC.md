@@ -129,15 +129,19 @@ capture clock. Only discontinuities (stalls) re-anchor or count as gaps. Bounded
 accepted."). So offsets follow render frames at any steady rate, faster or slower than real
 time (a device 1.2% slow, as Apple's virtual sound device runs, gets no jump), and only a
 discontinuity re-anchors. While the readings within 50 ms of the line are steady, the line is
-their least-squares line (over the last 64 of them, from five on), so it learns the rate as the
-readings come and steady drift stays within 50 ms of it; otherwise the line keeps its slope and
-is re-centred on the readings no faster than 2 ms per rendered second. Readings are steady when
+the least-squares line of the last 24 of them (about four seconds; from five readings on), so
+it learns the rate as the readings come, steady drift stays within 50 ms of it, and a rate that
+changes with no jump is followed within seconds (a stall soon after is measured from the new
+rate); otherwise the line keeps its slope and is re-centred on the readings no faster than 2 ms
+per rendered second. Steadiness is judged over the last 64 readings, so a discontinuity keeps
+the line from following while it is among them. Readings are steady when
 no consecutive pair's move off the slope stands out from the others': farther from their median
 move than 25 ms or six times the median distance from it, whichever is larger. A discontinuity
 stands out; jitter of any size moves every pair alike. So a loss is seen only above the jitter:
 losses that form a steady rate, or that the jitter hides, are drift and follow the capture
 clock, while small stalls that stand out (45 ms ones under 3 ms of jitter) still add up to a
-step. A reading within 50 ms that stands out from the line is suspect: the line does not follow
+step. A reading within 50 ms that stands out from the last 24 readings' distances to the line
+is suspect: the line does not follow
 it, and a hold that opens next starts at it. Within two seconds of a re-anchor the line does
 not follow the readings (rendering returning part of a stall is credit, not a rate). A reading
 more than 50 ms from the line opens a hold. It is drift when it continues the trend of the

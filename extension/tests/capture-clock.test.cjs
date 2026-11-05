@@ -889,6 +889,30 @@ test('D61.1: a rate that changes with no jump is drift: a later stall re-anchors
   }
 });
 
+// The line follows the last FOLLOW_READINGS (about four seconds), not a fit that still holds the
+// old rate: five seconds after a jitter-hidden reversal it is on the new rate, so a stall is
+// measured from it and the reversal settles as no step (a 64-reading fit lagged it by 50 to 100 ms).
+test('D61.1: a stall five seconds after a rate reversal under jitter re-anchors by the stall alone', async () => {
+  let seed = 1;
+  const random = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648;
+  const batches = seconds => Math.ceil(seconds * 48000 / 8192);
+  for (const [from, to, jitter] of [[12000, -12000, 12], [12000, -12000, 20], [-12000, 12000, 15], [-12000, 12000, 20]]) {
+    await device(async rig => {
+      rig.dev.noise = () => (random() * 2 - 1) * jitter;
+      const a = await rig.start('A');
+      for (let i = 0; i < batches(10); i++) await rig.render({ drift: perBatch(from) });
+      for (let i = 0; i < batches(5); i++) await rig.render({ drift: perBatch(to) });
+      rig.dev.noise = () => 0;
+      rig.stall(300);
+      for (let i = 0; i < 60; i++) await rig.render({ drift: perBatch(to) });
+      await a.stop();
+      const jumps = rig.jumps('A');
+      assert.equal(jumps.length, 1, `${from} to ${to} ppm, jitter ${jitter} ms: ${report(jumps)}`);
+      assert.ok(Math.abs(jumps[0] - 300) < 20, `${from} to ${to} ppm, jitter ${jitter} ms: jump ${jumps[0]}`);
+    });
+  }
+});
+
 // Credit from a fall with no stall before it offsets only a rise within STALL_RECOVER_MS (the
 // fall then an equal rise above nets to zero); later, a rise is a stall of its own.
 test('D61.1: a fall that is no recovery offsets only a rise within two seconds', async () => {
