@@ -122,13 +122,19 @@ Since extension 0.2.14 (D61.1) a render stall re-anchors its context. While rend
 the frames it never renders are never counted, so render frames alone would place every later
 chunk early by the stall, on every span of that context. The extension tracks the level
 performanceTime - contextTime*1000 - outputLatency*1000 of each fresh getOutputTimestamp (one
-whose contextTime moved), following drift and jitter within 50 ms. When the level rises by more
+whose contextTime moved). It tolerates jitter within 50 ms and follows drift no faster than 2 ms
+per rendered second, so a loss spread over many small steps (rendering slower than real time)
+still adds up. When the level rises by more
 than 50 ms against its tracked value (or, for the first fresh stamp, against the calibration
 seed plus the roundTrip uncertainty) and a fresh stamp read at least 100 ms later agrees within
 20 ms, the context re-anchors forward by the smaller agreeing step; a rise that neither confirms
-nor reverts within one second, or at Stop, settles at its smallest reading. (After a renderer
+nor reverts within one second of opening settles at its smallest reading, and one whose readings
+keep crossing the level settles at no step then. The level becomes the reading the step was
+taken at, so a rise that continues past it is judged again. (After a renderer
 stall the page reads a backlog of chunks within a millisecond while rendering catches up, so
-stamps read together are no confirmation.) The re-anchor
+stamps read together are no confirmation.) A span that stops during an unsettled rise places
+its own held chunks at the rise's smallest reading and leaves the rise open for the context's
+other and later spans. The re-anchor
 applies from the stalled frame (the frame of the last fresh stamp before the rise, or the first
 chunk still held, whichever is later) for every span on the context, current and later.
 Offsets never move backward: a confirmed fall is never applied and only offsets a later rise.
@@ -136,7 +142,7 @@ The origin mapping is never re-read, and the clock facts are unchanged, so all s
 repeat the same values. Chunks that arrive while a rise is unsettled are held, and so are a
 span's first chunks (up to four, or one second) while its context has no positive output stamp
 yet; a chunk is never moved after it is sent. A resumed suspension re-anchors by its wall estimate from the frame it began at
-and reseeds the level. The lost time reaches the host as an offset jump (see Gap ranges); the
+and reseeds the level; a rise still unsettled then is kept, moved by the same estimate. The lost time reaches the host as an offset jump (see Gap ranges); the
 extension never fills it with zeros and sends no warning for it.
 
 Since extension 0.2.13 (D68.1) every capture context keeps real time. A browser moves an

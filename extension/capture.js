@@ -54,9 +54,15 @@ function resumeSuspended(context) {
     const clock = clocks.get(context);
     if (!clock?.anchors) return;
     // Frames rendered before the suspension keep their mapping; the wall estimate applies
-    // from the frame it began at. The detector then reseeds, so it never counts it twice.
+    // from the frame it began at. The detector then reseeds, so it never counts it twice,
+    // unless a rise is still open.
     if (gap > 0) clock.anchors.push({ fromFrame: Math.round(render * clock.rate), addMs: gap });
-    clock.level = null; clock.ref = null; clock.pending = null;
+    if (clock.pending && clock.level !== null) {
+      // A rise still unsettled when the context suspended is not dropped: the level and its
+      // readings move by the wall estimate, so what the stall lost stays a deviation to judge.
+      clock.level += gap;
+      for (const reading of clock.pending.readings) reading.x += gap;
+    } else { clock.level = null; clock.ref = null; clock.pending = null; }
     observe(context, clock);
   });
   resuming.set(context, task);
@@ -69,18 +75,23 @@ function resumeSuspended(context) {
 // a later span on the context would inherit that. The audio thread writes each
 // getOutputTimestamp pair, so its performanceTime - contextTime - outputLatency (the render
 // instant minus the render position) is a level that main-thread jank cannot move; it rises by
-// exactly the rendered time a stall lost. The detector tracks that level and follows slow drift
-// and jitter within STALL_STEP_MS. A rise beyond it that holds on a later fresh stamp, read at
-// least STALL_CONFIRM_MS later (agreeing within STALL_AGREE_MS), re-anchors the context forward
-// by the smaller agreeing step, from the stalled frame on. The wall separation matters after a
+// exactly the rendered time a stall lost. The detector tracks that level, tolerates jitter within
+// STALL_STEP_MS and follows drift no faster than STALL_DRIFT (2 ms per rendered second), so a
+// loss spread thinly over many readings still adds up to a step. A rise beyond STALL_STEP_MS
+// that holds on a later fresh stamp, read at least STALL_CONFIRM_MS later (agreeing within
+// STALL_AGREE_MS), re-anchors the context forward by the smaller agreeing step, from the
+// stalled frame on. The wall separation matters after a
 // renderer stall: the page then reads a backlog of chunks within a millisecond while rendering
 // catches up faster than real time, so their stamps fall steadily and neighbours agree by chance.
-// A rise that neither confirms nor reverts settles at its smallest reading after SETTLE_MS. A
-// rise seen first against the calibration seed (plus the roundTrip uncertainty) is a freeze
-// between calibration and the first device callbacks. Offsets never move backward; a confirmed
-// fall only offsets a later rise. The origin is never re-read and the clock facts never change.
+// A rise that neither confirms nor reverts settles at its smallest reading SETTLE_MS after it
+// opened; one that keeps flipping sign settles at no step then, so no chunk is held longer. At a
+// span's Stop an unsettled rise places only that span's held chunks, at its smallest reading,
+// and stays open for the context's other and later spans. A rise seen first against the
+// calibration seed (plus the roundTrip uncertainty) is a freeze between calibration and the
+// first device callbacks. Offsets never move backward; a confirmed fall only offsets a later
+// rise. The origin is never re-read and the clock facts never change.
 // The lost time reaches the host as an offset jump, its `jump` gap.
-export const STALL_STEP_MS = 50, STALL_AGREE_MS = 20, STALL_CONFIRM_MS = 100;
+export const STALL_STEP_MS = 50, STALL_AGREE_MS = 20, STALL_CONFIRM_MS = 100, STALL_DRIFT = 0.002;
 const SETTLE_READINGS = 4, SETTLE_MS = 1000;
 function clockRecord({ level0, seedSlack, seedTime, stampTime, ...measured }) {
   return { ...measured, anchors: [{ fromFrame: 0, addMs: 0 }], level: level0, seedSlack, seeded: false,
@@ -91,37 +102,48 @@ function offsetFor(clock, frame) {
   for (const anchor of clock.anchors) if (anchor.fromFrame <= frame) addMs += anchor.addMs;
   return clock.clockOffset + addMs + frame / clock.rate * 1000;
 }
-function settle(clock, readings) {
+// What settling the pending rise or fall on `readings` would do, without doing it.
+function settlement(clock, readings) {
   const { sign } = clock.pending, xs = readings.map(reading => reading.x), before = clock.ref;
-  const step = (sign > 0 ? Math.min(...xs) : Math.max(...xs)) - clock.level;
-  clock.level = readings.at(-1).x; clock.ref = readings.at(-1); clock.pending = null; clock.seeded = true;
-  const total = clock.credit + step;
-  if (!(total > 0)) { clock.credit = total; return; }
+  const x = sign > 0 ? Math.min(...xs) : Math.max(...xs), total = clock.credit + x - clock.level;
+  if (!(total > 0)) return { x, total, anchor: null };
   // Frames before the last fresh stamp were rendered before the stall: queued chunks of
   // them keep their mapping. Chunks a span already admitted are never moved.
   let held = Infinity;
   for (const span of clock.spans) if (span.heldFrom !== null) held = Math.min(held, span.heldFrom);
   const fromFrame = Math.max(before ? Math.round(before.contextTime * clock.rate) : 0, held === Infinity ? 0 : held);
-  clock.anchors.push({ fromFrame, addMs: total });
-  clock.credit = 0;
+  return { x, total, anchor: { fromFrame, addMs: total } };
+}
+function settle(clock, readings) {
+  const { x, total, anchor } = settlement(clock, readings);
+  // The level becomes the reading the step was taken at, so a rise that went on past it (a
+  // continuous loss) is still a deviation, judged next.
+  clock.level = x; clock.ref = readings.at(-1); clock.pending = null; clock.seeded = true;
+  if (anchor) { clock.anchors.push(anchor); clock.credit = 0; } else clock.credit = total;
 }
 function read(clock, reading) {
   if (clock.level === null) { clock.level = reading.x; clock.ref = reading; clock.seeded = true; return; }
   const threshold = STALL_STEP_MS + (clock.seeded ? 0 : clock.seedSlack), deviation = reading.x - clock.level;
   if (Math.abs(deviation) <= threshold) {
-    clock.level = reading.x; clock.ref = reading; clock.pending = null; clock.seeded = true;
+    if (!clock.seeded) clock.level = reading.x;
+    else {
+      const most = Math.max(0, reading.contextTime - clock.ref.contextTime) * 1000 * STALL_DRIFT;
+      clock.level += Math.max(-most, Math.min(most, deviation));
+    }
+    clock.ref = reading; clock.pending = null; clock.seeded = true;
     return;
   }
   const sign = Math.sign(deviation), pending = clock.pending;
   if (!pending || pending.sign !== sign) {
-    clock.pending = { sign, readings: [reading], since: performance.now() };
+    // A flip keeps the time the context has been unsettled: the bound is per hold, not per sign.
+    clock.pending = pending ? { sign, readings: [reading], since: pending.since, flipped: true } : { sign, readings: [reading], since: performance.now() };
     return;
   }
   const previous = pending.readings.findLast(earlier => reading.at - earlier.at >= STALL_CONFIRM_MS);
   pending.readings.push(reading);
   if (previous && Math.abs(reading.x - previous.x) <= STALL_AGREE_MS) settle(clock, [previous, reading]);
 }
-function observe(context, clock, force = false) {
+function observe(context, clock) {
   if (!clock?.anchors) return;
   const stamp = context.state === "running" ? context.getOutputTimestamp?.() : undefined;
   if (stamp?.contextTime > 0 && stamp?.performanceTime > 0 && stamp.contextTime !== clock.lastStampTime) {
@@ -130,7 +152,11 @@ function observe(context, clock, force = false) {
   }
   // Checked on events, never slept on.
   const pending = clock.pending;
-  if (pending && (force || performance.now() - pending.since >= SETTLE_MS)) settle(clock, pending.readings);
+  if (pending && performance.now() - pending.since >= SETTLE_MS) {
+    // Readings on both sides of the level confirm nothing: release the hold with no step.
+    if (pending.flipped) clock.pending = null;
+    else settle(clock, pending.readings);
+  }
   for (const span of [...clock.spans]) span.release();
 }
 
@@ -223,9 +249,9 @@ async function captureOnce({ stream, id, label, kind, origin, workletURL, send, 
     waiting.length = 0; held.length = 0; span.heldFrom = null;
     fail(error);
   }
-  function admit(frame, pcm, frames) {
+  function admit(frame, pcm, frames, mapping = clock) {
     // Render frames space every chunk; arrival on the main thread never times one.
-    const offsetMs = offsetFor(clock, frame);
+    const offsetMs = offsetFor(mapping, frame);
     if (!(offsetMs >= 0)) {
       droppedFrames += frames; pendingFrames -= frames;
       abort(new Error("Audio timing fell before the recording start."));
@@ -245,12 +271,12 @@ async function captureOnce({ stream, id, label, kind, origin, workletURL, send, 
     if (!verified && (clock.lastStampTime > 0 || holds >= SETTLE_READINGS || performance.now() - holdSince >= SETTLE_MS)) verified = true;
     return verified;
   }
-  function release(force) {
+  function release(force, mapping = clock) {
     if (!held.length || failure || (!force && !settled())) return;
     while (held.length && !failure) {
       const chunk = held.shift();
       span.heldFrom = held[0]?.frame ?? null;
-      admit(chunk.frame, chunk.pcm, chunk.frames);
+      admit(chunk.frame, chunk.pcm, chunk.frames, mapping);
     }
   }
   try {
@@ -334,10 +360,14 @@ async function captureOnce({ stream, id, label, kind, origin, workletURL, send, 
             node.port.postMessage("stop");
           }).catch(abort);
         }
-        // A held chunk is never lost on stop: an unsettled rise settles at its smallest
-        // reading, and the span's chunks are placed before the end is declared.
-        if (clock.pending) observe(context, clock, true);
-        release(true);
+        // A held chunk is never lost on stop, and is placed before the end is declared. A rise
+        // still unsettled places this span's chunks at its smallest reading, but is not
+        // committed: one span's end is no evidence, and the context's other spans would keep it.
+        observe(context, clock);
+        if (clock.pending && held.length) {
+          const { anchor } = settlement(clock, clock.pending.readings);
+          release(true, anchor ? { ...clock, anchors: [...clock.anchors, anchor] } : clock);
+        } else release(true);
         // Accept the worklet's final flush through its stopped barrier, then
         // fence even a retained callback before draining admitted PCM.
         ending = true;

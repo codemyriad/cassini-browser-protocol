@@ -200,7 +200,7 @@ test('the companion that keeps capture on real time and re-anchors a stall is 0.
   const [major, minor, patch] = version.split('.').map(Number);
   assert.ok(major > 0 || minor > 2 || (minor === 2 && patch >= 14), `manifest version ${version}`);
   assert.match(source, /export function keepRealTime\(context\)/, 'capture.js keeps each context on real time');
-  assert.match(source, /export const STALL_STEP_MS = 50, STALL_AGREE_MS = 20, STALL_CONFIRM_MS = 100;/, 'capture.js re-anchors a render stall');
+  assert.match(source, /export const STALL_STEP_MS = 50, STALL_AGREE_MS = 20, STALL_CONFIRM_MS = 100, STALL_DRIFT = 0.002;/, 'capture.js re-anchors a render stall');
 });
 
 test('ten-second source budget pipelines four requests, counts drops and leaves other sources running', async () => {
@@ -384,6 +384,7 @@ function placement(rig, recorder, id) {
   const sent = rig.audio(id);
   return sent.map((packet, i) => packet.offsetMs - recorder.node.chunks[i].truth);
 }
+const STEP_BOUND = 50;
 const exact = (errors, message, within = 0.001) => assert.ok(errors.every(error => Math.abs(error) < within), `${message}: ${errors.map(e => e.toFixed(3)).join(', ')}`);
 
 test('D61.1: a steady device places every chunk exactly as before, stamps fresh or constant', async () => {
@@ -658,4 +659,120 @@ test('D61.1: a re-anchor of more than 60 s retires the span and the retry starts
     assert.equal(rig.audio(tracks[1].id).length, 4);
     exact(placement(rig, retried, tracks[1].id), 'the retry, on the new anchor');
   }, { retries: ['retry', 'recovered'] });
+});
+
+// R93 review: one span's Stop is no evidence about its context's clock. A rise still unsettled
+// then places only that span's held chunks; the other spans keep judging it.
+test('D61.1: a Stop during a one-stamp transient leaves the other spans on the context unmoved', async () => {
+  await device(async rig => {
+    const a = await rig.start('A'), b = await rig.start('B');
+    for (let i = 0; i < 4; i++) await rig.render();
+    rig.dev.extra = 300; await rig.render();          // one stamp 300 ms high, back on the next
+    await a.stop();
+    assert.equal(rig.audio('A').length, 5, 'A sends what it held before its end');
+    for (let i = 0; i < 6; i++) await rig.render();
+    await b.stop();
+    assert.deepEqual(rig.jumps('B'), []);
+    exact(placement(rig, b, 'B'), 'B after A stopped at the transient');
+  });
+});
+
+test('D61.1: a Stop on the first stamp of a renderer catch-up leaves B to confirm the real loss', async () => {
+  await device(async rig => {
+    const a = await rig.start('A'), b = await rig.start('B');
+    for (let i = 0; i < 4; i++) await rig.render();
+    rig.stall(3365); rig.dev.extra = 5001 - 3365;
+    await rig.render();
+    await a.stop();
+    for (let i = 0; i < 6; i++) await rig.render();
+    await b.stop();
+    const jumps = rig.jumps('B');
+    assert.equal(jumps.length, 1); assert.ok(Math.abs(jumps[0] - 3365) < 0.001, `B jump ${jumps[0]}`);
+    exact(placement(rig, b, 'B'), 'B');
+  });
+});
+
+test('D61.1: a rise still unsettled when the context suspends is kept, then re-anchored with the suspension', async () => {
+  await device(async rig => {
+    const a = await rig.start('A');
+    for (let i = 0; i < 4; i++) await rig.render();
+    rig.stall(800);
+    await rig.render();                                // the rise opens; this chunk is held
+    rig.dev.suspendMs = 700; rig.dev.state = 'suspended';
+    for (const fn of [...rig.contexts[0].listeners]) fn();
+    await rig.tick();
+    for (let i = 0; i < 6; i++) await rig.render();
+    await a.stop();
+    const jumps = rig.jumps('A');
+    assert.equal(jumps.length, 2, `jumps ${jumps}`);
+    assert.ok(Math.abs(jumps[0] - 800) < 0.001 && Math.abs(jumps[1] - 700) < 0.001, `jumps ${jumps}`);
+    exact(placement(rig, a, 'A'), 'every chunk');
+  });
+});
+
+test('D61.1: losses below the step per reading still add up to a re-anchor (ten 45 ms stalls)', async () => {
+  await device(async rig => {
+    const a = await rig.start('A');
+    for (let i = 0; i < 4; i++) await rig.render();
+    for (let k = 0; k < 10; k++) { rig.stall(45); for (let i = 0; i < 3; i++) await rig.render(); }
+    await a.stop();
+    const errors = placement(rig, a, 'A');
+    // Main corrected none of the 450 ms. What drift tracking absorbs is bounded by STALL_DRIFT.
+    assert.ok(errors.every(error => error <= 0.001 && error > -STEP_BOUND), `errors ${errors.map(e => e.toFixed(1))}`);
+    assert.ok(Math.abs(errors.at(-1)) < 10, `last error ${errors.at(-1)}`);
+  });
+});
+
+test('D61.1: a slow fall after a re-anchor becomes credit that offsets the next rise', async () => {
+  await device(async rig => {
+    const a = await rig.start('A');
+    for (let i = 0; i < 4; i++) await rig.render();
+    rig.stall(2000);
+    for (let i = 0; i < 20; i++) await rig.render({ drift: -15 });   // 300 ms caught up slowly
+    const over = placement(rig, a, 'A').at(-1);
+    rig.stall(300);
+    for (let i = 0; i < 6; i++) await rig.render();
+    await a.stop();
+    const jumps = rig.jumps('A'), errors = placement(rig, a, 'A');
+    assert.ok(over > 200, `the over-correction a confirmed step cannot see coming: ${over}`);
+    assert.ok(jumps.every(jump => jump > 0), 'offsets never move backward');
+    // The last part of the fall, under one step, is tolerated as jitter and not credited.
+    assert.ok(Math.abs(errors.at(-1)) < STEP_BOUND + 1, `the next rise is offset by the credit: ${errors.at(-1)} (was ${over})`);
+  });
+});
+
+test('D61.1: stamps that keep crossing the level hold chunks at most about a second, and drop none', async () => {
+  let k = 0;
+  await device(async rig => {
+    const a = await rig.start('A');
+    for (let i = 0; i < 4; i++) await rig.render();
+    rig.dev.noise = () => (k++ % 2 ? -100 : 100);
+    for (let i = 0; i < 80; i++) {
+      await rig.render();
+      // One second is six 8192-frame batches; one more arrives before the bound is checked.
+      assert.ok(rig.audio('A').length >= 4 + i + 1 - 7, `held ${4 + i + 1 - rig.audio('A').length} at batch ${i}`);
+    }
+    rig.dev.noise = () => 0;
+    await a.stop();
+    assert.equal(a.droppedFrames, 0);
+    assert.equal(rig.audio('A').length, 84);
+    assert.deepEqual(rig.jumps('A'), [], 'noise on both sides is no step');
+  });
+});
+
+test('D61.1: rendering steadily slower than real time is re-anchored as it goes, never left to accumulate', async () => {
+  await device(async rig => {
+    const a = await rig.start('A');
+    for (let i = 0; i < 4; i++) await rig.render();
+    // 30 ms lost per 171 ms batch (rendering at 85% of real time): 1.8 s over the run.
+    for (let i = 0; i < 60; i++) {
+      await rig.render({ drift: 30 });
+      assert.ok(rig.audio('A').length >= 4 + i + 1 - 7, `held ${4 + i + 1 - rig.audio('A').length} at batch ${i}`);
+    }
+    await a.stop();
+    const errors = placement(rig, a, 'A');
+    assert.ok(rig.jumps('A').every(jump => jump > 0), 'offsets never move backward');
+    // What is left is at most a second of loss plus one step, never the 1.8 s.
+    assert.ok(errors.every(error => error <= 0.001 && error > -(30 * 48000 / 8192 + STEP_BOUND)), `errors ${errors.map(e => e.toFixed(0))}`);
+  });
 });
