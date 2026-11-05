@@ -26,9 +26,17 @@ RUNNER_SELECTOR = re.compile(
 
 
 def runs_on_values():
+    """(workflow, runs-on) for every job; a block runs-on (a YAML list or mapping) is joined into one string."""
     for workflow in sorted(WORKFLOWS.glob('*.yml')):
-        for value in re.findall(r'^    runs-on: (.+)$', workflow.read_text(), re.M):
-            yield workflow.name, value
+        lines = workflow.read_text().splitlines()
+        for i, line in enumerate(lines):
+            if match := re.match(r'^    runs-on:(.*)$', line):
+                value = [match.group(1).strip()]
+                for following in lines[i + 1:]:
+                    if not following.startswith('      '):
+                        break
+                    value.append(following.strip())
+                yield workflow.name, '\n'.join(v for v in value if v)
 
 
 def select_runner(runs_on, variables):
@@ -67,6 +75,13 @@ class CiHygieneTests(unittest.TestCase):
         for name, value in variable:
             self.assertRegex(value, RUNNER_SELECTOR, name)
             self.assertNotIn('fromJSON(vars', value, name)
+
+    def test_every_runs_on_is_a_hosted_image_or_the_selector(self):
+        # Nothing else may reach runs-on: no literal self-hosted labels, no variable in a block-style runs-on.
+        hosted = re.compile(r'^(?:ubuntu|macos|windows)-[0-9a-z.-]+$')
+        for name, value in runs_on_values():
+            with self.subTest(workflow=name):
+                self.assertTrue(hosted.match(value) or RUNNER_SELECTOR.match(value), value)
 
     def test_runner_selection_falls_back_to_github_for_every_other_value(self):
         for name, value in runs_on_values():
