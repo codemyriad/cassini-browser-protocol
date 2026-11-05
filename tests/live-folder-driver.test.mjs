@@ -12,6 +12,7 @@ import test from 'node:test';
 import { eventsOf, extent, F, folderClock, S } from '../scenarios/folder-clock.mjs';
 import { controlConnections, hostPids, livePids, processArgv, RELAY, runsCommand, stopLaunchers, stopRelays, writeNativeHost } from '../scenarios/native-launcher.mjs';
 import * as driver from '../scenarios/live-folder.mjs';
+import { sessionClock } from '../scenarios/session-clock.mjs';
 const { loadScenario, runLiveFolder } = driver;
 import { poll } from '../scenarios/folder-clock.mjs';
 
@@ -35,6 +36,52 @@ async function synthetic() {
   const [folder] = (await readdir(out)).filter(name => name.startsWith('Recording-'));
   return path.join(out, folder);
 }
+
+// The driver's session clock is monotonic (scenarios/session-clock.mjs): the origin is mapped onto
+// it once, as SPEC requires of capturing documents. A hosted VM's wall clock ran 500 ppm fast and
+// put an app's monotonic me:true stamp 38 ms before the driver's wall-clock request (Mac #148).
+// The synthetic run's evidence holds the true instants; measured through the driver's clock under
+// a wall clock that drifts 500 ppm and steps 2 s mid-run, every oracle verdict stays the same,
+// while the old wall-clock reading (Date.now() - origin) changes them.
+test('a drifting or stepping wall clock never changes the oracle\'s verdicts', async () => {
+  const folder = await synthetic(), out = path.dirname(folder);
+  const base = JSON.parse(await readFile(path.join(out, 'evidence.json'), 'utf8')), origin = base.timelineOriginMs;
+  let t = 0;  // true session ms
+  const mono = () => 7_000_000 + t;
+  const wall = () => origin + t * 1.0005 + (t >= 50_000 ? 2000 : 0);
+  t = base.actions.record.observedAtMs;  // the driver maps the origin when it reads it, at record
+  const clock = sessionClock(origin, { wall, mono });
+  const measured = via => ({ ...base,
+    actions: Object.fromEntries(Object.entries(base.actions).map(([name, a]) => [name, { requestedAtMs: via(a.requestedAtMs), observedAtMs: via(a.observedAtMs) }])),
+    resumeRequests: base.resumeRequests.map(r => ({ ...r, atMs: via(r.atMs) })) });
+  const monotonicRun = measured(ms => { t = ms; return clock.at(mono()); });
+  const wallRun = measured(ms => { t = ms; return wall() - origin; });
+  for (const [name, a] of Object.entries(monotonicRun.actions)) {
+    // Only the drift before the mapping remains: 500 ppm of the 1350 ms to record, under 1 ms.
+    assert.ok(Math.abs(a.requestedAtMs - base.actions[name].requestedAtMs) < 1, `${name} requested ${a.requestedAtMs}`);
+    assert.ok(Math.abs(a.observedAtMs - base.actions[name].observedAtMs) < 1, `${name} observed ${a.observedAtMs}`);
+  }
+  const failing = async (evidence, name) => {
+    const file = path.join(out, `${name}.evidence.json`), result = path.join(out, `${name}.result.json`);
+    await writeFile(file, JSON.stringify(evidence, null, 1) + '\n');
+    await driver.runOracle({ folder, evidence: file, result, ms: 60000 });
+    const checks = JSON.parse(await readFile(result, 'utf8')).checks;
+    return checks.flatMap(check => Object.entries(check.measured).filter(([, rule]) => !rule.passed).map(([id]) => id)).sort();
+  };
+  const [before, monotonic, viaWall] = [await failing(base, 'base'), await failing(monotonicRun, 'monotonic'), await failing(wallRun, 'wall')];
+  assert.deepEqual(monotonic, before, 'the monotonic session clock keeps every verdict');
+  assert.ok(viaWall.some(id => !before.includes(id)), `a wall-clock session clock changes verdicts: ${JSON.stringify(viaWall)}`);
+  assert.ok(viaWall.includes('O5.selection'), 'as on the hosted VM: the me:true selection falls before the request');
+});
+
+// The driver and its folder clock never read the wall clock: every time they record or wait on
+// is monotonic (only the extension's origin is wall-clock, mapped once by sessionClock).
+test('the driver and the folder clock read no wall clock', async () => {
+  for (const file of ['scenarios/live-folder.mjs', 'scenarios/folder-clock.mjs']) {
+    const code = (await readFile(path.join(root, file), 'utf8')).split('\n').filter(line => !line.trim().startsWith('//')).join('\n');
+    assert.doesNotMatch(code, /Date\.now\(|new Date\(/, `${file} reads the wall clock`);
+  }
+});
 
 test('the folder clock reads make.py\'s synthetic run as the oracle places it', async () => {
   const folder = await synthetic();

@@ -262,12 +262,14 @@ export async function verifyControlPipe(host, browserPid, label,
 }
 
 // The resumeRequests evidence (scenario.json resumeObservation.fields): every resume request
-// read up to untilWall, in pipe order (relay time, then launch order and frame order), each
+// read up to untilMono, in pipe order (relay time, then launch order and frame order), each
 // with delivered (false: the relay's forward of it to the browser failed).
-export function resumeRequests(connections, origin, untilWall) {
-  return connections.flatMap(c => c.resumes.filter(r => r.atWall <= untilWall).map(r => ({ c, r })))
-    .sort((x, y) => x.r.atWall - y.r.atWall || x.c.connection - y.c.connection || x.r.frame - y.r.frame)
-    .map(({ c, r }) => ({ atMs: r.atWall - origin, via: 'control-pipe', connection: c.connection, requestId: r.requestId,
+// Times are the relay's monotonic stamps (atMono) on the session timeline: originMono is the
+// driver's session clock origin on the same clock (scenarios/session-clock.mjs).
+export function resumeRequests(connections, originMono, untilMono) {
+  return connections.flatMap(c => c.resumes.filter(r => r.atMono <= untilMono).map(r => ({ c, r })))
+    .sort((x, y) => x.r.atMono - y.r.atMono || x.c.connection - y.c.connection || x.r.frame - y.r.frame)
+    .map(({ c, r }) => ({ atMs: r.atMono - originMono, via: 'control-pipe', connection: c.connection, requestId: r.requestId,
       captureId: r.resumeCapture.captureId, timelineOriginMs: r.resumeCapture.timelineOriginMs, delivered: r.delivered !== false }));
 }
 
