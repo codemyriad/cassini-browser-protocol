@@ -183,6 +183,17 @@ test('sessionClock places the origin between the readings that bracket it, never
   near(sessionClock(5_000_050, { pairs, wall: () => 5_000_000 + t, mono }).originMono, 1050, 'a slow reading, no step', 2);
 });
 
+// muteHold judges only A's spans that were open when the mute began (Mac #153: a span that had
+// ended 12 s before the mute was reported as ended during it).
+test('muteHold counts only spans open at the mute as ended during it', () => {
+  const span = (id, ended) => ({ id, sourceTrackId: 'A', kind: 'remote', ...(ended ? { ended: true } : {}) });
+  const atMute = { tracks: [span('a1', true), span('a2', false)] };
+  const open = new Set(atMute.tracks.filter(t => t.ended !== true).map(t => t.id));
+  assert.deepEqual([...open], ['a2']);
+  assert.deepEqual(driver.endedDuringMute(atMute, 'A', open), [], 'a1 ended before the mute');
+  assert.deepEqual(driver.endedDuringMute({ tracks: [span('a1', true), span('a2', true)] }, 'A', open), ['a2'], 'a2 ended during it');
+});
+
 // The driver and its folder clock never read the wall clock: every time they record or wait on
 // is monotonic (only the extension's origin is wall-clock, mapped once by sessionClock).
 test('the driver and the folder clock read no wall clock', async () => {

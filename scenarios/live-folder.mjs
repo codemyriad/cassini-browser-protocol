@@ -100,6 +100,12 @@ export function runOracle({ python = 'python3', oracle = ORACLE, folder, evidenc
 
 // relayStartMs, cleanupMs and checkMs are the control relay's start bound, cleanup()'s bound
 // and check.py's (tests shorten them).
+// muteHold: the spans of `key` that were open when the mute began and have ended since. A span
+// that had already ended before the mute (an earlier interruption, which the oracle judges) is
+// not one: Mac #153 reported such a span as "A ended during the mute".
+export const endedDuringMute = (manifest, key, openAtMute) =>
+  tracksOf(manifest, key).filter(t => t.ended === true && openAtMute.has(t.id)).map(t => t.id);
+
 export async function runLiveFolder({ meeting, remote, app, worker, out, log = console.log, python = 'python3',
   relayStartMs = RELAY_START_MS, cleanupMs = CLEANUP_MS, checkMs = CHECK_MS, clocks = {} }) {
   let failed = true, recordAsked = false, stopAsked = false;
@@ -258,6 +264,8 @@ export async function runLiveFolder({ meeting, remote, app, worker, out, log = c
       await clock.waitFolder(() => clock.F(keyA) >= C.MUTE_START_MS && timeline.now() >= C.MUTE_START_MS,
         `mute: F(A) and the session clock reach ${C.MUTE_START_MS} ms`, C.MUTE_START_MS + bounds.record);
       const spansA = new Set(tracksOf(clock.manifest, keyA).map(t => t.id)), othersBefore = others(clock.manifest).length;
+      const openA = new Set(tracksOf(clock.manifest, keyA).filter(t => t.ended !== true).map(t => t.id));
+      notes.endedBeforeMute = [...spansA].filter(id => !openA.has(id));
       const receiverAtMute = await receiverStats(meeting, 0);
       notes.receiverA = { atRecord: receiverAtRecord, atMute: receiverAtMute, playoutMsBeforeMute: playoutMs(receiverAtRecord, receiverAtMute) };
       requested = now();
@@ -272,7 +280,7 @@ export async function runLiveFolder({ meeting, remote, app, worker, out, log = c
         const ids = tracksOf(manifest, keyA).map(t => t.id);
         assert.deepEqual(ids.filter(id => !spansA.has(id)), [], `muteHold: A opened a new span during the mute`);
         assert.equal(others(manifest).length, othersBefore, `muteHold: an othersSource event during the mute: ${JSON.stringify(others(manifest).at(-1))}`);
-        assert.ok(!tracksOf(manifest, keyA).some(t => t.ended === true), 'muteHold: A ended during the mute');
+        assert.deepEqual(endedDuringMute(manifest, keyA, openA), [], 'muteHold: A ended during the mute');
         return clock.F(keyA) >= muteAt + C.MUTE_MS && timeline.now() >= muteAt + C.MUTE_MS;
       }, `muteHold: F(A) and the session clock reach mute + ${C.MUTE_MS} ms`, bounds.muteHold);
       requested = now();
