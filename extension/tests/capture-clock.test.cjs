@@ -1013,7 +1013,7 @@ test('D61.1: stutters and stalls one batch apart under +-15 ms jitter re-anchor 
 
 // Minors 2 and 5 of that review are known limits (SPEC D61.1); these bound them, on fixed
 // seeds, so they do not grow. At 85% under +-15 and +-20 ms jitter d9691ea jumped in 61 of 200 sessions while the
-// line learned the rate (the slope bound and the junction now allow for the fit's scatter): at
+// line learned the rate (the slope bound and the junction now allow for the jitter): at
 // most 25. A renderer catch-up one second into a session under the same jitter: d9691ea
 // mis-sized 33 of 100 by more than a step, extrapolating a slope fitted to six jittered readings
 // over the caught-up frames (the line now takes a fitted slope only once its standard error is
@@ -1049,4 +1049,30 @@ test('D61.1: known limits under +-15 and +-20 ms jitter stay bounded (85% render
   }
   assert.ok(jumped <= 25, `85% rendering: ${jumped} of 200 sessions jumped`);
   assert.ok(missized <= 15, `early catch-up: ${missized} of 100 mis-sized by more than a step`);
+});
+
+// The second review of #61 (ec2343c). A train of stalls, each above the step and two or three
+// batches apart, makes a staircase whose readings scatter about their own line far more than the
+// jitter does. ec2343c widened the junction and the slope bound by that scatter, so a train of
+// more than about three seconds passed as a rate change and was lost (10 x 100 ms every two
+// batches: 100 of 1000 ms re-anchored); d9691ea, with the junction at STALL_AGREE_MS, re-anchored
+// every one. The scatter allowed is now the jitter the in-band readings showed before the hold,
+// and held readings that scatter about their line by more than twice it are no rate.
+test('D61.1: a train of stalls two or three batches apart re-anchors each, however long it lasts', async () => {
+  const cases = [[0, 100, 2, 10], [0, 100, 2, 20], [0, 60, 2, 10], [0, 80, 2, 20], [10, 100, 2, 10], [10, 100, 3, 6], [10, 100, 3, 20], [10, 80, 2, 20]];
+  for (const ppm of [0, 12000, -12000]) for (const [jitter, ms, every, count] of cases) for (let seed = 0; seed < (jitter ? 3 : 1); seed++) {
+    let s = 7000 + seed * 101 + ms + every * 7 + count;
+    const random = () => (s = (s * 1103515245 + 12345) % 2147483648) / 2147483648;
+    await device(async rig => {
+      rig.dev.noise = () => (random() * 2 - 1) * jitter;
+      const a = await rig.start('A');
+      for (let i = 0; i < 60; i++) await rig.render({ drift: perBatch(ppm) });
+      for (let k = 0; k < count; k++) { rig.stall(ms); for (let i = 0; i < every; i++) await rig.render({ drift: perBatch(ppm) }); }
+      for (let i = 0; i < 80; i++) await rig.render({ drift: perBatch(ppm) });
+      await a.stop();
+      const jumps = rig.jumps('A'), name = `${ppm} ppm, +-${jitter} ms, ${count} x ${ms} ms every ${every} batches, seed ${seed}`;
+      assert.ok(jumps.every(jump => jump > 0), `${name}: ${report(jumps)}`);
+      assert.ok(Math.abs(sum(jumps) - count * ms) <= (jitter ? STEP_BOUND : 1), `${name}: ${report(jumps)}`);
+    });
+  }
 });

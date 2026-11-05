@@ -105,9 +105,13 @@ function resumeSuspended(context) {
 //   over at least SETTLE_READINGS of up to TRAIL_READINGS readings, extended over the held ones,
 //   agrees with them within STALL_AGREE_MS on average), or, once at least SETTLE_READINGS readings
 //   are held, the held readings' own line meets the last reading before them within
-//   STALL_AGREE_MS plus twice their scatter about it (a rate that changed with no jump, such as
-//   rendering at 85% from some point on); and the readings of that line are steady, and its slope
-//   is a rate: at most STALL_SLOPE (rendering at 85% is 0.18) beyond twice its standard error.
+//   STALL_AGREE_MS plus twice the jitter (a rate that changed with no jump, such as rendering at
+//   85% from some point on); and the readings of that line are steady, and its slope is a rate:
+//   at most STALL_SLOPE (rendering at 85% is 0.18) beyond twice the standard error the jitter
+//   gives it. The jitter is the scatter of the steady trail about its own line, once
+//   NOISE_READINGS long (until then the held readings' own scatter); held readings that scatter
+//   about their line by more than twice it and STALL_AGREE_MS / 2 are no rate but a staircase,
+//   a train of stalls a few batches apart, and settle as steps.
 //   The line takes that slope, nothing re-anchors and no credit is taken.
 // - a stutter: stalls on consecutive batches make a staircase that a line fits as well as a
 //   rate. One steeper than STALL_SLOPE is no clock rate and settles as steps (below). A rate that
@@ -142,10 +146,10 @@ function resumeSuspended(context) {
 // and the clock facts never change.
 // The lost time reaches the host as an offset jump, its `jump` gap.
 export const STALL_STEP_MS = 50, STALL_AGREE_MS = 20, STALL_CONFIRM_MS = 100, STALL_CENTER = 0.002, STALL_SPREAD = 6, STALL_SLOPE = 0.2, STALL_STUTTER = 0.05;
-const SETTLE_READINGS = 4, SETTLE_MS = 1000, TRAIL_READINGS = 64, FOLLOW_READINGS = 24, STALL_RECOVER_MS = 2000, FOLLOW_SE = 0.01;
+const SETTLE_READINGS = 4, SETTLE_MS = 1000, TRAIL_READINGS = 64, FOLLOW_READINGS = 24, STALL_RECOVER_MS = 2000, FOLLOW_SE = 0.01, NOISE_READINGS = 24;
 function clockRecord({ level0, seedSlack, seedTime, stampTime, ...measured }) {
   return { ...measured, anchors: [{ fromFrame: 0, addMs: 0 }], level: level0, slope: 0, seedSlack, seeded: false,
-    lastStampTime: stampTime, ref: { contextTime: seedTime }, trail: [], pending: null, provisional: null, credit: 0, creditUntil: Infinity, recovered: -Infinity, spans: new Set() };
+    lastStampTime: stampTime, ref: { contextTime: seedTime }, trail: [], noise: null, pending: null, provisional: null, credit: 0, creditUntil: Infinity, recovered: -Infinity, spans: new Set() };
 }
 function offsetFor(clock, frame) {
   let addMs = 0;
@@ -171,7 +175,7 @@ function fit(readings) {
   // The slope's standard error, from the readings' scatter about the line.
   const sd = n > 2 ? Math.sqrt(residual / (n - 2)) : Infinity, se = sd / Math.sqrt(tt);
   const through = (withSlope, contextTime) => mx + withSlope * ((contextTime - t0) * 1000 - mt);
-  return { slope, sd, se, through, at: contextTime => through(slope, contextTime) };
+  return { slope, sd, se, tt, through, at: contextTime => through(slope, contextTime) };
 }
 const median = values => {
   const sorted = [...values].sort((a, b) => a - b), mid = sorted.length >> 1;
@@ -212,7 +216,12 @@ function follow(clock, reading) {
   if (!trend) return;
   // A slope known within FOLLOW_SE; until then the line keeps its own and is re-centred.
   const slope = trend.se <= FOLLOW_SE ? trend.slope : clock.slope;
-  if (steady(trail, slope)) { clock.slope = slope; clock.level = trend.through(slope, reading.contextTime); }
+  if (steady(trail, slope)) {
+    clock.slope = slope; clock.level = trend.through(slope, reading.contextTime);
+    // The jitter: the steady trail's scatter about its own line, once NOISE_READINGS long. It
+    // outlives a re-anchor, as a stall does not change the device.
+    if (trail.length >= NOISE_READINGS) clock.noise = fit(trail).sd;
+  }
 }
 // Whether the held readings are drift, and the line that follows it.
 function drift(clock, held) {
@@ -222,7 +231,14 @@ function drift(clock, held) {
     if (Math.abs(all.slope) <= STALL_SLOPE + 2 * all.se && steady(both, all.slope)) return { slope: all.slope, level: all.at(last.contextTime), trail: both.slice(-TRAIL_READINGS) };
   }
   const own = held.length >= SETTLE_READINGS ? fit(held) : null, junction = before.at(-1);
-  if (own && junction && Math.abs(own.slope) <= STALL_SLOPE + 2 * own.se && Math.abs(own.at(junction.contextTime) - junction.x) <= STALL_AGREE_MS + 2 * own.sd && steady([junction, ...held], own.slope)) {
+  if (!own || !junction) return null;
+  // The scatter a rate's readings show is the jitter: the trail's, once known, else their own. A
+  // staircase (a train of stalls a few batches apart) scatters about its line far more: more
+  // than twice the jitter and STALL_AGREE_MS / 2 is no rate, and the junction and the slope
+  // allow for the jitter alone.
+  const noise = clock.noise ?? own.sd, scatter = Math.min(own.sd, noise);
+  if (own.sd > Math.max(STALL_AGREE_MS / 2, 2 * noise)) return null;
+  if (Math.abs(own.slope) <= STALL_SLOPE + 2 * scatter / Math.sqrt(own.tt) && Math.abs(own.at(junction.contextTime) - junction.x) <= STALL_AGREE_MS + 2 * scatter && steady([junction, ...held], own.slope)) {
     return { slope: own.slope, level: own.at(last.contextTime), trail: held.slice(-TRAIL_READINGS), changed: true };
   }
   return null;

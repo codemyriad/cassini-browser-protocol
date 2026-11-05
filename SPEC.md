@@ -151,10 +151,15 @@ more than 50 ms from the line opens a hold. It is drift when it continues the tr
 readings before it (their least-squares line, from at least four of the last 64 readings,
 extended over the held readings, agrees with them within 20 ms on average) or, once at least
 four readings are held, when their own line meets the last reading before them within 20 ms plus
-twice their scatter about that line (a rate that changed with no jump); and, either way, when the
-readings of that line are steady and its slope is a rate: at most 0.2 ms per rendered
-millisecond (rendering at 85% of real time is 0.18) beyond twice its standard error.
-The line then takes that slope and nothing re-anchors. Stalls on consecutive batches (a stutter)
+twice the jitter (a rate that changed with no jump); and, either way, when the readings of that
+line are steady and its slope is a rate: at most 0.2 ms per rendered millisecond (rendering at
+85% of real time is 0.18) beyond twice the standard error the jitter gives it. The line then
+takes that slope and nothing re-anchors. The jitter is the scatter of the steady in-band readings
+about their own least-squares line, measured once 24 of them are in the trail and kept across
+re-anchors (a stall does not change the device); until then it is the held readings' own scatter
+about their line. Held readings that scatter about their own line by more than twice the jitter
+and more than 10 ms are no rate: a train of stalls a few batches apart makes such a staircase,
+and it settles as steps. Stalls on consecutive batches (a stutter)
 make a staircase that a line fits as well as a rate: a staircase steeper than that settles as
 steps. A rate that changed by more than 0.05 is provisional for two seconds of rendering: a hold
 that opens then, whose readings' own line keeps nearer to the slope before the change than to
@@ -207,11 +212,40 @@ stamp jitter, Mac's review of #61 and the GNOME explorations):
   50–77 ms with no stall (3–13% of 10-minute runs for a sine, more for a square wave). A
   ±20000 ppm reversal followed by a stall 2 s later misses the 50 ms bound in 2–9% of cases at
   5–10 ms of jitter. Real clocks do not swing like this; ±12000 ppm reversals stay within it.
-- A stutter is re-anchored in full, but one gentler than 0.2 (steps of up to about 30 ms per
-  batch) is re-anchored only when rendering goes back to its rate, so the chunks rendered during
-  it are placed early by up to its loss. One that lasts more than two seconds of rendering is a
-  rate change, which is drift. Steps the jitter does not separate from a rate (10 × 20 ms) are
-  partly followed as one (194 of 200 ms re-anchored).
+- Stutters of stalls above the step (60 ms and more on consecutive batches) are re-anchored in
+  full. One gentler than 0.2 (steps of up to about 30 ms per batch) is re-anchored only when
+  rendering goes back to its rate, so the chunks rendered during it are placed early by up to its
+  loss, and only while that return comes within two seconds of the line taking the new rate,
+  which is about three seconds of stutter: 15 × 30 ms (2.6 s) is re-anchored in full, 20 × 30 ms
+  (3.4 s) and 30 × 30 ms lose all of it (600 and 900 ms), as a rate change, which is drift.
+  Stutters of stalls below the step are mostly lost even when short, at any jitter: 4 × 15 and
+  8 × 15 ms re-anchor nothing, 4 × 20 and 6 × 20 ms re-anchor 56 ms of 80 and 120, and
+  10 × 20 ms re-anchors 194 of 200 ms (0.2.14 re-anchored these).
+- A train of stalls above the step a few batches apart (100 ms every two or three batches) is
+  re-anchored stall by stall however long it lasts, once the jitter is known (24 steady readings,
+  about four seconds into the session or after a rate change; before that a train of more than
+  about three seconds can pass as a rate change and be lost, as in ec2343c). Trains of 60 ms
+  stalls three batches apart under ±10 ms of jitter, near the steadiness bound, are lost after
+  some seconds in some runs (900 of 1200 ms for 20 × 60 ms), as in d9691ea.
+- Steady rendering slower than about 83% (a slope above 0.2) is no clock rate: it re-anchors as
+  steps, a jump of about 215–340 ms every second for as long as it lasts (rendering at 75–82%
+  for 60 s: 58–60 jumps, 12.9–19.9 s in all, at ±0–10 ms of jitter). Near the bound the jitter
+  decides: at ±20 ms, rendering at 82% gets 1 jump and at 80% 17 jumps in 60 s. d9691ea took any
+  steady rate as drift. Faster rendering (a negative slope) never jumps, as a fall never moves
+  offsets back.
+- A genuine temporary rate change of 0.1–0.19 that returns to the old rate within 0.7–3 s is
+  taken for a stutter: the context re-anchors forward by the drift it built up (slope 0.1 for
+  1–2 s: 97–199 ms; 0.15 for 0.7–3 s: 102–461 ms; 0.19 for 0.7–3 s: 129–583 ms; d9691ea: no jump).
+  One that lasts 5 s or returns more slowly than 0.05 off the old slope is drift. The two shapes
+  are the same readings until rendering returns; this detector reads them as a stutter.
+- A stall within about 1.5 s of a sharp rate change (0.1–0.18), before or after it, is mis-sized
+  by 50–500 ms. At no jitter a slope of 0.15 or 0.18 with a stall 0.5–1 s later gets +179 or
+  +215 ms (d9691ea −275 or −270 ms); under ±10–15 ms of jitter, a stall followed by a change of
+  0.13–0.18 from the next batch is off in 4–9 of 10 runs (as in d9691ea), and over all such
+  cases about half are off by more than 50 ms in both versions. A stutter followed by sustained
+  85% rendering over-anchors (4 × 100 ms: +60 ms at no jitter, +153 ms at ±10 ms; 2 × 200 ms:
+  +120 ms and +36 ms), where d9691ea under-anchored the first (−300 and −308 ms) and gave
+  −200 and +36 ms for the second.
 - Periodic small losses near the steadiness bound (about 30 ms every 2–3 s) are re-anchored in
   a share that depends on the jitter, never more than what was lost.
 
