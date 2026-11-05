@@ -11,9 +11,33 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
+  launcher-paths:
+    # Light gate for launcher-macos: did this change touch the launcher, the relay, their
+    # tests, what those tests import or read, or this workflow? Unknown base: run it.
+    runs-on: ${{ vars.CM_RUNNER == 'hetzner' && fromJSON('["self-hosted","cm-hetzner"]') || 'ubuntu-24.04' }}
+    timeout-minutes: 5
+    outputs:
+      changed: ${{ steps.paths.outputs.changed }}
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+      - id: paths
+        env:
+          BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          paths='^(scenarios/(native-launcher|control-relay|live-folder|folder-clock|product-topologies)\.mjs|tests/(live-folder-driver|control-relay)\.test\.mjs|conformance/multistream/corpus\.json|\.github/workflows/ci\.yml)$|^conformance/live-folder/'
+          if [ -z "$BASE" ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null; then changed=true
+          elif git diff --name-only "$BASE" HEAD | grep -qE "$paths"; then changed=true
+          else changed=false; fi
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+          echo "launcher-macos needed: $changed (base ${BASE:-none})"
   launcher-macos:
-    # The launcher and relay have macOS branches (no /proc: ps for liveness and command lines),
-    # taken only on macOS. Same bound as the contract job, which runs these tests on Linux.
+    # The launcher and relay read process identity differently on macOS (no /proc:
+    # KERN_PROCARGS2 through python3), so their tests run there too, when launcher-paths says so.
+    # Same bound as the contract job, which runs these tests on Linux.
+    needs: launcher-paths
+    if: needs.launcher-paths.outputs.changed == 'true'
     runs-on: macos-15
     timeout-minutes: 10
     steps:
