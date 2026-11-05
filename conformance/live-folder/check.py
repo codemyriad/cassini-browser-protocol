@@ -585,11 +585,16 @@ class Run:
         connections = [r['connection'] for r in every]
         rule('resumeOnce', bool(every) and len(mine) == len(every) and len(set(connections)) == len(connections),
              dict(requests=observed, recording=[self.e['captureId'], self.e['timelineOriginMs']]))
-        # R94: causal order, never stamps across clocks. The host names the committed loss it asks to
-        # resume (resumeCapture.lostAtMs, copied from its own session.json), which it can know only
-        # once that system/lost is written, so an exact match proves the ask followed the commit.
+        # R94: the lower bound is causal, not a stamp comparison. The host names the committed loss it
+        # asks to resume (resumeCapture.lostAtMs, copied from its own session.json), which it can know
+        # only once that system/lost is written, so an exact match proves the ask followed the commit.
         # The relay's atMs and the writer's lost atMs are on different clocks (browser frames carry
         # output-time stamps that lead the session clock, D61): no lower bound, no tolerance band.
+        # The upper bound, atMs <= browser/restored's atMs, IS still a cross-clock comparison (relay
+        # monotonic vs folder). It is kept because it is safe here and only here: the D61 lead pushes
+        # restored later on the folder clock, not earlier, and restored follows the ask through the
+        # extension's Start, the native resume and the first PCM, hundreds of ms. Do not copy this
+        # reasoning onto a bound without that margin.
         seam = self.resume_seam()
         rule('resumeAt', seam is not None and bool(mine) and all(
             _number(r['lostAtMs']) and r['lostAtMs'] == seam[0] and r['atMs'] <= seam[1] for r in mine),
