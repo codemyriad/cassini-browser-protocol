@@ -83,17 +83,22 @@ function alive(pid) {
   return true;
 }
 
-// On Linux the process must still be the host the launcher exec'd (not a zombie, its argv
-// holding the command in order: a #! script's interpreter comes first), so a recycled pid
-// is never mistaken for it. Elsewhere liveness is kill(pid, 0).
+// The process must still be the host the launcher exec'd: not a zombie, and not the launcher
+// still waiting to exec (or a recycled pid). On Linux its argv holds the command in order (a
+// #! script's interpreter comes first). Elsewhere (macOS) ps gives the state and the argv
+// joined by spaces, which host paths may contain, so the host's executable must appear in it:
+// a launcher still waiting in open() is `/bin/sh <launcher>` and never names it.
 async function stillHost(pid, command) {
   if (!alive(pid)) return false;
+  if (process.platform !== 'linux') {
+    const info = await psInfo(pid);
+    return info !== null && !info.zombie && info.args.includes(command[0]);
+  }
   let stat, argv;
   try {
     stat = await readFile(`/proc/${pid}/stat`, 'utf8');
     argv = (await readFile(`/proc/${pid}/cmdline`, 'utf8')).split('\0');
   } catch (error) {
-    if (gone(error) && process.platform !== 'linux') return true;
     if (gone(error)) return false;
     throw error;
   }
@@ -101,6 +106,15 @@ async function stillHost(pid, command) {
   let at = 0;
   for (const part of argv) if (part === command[at]) at++;
   return at === command.length;
+}
+
+// Off Linux: a process's state and command line from ps (-ww: never cut to a terminal's
+// width), {zombie, args}; null once it is gone.
+function psInfo(pid) {
+  return new Promise(resolve => execFile('ps', ['-ww', '-o', 'stat=', '-o', 'args=', '-p', String(pid)], (error, stdout) => {
+    const line = error ? '' : stdout.trim(), space = line.search(/\s/);
+    resolve(space < 0 ? null : { zombie: line.startsWith('Z'), args: line.slice(space).trim() });
+  }));
 }
 
 // Every pid a launcher recorded for this host, oldest file order, with whether it is live.
@@ -177,12 +191,16 @@ export async function controlConnections(host) {
 // Whether pid is still a running control relay (not gone, not a zombie, its argv the relay).
 async function relayRunning(pid) {
   if (!alive(pid)) return false;
+  if (process.platform !== 'linux') {
+    const info = await psInfo(pid);
+    return info !== null && !info.zombie && info.args.includes(RELAY);
+  }
   try {
     const stat = await readFile(`/proc/${pid}/stat`, 'utf8');
     if (stat.slice(stat.lastIndexOf(')') + 2).startsWith('Z')) return false;
     return (await readFile(`/proc/${pid}/cmdline`, 'utf8')).split('\0').includes(RELAY);
   } catch (error) {
-    if (gone(error)) return process.platform !== 'linux';
+    if (gone(error)) return false;
     throw error;
   }
 }
@@ -252,10 +270,8 @@ export async function stopRelays(host) {
   const stopped = [];
   for (const c of await controlConnections(host)) {
     if (c.relay === null || c.ended || c.outputError) continue;
-    try {
-      const argv = (await readFile(`/proc/${c.relay}/cmdline`, 'utf8')).split('\0');
-      if (!argv.includes(RELAY)) continue;
-    } catch (error) { if (gone(error) && process.platform === 'linux') continue; if (!gone(error)) throw error; }
+    // Only a pid that is still the relay: never a process that reused its pid.
+    if (!await relayRunning(c.relay)) continue;
     try { process.kill(c.relay, 'SIGTERM'); stopped.push(c.relay); } catch (error) { if (error.code !== 'ESRCH') throw error; }
   }
   return stopped;
@@ -267,14 +283,13 @@ async function commandLine(pid) {
     try { return (await readFile(`/proc/${pid}/cmdline`, 'utf8')).split('\0').join(' '); }
     catch (error) { if (gone(error)) return ''; throw error; }
   }
-  return new Promise(resolve => execFile('ps', ['-o', 'args=', '-p', String(pid)], (error, stdout) => resolve(error ? '' : stdout.trim())));
+  return (await psInfo(pid))?.args ?? '';
 }
 
 // Ends the launchers that never became their host: a launcher whose relay never opened the
 // FIFO waits in open() for good, and the browser closing its pipes does not end it (it reads
 // neither). Such a pid still runs the launcher script, not the host it would have exec'd:
-// its command line alone decides, never `live` (off Linux liveness is kill(pid, 0), which a
-// waiting launcher passes as well as its host would). A relay that had not started yet sees
+// its command line alone decides (`live` already excludes a waiting launcher; this names it). A relay that had not started yet sees
 // its writer gone and ends by itself (scenarios/control-relay.mjs). Returns the pids it killed.
 export async function stopLaunchers(host) {
   if (!host?.launcher) return [];

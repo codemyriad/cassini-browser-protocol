@@ -172,7 +172,8 @@ own: the adapter passes the pages and the extension's service worker.
   `stopLaunchers` kills any control launcher still waiting in `open()` on its FIFO (its
   relay never opened it: the launcher reads neither of the browser's pipes, so the
   browser's exit does not end it). A launcher is told from its host by its command line
-  alone (on macOS liveness is `kill(pid, 0)`, which both pass). A relay spawned but not yet
+  alone (off Linux, `ps` gives liveness and the command line: a zombie, a recycled pid or
+  a launcher still waiting is never the host or the relay). A relay spawned but not yet
   started at teardown cannot be found by its log line; it watches its writer instead (the
   launcher's pid, passed as its third argument) until its FIFO is open, and once that pid
   is gone it opens the FIFO for writing itself without blocking and closes it, so it reads

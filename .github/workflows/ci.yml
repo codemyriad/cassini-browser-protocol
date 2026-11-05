@@ -11,6 +11,18 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
+  launcher-macos:
+    # The launcher and relay have macOS branches (no /proc: ps for liveness and command lines),
+    # taken only on macOS. Same bound as the contract job, which runs these tests on Linux.
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Live-folder driver and control relay unit tests on macOS
+        run: node --test tests/live-folder-driver.test.mjs tests/control-relay.test.mjs
   contract:
     # CM_RUNNER=hetzner moves the job to the cm-hetzner runners; any other value keeps ubuntu-24.04.
     runs-on: ${{ vars.CM_RUNNER == 'hetzner' && fromJSON('["self-hosted","cm-hetzner"]') || 'ubuntu-24.04' }}

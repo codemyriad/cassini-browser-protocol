@@ -283,9 +283,9 @@ test('on macOS too, stopLaunchers kills a launcher still waiting on its FIFO', a
   let text = '';
   child.stdout.on('data', chunk => { text += chunk; });
   assert.deepEqual(await exitOf(child), { code: 0, signal: null });
-  // Off Linux liveness is kill(pid, 0), so the waiting launcher reads as a live host; only
-  // its command line (the launcher script, not the host's) tells them apart.
-  assert.deepEqual(JSON.parse(text), { live: true, killed: [run.browser.pid] });
+  // Off Linux, ps tells the waiting launcher (the launcher script) from its host: it is not
+  // live, and stopLaunchers still kills it by its command line.
+  assert.deepEqual(JSON.parse(text), { live: false, killed: [run.browser.pid] });
   assert.deepEqual(await exitOf(run.browser), { code: null, signal: 'SIGKILL' });
 });
 
@@ -300,6 +300,8 @@ test('check.py is bounded: one that never exits is killed and fails the run', as
   await assert.rejects(driver.runOracle({ python, folder: directory, evidence: path.join(directory, 'evidence.json'),
     result: path.join(directory, 'result.json'), ms: 300 }), /check\.py did not finish within 300 ms/);
   assert.ok(Date.now() - started < BOUND);
-  const pid = Number((await readFile(path.join(directory, 'pid'), 'utf8')).trim());
-  assert.ok(await ended(pid), 'the hung check.py was killed');
+  // The kill may come before the stand-in ran its first command (macOS checks a new
+  // executable on its first exec): then no pid was recorded and nothing else ran.
+  const recorded = await readFile(path.join(directory, 'pid'), 'utf8').catch(error => { if (error.code === 'ENOENT') return null; throw error; });
+  if (recorded !== null) assert.ok(await ended(Number(recorded.trim())), 'the hung check.py was killed');
 });
