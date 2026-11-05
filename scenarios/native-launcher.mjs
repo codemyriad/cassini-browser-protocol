@@ -225,6 +225,9 @@ async function relayErr(host, connection) {
 async function connectionFault(host, c, browserPid, label, relayStartMs, now) {
   if (c.unparsable) return `${label}: control connection ${c.connection} wrote a frame the relay cannot read: ${JSON.stringify(c.unparsable)}`;
   if (c.inputError) return `${label}: control connection ${c.connection}'s relay could not read the host's output: ${JSON.stringify(c.inputError)}`;
+  // Every frame's evidence time is its monotonic stamp: a frame without one is never dropped silently.
+  const unstamped = c.frames.find(frame => !Number.isFinite(frame.atMono));
+  if (unstamped) return `${label}: control connection ${c.connection}'s frame ${unstamped.frame} has no monotonic stamp (atMono)`;
   if (c.pid === null) return null;  // the launcher is still starting it
   if (c.launchParent !== browserPid || (c.live && c.parent !== browserPid))
     return `${label}: control host ${c.pid} (connection ${c.connection}) is not the browser's child: ` +

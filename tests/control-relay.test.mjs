@@ -303,6 +303,19 @@ test('a relay that never starts, or stops before its input ends, fails the run',
   const exit = exited(run.child); run.child.stdin.end(); await exit;
 });
 
+// A frame's evidence time is its monotonic stamp (scenarios/session-clock.mjs); a logged frame
+// without one fails the run instead of dropping out of the resume requests.
+test('a frame without a monotonic stamp fails the run', async () => {
+  const observe = path.join(scratch, 'unstamped');
+  const host = { observe, command: ['/nonexistent/host'] };
+  await mkdir(path.join(observe, '1'), { recursive: true });
+  await writeFile(path.join(observe, '1', 'host'), `999999 ${process.pid}\n`);
+  await writeFile(path.join(observe, '1', 'frames.jsonl'), [{ relay: 999998, startedWall: 1 },
+    { frame: 0, atWall: 2, bytes: 9, type: 'command', action: 'start', requestId: 'a', resumeCapture: { captureId: 'c', timelineOriginMs: 1 } }]
+    .map(entry => JSON.stringify(entry) + '\n').join(''));
+  await assert.rejects(verifyControlPipe(host, process.pid, 'stop', { running: async () => false }), /stop: control connection 1's frame 0 has no monotonic stamp \(atMono\)/);
+});
+
 test('an input error fails the run; a resume request a failed forward never delivered is kept, marked undelivered', async () => {
   const observe = path.join(scratch, 'synthetic');
   const host = { observe, command: ['/nonexistent/host'] };
@@ -330,7 +343,7 @@ test('a relay that logs a fault and exits between the first read and the livenes
   await mkdir(path.join(observe, '1'), { recursive: true });
   await writeFile(path.join(observe, '1', 'host'), `999999 ${process.pid}\n`);
   const log = path.join(observe, '1', 'frames.jsonl');
-  const clean = [{ relay: 999998, startedWall: 1 }, { frame: 0, atWall: 2, bytes: 9, type: 'hello', action: null, requestId: null }];
+  const clean = [{ relay: 999998, startedWall: 1 }, { frame: 0, atWall: 2, atMono: 2, bytes: 9, type: 'hello', action: null, requestId: null }];
   const unparsable = { unparsable: 'frame 1 (3 bytes): Unexpected token', offset: 13, atWall: 3 };
   const end = { end: true, atWall: 4, bytes: 20, frames: 1 };
   const cases = [
