@@ -99,11 +99,13 @@ def others_presence(document):
     """Independent presence oracle (D52.2): The others' span extents minus gap ranges, merged.
 
     An extent starts at the track's D55 placement and lasts its frames (R88, D67 item 7);
-    gap ranges stay absolute session times.
+    gap ranges stay absolute session times. A track with no known start (startOffsetMs is
+    optional, and readers accept null) has no extent: it adds no presence and is never
+    placed at an invented time.
     """
     spans = []
     for track in document['tracks']:
-        if track['kind'] in ('microphone', 'local'):
+        if track['kind'] in ('microphone', 'local') or track.get('startOffsetMs') is None:
             continue
         start = placed_ms(track['startOffsetMs'])
         end = start + track['frames'] * 1000 / track['sampleRate']

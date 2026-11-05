@@ -400,6 +400,27 @@ def fractional_mic(session, tracks, evidence):
     mic['content'] = [(400, mic['frames'], MIC)]
 
 
+def pre_restore_declaration(session, tracks, evidence):
+    # Mac today (OwnedBrowserCapture.swift browserTrack, before restoreBrowser): the extension declares
+    # A's and B's new wire ids after the forced resume, while browserAlive is still false, and each
+    # declaration is committed as an ended 0-frame track with no startOffsetMs/endOffsetMs, bound to
+    # its key, between system/lost and browser/restored. SPEC allows a missing start; it must never
+    # abort a rule group, and only the strict rules O0.offsets and O4.outcomeRows fail it.
+    at = tracks.index(_track(tracks, 'span-a2'))
+    for identifier, key, label in (('declared-a', A_KEY, 'remote: participant-a'),
+                                   ('declared-b', B_KEY, 'remote: participant-b')):
+        tracks.insert(at, remote(identifier, key, label, None, 0, []))
+        at += 1
+
+
+def uuid_case(session, tracks, evidence):
+    # Mac names the folder Recording-<id.uuidString.lowercased()> and JSONEncoder writes the id in
+    # uppercase (RecordingSession.swift): one UUID, two cases. SPEC says only Recording-<UUID>.
+    identifier = '9F3B2A1C-7D4E-4A5B-8C6D-0E1F2A3B4C5D'
+    session.update(id=identifier, folder=f'Recording-{identifier.lower()}')
+    evidence['newFolders'] = [session['folder']]
+
+
 def mac_loss_form(session, tracks, evidence):
     # Mac writes none/lost at the transport loss, then system/lost when the fallback commits (SPEC S-6).
     session['events'].append(dict(atMs=95400, type='othersSource', source='none', reason='lost'))
@@ -452,6 +473,7 @@ MUTANTS = {
     'early-resume': (early_resume, ['O3.resumeAt']),
     'shifted-piece': (shifted_piece, ['O0.pieces']),
     'overlapping-piece': (overlapping_piece, ['O0.pieces']),
+    'pre-restore-declaration': (pre_restore_declaration, ['O0.offsets', 'O4.outcomeRows']),
 }
 
 # name: another form a correct writer may produce; each must pass every check.
@@ -460,6 +482,7 @@ VARIANTS = {
     'fractional-mic': fractional_mic,
     'mac-loss-form': mac_loss_form,
     'rotated-wavs': rotated_wavs,
+    'uuid-case': uuid_case,
 }
 
 
@@ -499,10 +522,11 @@ def document(session, tracks):
     out = []
     for plan in tracks:
         track = dict(id=plan['id'], label=plan['label'], kind=plan['kind'], file=wav_name(plan),
-                     sampleRate=RATE, channels=plan['channels'], frames=plan['frames'],
-                     startOffsetMs=plan['startOffsetMs'],
-                     endOffsetMs=plan['startOffsetMs'] + plan['frames'] / RATE * 1000 + plan.get('endShiftMs', 0),
-                     ended=plan.get('ended', True))
+                     sampleRate=RATE, channels=plan['channels'], frames=plan['frames'])
+        if plan['startOffsetMs'] is not None:  # writers omit an unknown start, and so its end
+            track.update(startOffsetMs=plan['startOffsetMs'], endOffsetMs=plan['startOffsetMs'] +
+                         plan['frames'] / RATE * 1000 + plan.get('endShiftMs', 0))
+        track['ended'] = plan.get('ended', True)
         if 'sourceTrackId' in plan:
             track['sourceTrackId'] = plan['sourceTrackId']
             track.update(receivedFrames=plan['frames'], captureOutcome='captured')
@@ -521,7 +545,7 @@ def document(session, tracks):
                 audioMs=0, trackIds=[]))
             row['audioMs'] += track['frames'] / RATE * 1000
             row['trackIds'].append(track['id'])
-    fields = {k: v for k, v in session.items() if k not in ('events', 'extraSources', 'outcomes')}
+    fields = {k: v for k, v in session.items() if k not in ('events', 'extraSources', 'outcomes', 'folder')}
     return dict(fields, tracks=out, events=session['events'],
                 captureOutcome=dict(sources=list(sources.values()) + session.get('extraSources', [])))
 
@@ -529,7 +553,7 @@ def document(session, tracks):
 def write(out, session, tracks, evidence):
     """OUT/Recording-<id>/ and OUT/evidence.json; returns the folder."""
     out = Path(out)
-    folder = out / f"Recording-{session['id']}"
+    folder = out / session.get('folder', f"Recording-{session['id']}")
     folder.mkdir(parents=True)
     for plan in tracks:
         data = samples(plan)[:plan.get('wavFrames', plan['frames']) * plan['channels']]

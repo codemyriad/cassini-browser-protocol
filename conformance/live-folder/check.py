@@ -29,6 +29,7 @@ from pathlib import Path
 import re
 import stat
 import sys
+import uuid
 import wave
 
 HERE = Path(__file__).resolve().parent
@@ -57,6 +58,7 @@ ME = ('microphone', 'local')
 NATIVE = ('microphone', 'local', 'system')
 WAV_NAME = re.compile(r'track-[^/\\]+\.wav')
 COMMIT = re.compile(r'[0-9a-f]{40}')
+UUID_TEXT = re.compile(r'[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}')
 VIA = SCENARIO['evidence']['resumeObservation']['via']
 
 
@@ -169,8 +171,18 @@ def piece_problems(track):
     return problems
 
 
+def uuid_value(text):
+    """The UUID a canonical 8-4-4-4-12 hex string names, in either case, else None. SPEC says
+    only Recording-<UUID>: Mac names its folder in lowercase and JSONEncoder writes the id in
+    uppercase, so the folder and session.json's id are compared as values, never as bytes."""
+    return uuid.UUID(text) if isinstance(text, str) and UUID_TEXT.fullmatch(text) else None
+
+
 def extent(track):
-    """[start, end) session ms: the D55 placement plus frames/rate (R88)."""
+    """[start, end) session ms: the D55 placement plus frames/rate (R88). Only for a placeable
+    track: SPEC lets a track omit its start (a 0-frame declaration made before a restore), and
+    such a track has no extent, so it never aborts a rule group; O0.offsets and O4.outcomeRows
+    still hold it to the scenario."""
     start = events.placed_ms(track['startOffsetMs'])
     return start, start + track['frames'] * 1000 / track['sampleRate']
 
@@ -356,6 +368,10 @@ class Run:
         lost = [e['atMs'] for e, p in zip(written[:restored], pairs) if p == ('system', 'lost')]
         return [lost[-1], written[restored]['atMs']] if lost else None
 
+    def last_frame(self):
+        """The end of the last placed frame in the folder, or None when no track is placeable."""
+        return max((extent(t)[1] for t in self.tracks if _placeable(t)), default=None)
+
     def post_kill(self, key):
         return [t for t in self.keys[key] if extent(t)[0] >= self.actions['kill']['requestedAtMs']]
 
@@ -422,8 +438,11 @@ class Run:
         rule('offsets', not wrong, wrong or 'every start known, end = start + frames/rate')
         folders = self.e['newFolders']
         name = self.f.root.resolve().name
-        rule('oneFolder', folders == [name] and name == f"Recording-{self.doc.get('id')}",
-             dict(newFolders=folders, folder=name))
+        named = uuid_value(name[len('Recording-'):]) if name.startswith('Recording-') else None
+        written = uuid_value(self.doc.get('id'))
+        same = named == written if None not in (named, written) else 'malformed: needs Recording-<UUID> and a UUID id'
+        rule('oneFolder', folders == [name] and same is True,
+             dict(newFolders=folders, folder=name, id=self.doc.get('id'), sameUuid=same))
         kinds = sorted({t.get('kind') for t in self.tracks})
         rule('kinds', set(kinds) <= {'remote', 'microphone', 'system'}, kinds)
         state = [self.doc.get('state'), self.doc.get('problem'), self.doc.get('problemKind')]
@@ -513,14 +532,14 @@ class Run:
             restored['atMs'] <= self.actions['restore']['observedAtMs'] + C['ACTION_SLACK_MS']
         rule('restored', ok, dict(restored=[e['atMs'] for e in self.matching('browser', 'restored')],
                                   restore=self.actions['restore']))
-        if lost and restored:
-            end = max(extent(t)[1] for t in self.tracks)
+        end = self.last_frame()
+        if lost and restored and end is not None:
             states = [events.state_at(self.doc, at) for at in
                       ((lost['atMs'] + restored['atMs']) / 2, restored['atMs'], end)]
             sources = [s and s['source'] for s in states]
             rule('state', sources == ['system', 'browser', 'browser'], sources)
         else:
-            rule('state', False, 'needs one lost in the kill bracket and one restored after it')
+            rule('state', False, 'needs one lost in the kill bracket, one restored after it and a placed frame')
         a, b = self.key('A'), self.key('B')
         kill = self.actions['kill']['requestedAtMs']
         pre = {role: [t for t in self.keys[key] if extent(t)[0] < kill] for role, key in (('A', a), ('B', b))}
@@ -549,10 +568,11 @@ class Run:
             hz = C['TONE_' + role + '_HZ']
             tones[role] = [self.f.tone([t], extent(t)[0], extent(t)[0] + C['PROOF_MS'], hz) for t in self.post_kill(key)]
         rule('resumedTone', all(tones.values()) and all(_audible(v) for t in tones.values() for v in t), tones)
-        system = [list(extent(t)) for t in self.tracks if t.get('kind') == 'system']
+        # Placed system tracks only: a SPEC-legal declaration with no start has no extent (O0.offsets).
+        system = [list(extent(t)) for t in self.tracks if t.get('kind') == 'system' and _placeable(t)]
         rule('system', lost is not None and restored is not None and len(system) == 1 and all(
-            at_event(s, lost['atMs']) and abs(e - restored['atMs']) <= C['EDGE_MS'] for s, e in system),
-            dict(systemMs=system))
+            at_event(s, lost['atMs']) and abs(e - restored['atMs']) <= C['EDGE_MS']
+            for s, e in system), dict(systemMs=system))
         refusals = self.doc.get('refusals') if isinstance(self.doc.get('refusals'), list) else []
         refused = [r for r in refusals if isinstance(r, dict) and
                    (r.get('code') == 'startRejected' or r.get('detail') == 'resumeRefused')]
@@ -598,7 +618,7 @@ class Run:
             rule('micOn', False, 'needs a me:true selection')
             rule('micAudio', False, 'needs a me:true selection')
             return
-        mic = [t for t in self.tracks if t.get('kind') in ME]
+        mic = [t for t in self.tracks if t.get('kind') in ME and _placeable(t)]  # unplaced: no extent
         quiet, on = off['atMs'] + C['ACTION_SLACK_MS'], events.placed_ms(at)
         intruding = [t['id'] for t in mic if extent(t)[0] < on - SAMPLE_MS - 1e-9 and extent(t)[1] > quiet]
         rule('micOff', not intruding, dict(windowMs=[quiet, on], intruding=intruding))
@@ -620,8 +640,9 @@ class Run:
     def o6(self, rule):
         missing = [t.get('id') for t in self.browser if t.get('clockMethod') not in ('outputTimestamp', 'roundTrip')]
         rule('clockMethod', not missing, missing or 'every remote span')
-        end = max(extent(t)[1] for t in self.tracks)
-        rule('lastFrame', self.bracket('stop', end, C['ACTION_SLACK_MS']), dict(endMs=end, stop=self.actions['stop']))
+        end = self.last_frame()
+        rule('lastFrame', end is not None and self.bracket('stop', end, C['ACTION_SLACK_MS']),
+             dict(endMs=end, stop=self.actions['stop']))
 
     # O7 corpus shape guard ------------------------------------------------------------------------
     def o7(self, rule):
@@ -660,8 +681,8 @@ class Run:
                 state=self.doc.get('state'), problemKind=self.doc.get('problemKind'), endReason=end.get('reason'),
                 remoteSources=len(self.keys), resumeRequests=len(self.resume_requests()[1]),
                 spans=dict(A=[len(self.keys[k]) for k in self.roles['A']], B=[len(self.keys[k]) for k in self.roles['B']],
-                           microphone=sum(t.get('kind') in ME for t in self.tracks),
-                           system=sum(t.get('kind') == 'system' for t in self.tracks)),
+                           microphone=sum(t.get('kind') in ME and _placeable(t) for t in self.tracks),
+                           system=sum(t.get('kind') == 'system' and _placeable(t) for t in self.tracks)),
                 outcomes=sorted([role.get(k, 'other'), v] for k, v in outcomes.items()),
             ),
             numeric=dict(
