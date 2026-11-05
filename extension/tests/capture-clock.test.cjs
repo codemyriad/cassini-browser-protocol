@@ -945,8 +945,8 @@ test('D61.1: a stall during steady drift re-anchors by the stall alone (12000 pp
   }
 });
 
-// Mac's review of #61 (d9691ea). A stutter, stalls on consecutive batches, makes a staircase of
-// readings that a line fits as well as a rate: d9691ea took 4 x 200 ms (a slope of 1.17) as a
+// The consumer review of #61 (d9691ea). A stutter, stalls on consecutive batches, makes a
+// staircase of readings that a line fits as well as a rate: d9691ea took 4 x 200 ms (1.17) as a
 // rate that changed with no jump and re-anchored none of the 800 ms. A rate of more than
 // STALL_SLOPE (0.2: rendering at 85% is 0.18) is no clock rate, so it settles as steps, as in
 // 0.2.14; a slower one is provisional, and readings that go back to the old rate show the
@@ -1011,8 +1011,8 @@ test('D61.1: stutters and stalls one batch apart under +-15 ms jitter re-anchor 
   }
 });
 
-// Mac's minors 2 and 5 are known limits (SPEC D61.1); these bound them, on fixed seeds, so they do
-// not grow. At 85% under +-15 and +-20 ms jitter d9691ea jumped in 61 of 200 sessions while the
+// Minors 2 and 5 of that review are known limits (SPEC D61.1); these bound them, on fixed
+// seeds, so they do not grow. At 85% under +-15 and +-20 ms jitter d9691ea jumped in 61 of 200 sessions while the
 // line learned the rate (the slope bound and the junction now allow for the fit's scatter): at
 // most 25. A renderer catch-up one second into a session under the same jitter: d9691ea
 // mis-sized 33 of 100 by more than a step, extrapolating a slope fitted to six jittered readings

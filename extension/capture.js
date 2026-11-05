@@ -89,7 +89,7 @@ function resumeSuspended(context) {
 // line takes a fitted slope only once its standard error is within FOLLOW_SE (20 ms over two
 // seconds); until then it keeps the slope it has (none at first) and is re-centred on the
 // readings, as a slope fitted to a few jittered readings would be extrapolated over every frame a
-// renderer catch-up returns (Mac's review of #61).
+// renderer catch-up returns (the #61 review).
 // Steadiness is judged over the whole trail (up to TRAIL_READINGS readings), so a discontinuity
 // keeps the line from following until it leaves the trail. Readings are steady when no
 // consecutive pair's move off the slope stands out from the others': farther from their median
