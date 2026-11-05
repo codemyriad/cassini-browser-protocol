@@ -91,7 +91,7 @@ preceding version. Vectors deliberately isolate other errors; wording is not con
 | WAV data | at most 2^32-1-36 bytes |
 | Extension page packet | 400000 JSON characters |
 | Extension native requests | at most 512 in flight, 10-second response timeout |
-| Extension source buffer | 10 seconds, four pipelined requests per source |
+| Extension source buffer | 10 seconds, held chunks included (0.2.14), four pipelined requests per source |
 | Extension worklet batch | 8192 frames, partial tail flushed at stop |
 
 The last four are snapshot resource policies, not requirements on third-party hosts.
@@ -114,9 +114,36 @@ that base with getOutputTimestamp (`outputTimestamp`), or, when no positive stam
 worklet round trip that reads the render frame between two performance.now() readings
 (`roundTrip`). Both place a render frame at the instant the browser says it reaches the output
 device, so roundTrip adds the context's outputLatency to the time it read the frame. Calibration
-happens before the track is declared. Later offsets come only from
-render frames. Different frames/devices remain approximately aligned, not sample-accurate
-conference clocks. Local sender mute/suspension produces silence.
+happens before the track is declared. Render frames space every chunk. Different
+frames/devices remain approximately aligned, not sample-accurate conference clocks. Local sender
+mute/suspension produces silence.
+
+Since extension 0.2.14 (D61.1) a render stall re-anchors its context. While rendering stalls,
+the frames it never renders are never counted, so render frames alone would place every later
+chunk early by the stall, on every span of that context. The extension tracks the level
+performanceTime - contextTime*1000 - outputLatency*1000 of each fresh getOutputTimestamp (one
+whose contextTime moved). It tolerates jitter within 50 ms and follows drift no faster than 2 ms
+per rendered second, so a loss spread over many small steps (rendering slower than real time)
+still adds up. When the level rises by more
+than 50 ms against its tracked value (or, for the first fresh stamp, against the calibration
+seed plus the roundTrip uncertainty) and a fresh stamp read at least 100 ms later agrees within
+20 ms, the context re-anchors forward by the smaller agreeing step; a rise that neither confirms
+nor reverts within one second of opening settles at its smallest reading, and one whose readings
+keep crossing the level settles at no step then. The level becomes the reading the step was
+taken at, so a rise that continues past it is judged again. (After a renderer
+stall the page reads a backlog of chunks within a millisecond while rendering catches up, so
+stamps read together are no confirmation.) A span that stops during an unsettled rise places
+its own held chunks at the rise's smallest reading and leaves the rise open for the context's
+other and later spans. The re-anchor
+applies from the stalled frame (the frame of the last fresh stamp before the rise, or the first
+chunk still held, whichever is later) for every span on the context, current and later.
+Offsets never move backward: a confirmed fall is never applied and only offsets a later rise.
+The origin mapping is never re-read, and the clock facts are unchanged, so all spans still
+repeat the same values. Chunks that arrive while a rise is unsettled are held, and so are a
+span's first chunks (up to four, or one second) while its context has no positive output stamp
+yet; a chunk is never moved after it is sent. A resumed suspension re-anchors by its wall estimate from the frame it began at
+and reseeds the level; a rise still unsettled then is kept, moved by the same estimate. The lost time reaches the host as an offset jump (see Gap ranges); the
+extension never fills it with zeros and sends no warning for it.
 
 Since extension 0.2.13 (D68.1) every capture context keeps real time. A browser moves an
 AudioContext whose output has been all zeros for about 30 s onto a timer, which can run far
@@ -439,7 +466,8 @@ New writers always write the key, so `gaps: []` means no gaps and a missing key 
 - Ranges are half-open, sorted and never coalesced: one entry per padding write, even when
   only a little received audio separates two of them.
 - `kind` is diagnostic and open. Host-derived kinds: `jump` (browser offset jump; overflow,
-  suspension and stalls look the same on the wire), `input` (native host-time gap), `prefix`
+  suspension and stalls look the same on the wire; since extension 0.2.14 a browser render
+  stall reaches the host as a `jump` too, with no producer tag), `input` (native host-time gap), `prefix`
   (selection boundary to the first frame, browser or native, never in gapFrames), `writer` (below). `dropped` and `suspended` are
   reserved for a later producer tag. Readers treat every kind as absence.
 - Budget: at most 1000 ranges per track, then one `{atMs, kind:"overflow"}` at the next gap,
