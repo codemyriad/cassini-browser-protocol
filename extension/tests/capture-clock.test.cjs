@@ -193,6 +193,15 @@ test('each capture context keeps real time with one inaudible constant into its 
   }
 });
 
+// D39 installers replace an installed companion only with a strictly newer one, so the D68.1
+// capture fix ships as 0.2.13 or later.
+test('the companion that keeps capture on real time is 0.2.13 or later', () => {
+  const { version } = JSON.parse(require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'manifest.json'), 'utf8'));
+  const [major, minor, patch] = version.split('.').map(Number);
+  assert.ok(major > 0 || minor > 2 || (minor === 2 && patch >= 13), `manifest version ${version}`);
+  assert.match(source, /export function keepRealTime\(context\)/, 'capture.js keeps each context on real time');
+});
+
 test('ten-second source budget pipelines four requests, counts drops and leaves other sources running', async () => {
   const originals = new Map(['AudioContext', 'AudioWorkletNode'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)]));
   const nodes = [], packets = [], failures = [], warnings = [], last = new Map();
