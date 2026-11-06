@@ -69,6 +69,15 @@ try {
       chrome.runtime.lastError ? reject(Error(chrome.runtime.lastError.message)) : resolve();
     });
   }), id);
+  async function reloadExtension() {
+    await manager.evaluate(id => new Promise((resolve,reject) => chrome.developerPrivate.reload(id,{failQuietly:false},()=>{
+      chrome.runtime.lastError ? reject(Error(chrome.runtime.lastError.message)) : resolve();
+    })),id);
+    const page = await context.newPage();
+    await page.goto(`chrome-extension://${id}/popup.html`);
+    await page.locator('#status').filter({hasText:/Ready/}).waitFor();
+    return page;
+  }
   const popup = await context.newPage();
   await popup.goto(`chrome-extension://${id}/popup.html`);
   await popup.locator('#status').filter({hasText:/Ready/}).waitFor();
@@ -94,7 +103,8 @@ try {
   assert.equal(bridge?.connected, true, `MAIN-world discovery survived, but the replacement worker has no live relay: ${JSON.stringify(bridge)}`);
   // A fixture native sink acknowledges production audio packets in memory.
   // It never invokes an installed app, microphone, filesystem writer or speaker.
-  await fresh.evaluate(tabId => {
+  async function installAudioSink(targetWorker) {
+  await targetWorker.evaluate(tabId => {
     globalThis.fixtureAudio = [];
     const actualNative = chrome.runtime.connectNative.bind(chrome.runtime);
     chrome.runtime.connectNative = name => {
@@ -110,6 +120,8 @@ try {
     const actualQuery = chrome.tabs.query.bind(chrome.tabs);
     chrome.tabs.query = async query => query.active ? [await chrome.tabs.get(tabId)] : actualQuery(query);
   }, tabId);
+  }
+  await installAudioSink(fresh);
   const status = () => popup.evaluate(() => chrome.runtime.sendMessage({target:'background',type:'status'}));
   let current = await observed(async () => { const value = await status(); return value.browserHealth?.filesOk === undefined ? null : value; }, "packaged-file self-check");
   assert.equal(current.browserHealth.state, 'ready');
@@ -122,6 +134,21 @@ try {
   await fresh.evaluate(async tabId => {
     for (let i=0;i<2;i++) await chrome.scripting.executeScript({target:{tabId,allFrames:true},files:['relay.js'],world:'ISOLATED'});
   }, tabId);
+  await meeting.evaluate(() => {
+    window.captureLifecycle = [];
+    const close = AudioContext.prototype.close;
+    AudioContext.prototype.close = function() {
+      captureLifecycle.push({type:'contextClose',state:this.state});
+      return close.call(this);
+    };
+    addEventListener('message', event => {
+      if (event.source !== window) return;
+      const {channel,type,token,instanceId} = event.data || {};
+      if (channel === 'cassini-control' && ['start','stop'].includes(type) ||
+          channel === 'cassini-page' && ['stopped','hookReady'].includes(type))
+        captureLifecycle.push({type,token,instanceId});
+    });
+  });
   const started = await popup.evaluate(() => chrome.runtime.sendMessage({target:'background',type:'start',mode:'tracks'}));
   assert.equal(started.recording, true, JSON.stringify(started));
   const audioDeadline = Date.now() + 15000;
@@ -136,11 +163,33 @@ try {
   let power = 0;
   for (let i=0;i<pcm.length;i+=2) power += (pcm.readInt16LE(i)/32768)**2;
   assert.ok(power/(pcm.length/2) > 0.001, 'reconnected worker must receive non-silent remote audio');
-  const stopped = await popup.evaluate(() => chrome.runtime.sendMessage({target:'background',type:'stop'}));
+  // Reload while production capture is active and the generated peer keeps
+  // sending. The old relay must drain once before the same tab records again.
+  const departingToken = await meeting.evaluate(() => captureLifecycle.find(m=>m.type==='start').token);
+  const activeReloadPopup = await reloadExtension();
+  await meeting.waitForFunction(token=>captureLifecycle.some(m=>m.type==='stopped'&&m.token===token),departingToken);
+  const lifecycle = await meeting.evaluate(() => captureLifecycle);
+  assert.equal(lifecycle.filter(m=>m.type==='stop'&&m.token===departingToken).length,1,'reload posts a single stop');
+  assert.equal(lifecycle.filter(m=>m.type==='stopped'&&m.token===departingToken).length,1,'departing capture drains once');
+  assert.equal(lifecycle.filter(m=>m.type==='contextClose').length,1,'shared context closes once after flush');
+  assert.equal(lifecycle.find(m=>m.type==='contextClose').state,'running');
+  const activeWorker = context.serviceWorkers().find(item=>new URL(item.url()).host===id);
+  const readyAfterDrain = await observed(async()=>{
+    const status=await activeReloadPopup.evaluate(()=>chrome.runtime.sendMessage({target:'background',type:'status'}));
+    return status.browserHealth?.tabs.some(tab=>tab.tabId===tabId&&tab.state==='ready') && status;
+  },'replacement relay ready after active capture drains');
+  const readyEvent = await meeting.evaluate(instanceId=>captureLifecycle.findIndex(m=>m.type==='hookReady'&&m.instanceId===instanceId),readyAfterDrain.browserHealth.extensionInstance);
+  assert.ok(readyEvent>lifecycle.findIndex(m=>m.type==='stopped'&&m.token===departingToken));
+  await installAudioSink(activeWorker);
+  const restarted = await activeReloadPopup.evaluate(()=>chrome.runtime.sendMessage({target:'background',type:'start',mode:'tracks'}));
+  assert.equal(restarted.recording,true,JSON.stringify(restarted));
+  await observed(()=>activeWorker.evaluate(()=>fixtureAudio.some(p=>p.type==='audio'&&p.pcm)), 'replacement capture PCM after active reload');
+  const stopped = await activeReloadPopup.evaluate(() => chrome.runtime.sendMessage({target:'background',type:'stop'}));
   assert.equal(stopped.recording,false);
   assert.equal(await meeting.evaluate(() => fixtureDocument), document);
   assert.deepEqual(pageErrors, []);
   console.log('PASS unpacked extension reload: persistent meeting hook, versioned relay readiness, non-silent remote PCM reaches the replacement worker');
+  console.log('PASS reload during active recording: single stop and context close, drained hook readiness, same meeting records again without page errors');
   // Upgrade a page whose MAIN hook predates the readiness protocol. Install a
   // no-handshake hook only in the disposable unpacked copy, then replace the
   // extension again. Reinjection must not wrap that live hook a second time.
@@ -148,15 +197,6 @@ try {
   const compatibleHook = await readFile(hookPath,'utf8');
   const legacyHook = compatibleHook.replace('message.protocol === 1', 'message.protocol === 0');
   assert.notEqual(legacyHook,compatibleHook);
-  async function reloadExtension() {
-    await manager.evaluate(id => new Promise((resolve,reject) => chrome.developerPrivate.reload(id,{failQuietly:false},()=>{
-      chrome.runtime.lastError ? reject(Error(chrome.runtime.lastError.message)) : resolve();
-    })),id);
-    const page = await context.newPage();
-    await page.goto(`chrome-extension://${id}/popup.html`);
-    await page.locator('#status').filter({hasText:/Ready/}).waitFor();
-    return page;
-  }
   await writeFile(hookPath,legacyHook);
   await reloadExtension();
   const legacyMeeting = await context.newPage(), legacyPeer = await context.newPage();

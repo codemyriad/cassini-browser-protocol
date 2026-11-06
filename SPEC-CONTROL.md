@@ -760,8 +760,15 @@ Each status (including a successful result's nested status) adds `browserHealth`
 - Apps render the extension's health decision. Only `reloadRequired` supplies the
   guidance and optional action above. They must not infer a broken meeting from an
   empty inventory, a missing native host, or a tab's URL. An unready tab is not an
-  eligible Start/auto-start inventory entry. Existing recordings retain their
-  normal status and failure handling; health does not fabricate a Stop.
+  eligible Start/auto-start inventory entry. This decision covers the entire tab:
+  one healthy frame cannot make a tab eligible while another detected meeting
+  frame is checking, unavailable, or lost. Idle inventory omits that tab, and both
+  app and popup track Start refuse with `pageUnreachable` before native Start.
+  Admission is rechecked after asynchronous tab lookup/relay discovery. Existing
+  recording or pending-Start ownership still takes `busy` precedence. Existing
+  recordings retain their inventory, normal status and failure handling; health
+  does not fabricate a Stop. Once all detected meeting frames recover, new Start
+  eligibility returns; an unrelated unready tab does not block a healthy tab.
 
 The isolated relay and MAIN hook exchange protocol-1 readiness tied to the
 worker's current instance. The worker accepts readiness only from its own

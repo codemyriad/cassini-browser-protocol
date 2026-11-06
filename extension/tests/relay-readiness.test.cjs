@@ -53,18 +53,19 @@ test('invalidated recording relay drains both admitted and late requests before 
   const f=relay(),port=f.ports[0];port.onMessage.emit({type:'start',token:'old'});
   f.page({type:'packet',token:'old',request:1,packet:{type:'audio'}});
   f.invalidate();port.onDisconnect.emit();
+  assert.equal(f.controls.filter(m=>m.type==='stop').length,1,'one stop for the departing token');
   f.page({type:'packet',token:'old',request:2,packet:{type:'audio'}});
   for(const request of [1,2])assert.ok(f.controls.some(m=>m.type==='ack'&&m.request===request&&m.error));
   f.page({type:'stopped',token:'old'});
   assert.equal([...f.handlers.values()].reduce((n,set)=>n+set.size,0),0);
 });
-function unreadyFrame(app,tabId=2,frameId=5,count=1) {
-  const port={name:'cassini-frame',sender:{id:'extension',tab:{id:tabId},frameId},onMessage:event(),onDisconnect:event(),sent:[],postMessage(m){this.sent.push(m)}};
+function unreadyFrame(app,tabId=2,frameId=5,count=1,outcome="relayUnavailable") {
+  const port={name:'cassini-frame',sender:{id:'extension',tab:{id:tabId},frameId},onMessage:event(),onDisconnect:event(),sent:[],postMessage(m){this.sent.push(m);if(m.type==='stop')queueMicrotask(()=>this.onMessage.emit({type:'stopped'}))}};
   app.chrome.runtime.onConnect.emit(port);
   const hello=port.sent.find(m=>m.type==='relayHello');
   port.onMessage.emit({...hello});
   port.onMessage.emit({type:'discovery',sourceCount:count,heard:true});
-  port.onMessage.emit({...hello,type:'relayUnavailable'});
+  if(outcome)port.onMessage.emit({...hello,type:outcome});
   return {port,hello};
 }
 test('native connection and per-tab readiness are separate; idle browsers never get a reload warning',async()=>{
@@ -117,7 +118,11 @@ test('explicit reload action is limited to a detected broken meeting and never s
     app.chrome.tabs.reload=async tabId=>reloads.push(tabId);
     unreadyFrame(app);
     const command=tabId=>({type:'command',requestId:'reload-'+tabId,action:'reloadTab',tabId,independent:true});
-    assert.equal((await app.command(command(2))).ok,true);
+    const result=await app.command(command(2));
+    assert.equal(result.ok,true);
+    assert.equal(result.status.browserHealth.state,'idle');
+    const duplicate=await app.command({...command(2),requestId:'reload-again'});
+    assert.equal(duplicate.ok,false);assert.equal(duplicate.code,'gone');
     assert.equal((await app.command(command(99))).ok,false);
     assert.deepEqual(reloads,[2]);assert.equal(app.audio.length,0);
     const hello=app.ports[0].sent.find(m=>m.type==='hello');
@@ -174,4 +179,83 @@ test('a browser-confirmed removed meeting frame clears its warning instead of ac
     await app.api.repairTab(2,4);
     assert.equal(app.api.browserHealth().state,'idle');
   } finally {app.close()}
+});
+
+for(const state of ['unavailable','checking','lost'])test('whole-tab readiness gates idle inventory and both track Start paths: healthy + '+state,async()=>{
+  const app=await setup(1);
+  const command=id=>({type:'command',requestId:id,action:'start',tabId:2,mode:'tracks',independent:true});
+  let broken;
+  try {
+    const query=app.chrome.tabs.query;
+    app.chrome.tabs.query=async options=>options.active?[await app.chrome.tabs.get(2)]:query(options);
+    app.pages[0].onMessage.emit({type:'discovery',sourceCount:1,heard:true});
+    if(state==='lost') {
+      const old=app.frame(2,1,5);old.onDisconnect.emit();await app.api.repairTab(2,5);
+    } else {
+      broken=unreadyFrame(app,2,5,1,state==='checking'?null:'relayUnavailable');
+    }
+    assert.equal(app.api.browserHealth().tabs.find(t=>t.tabId===2).state,state==='checking'?'checking':'reloadRequired');
+    assert.equal((await app.api.meetings()).meetings.some(m=>m.tabId===2),false);
+    const refused=await app.command(command('unready'));
+    assert.equal(refused.ok,false);assert.equal(refused.code,'pageUnreachable');
+    await assert.rejects(app.api.start('tracks'),error=>error.resultCode==='pageUnreachable','popup track Start uses the same tab gate');
+    assert.equal(app.audio.length,0,'no native Start for a healthy subset');
+    assert.equal(app.api.status().recording,false);
+    if(state==='lost') app.frame(2,1,5);
+    else broken.port.onMessage.emit({...broken.hello,type:'relayReady'});
+    assert.equal(app.api.browserHealth().tabs.find(t=>t.tabId===2).state,'ready');
+    assert.equal((await app.api.meetings()).meetings.find(m=>m.tabId===2).sourceCount,2);
+    assert.equal((await app.command(command('recovered'))).ok,true);
+    assert.equal(app.audio.length,1);
+    // Health may degrade during a retained recording. Inventory/status retain
+    // that session, and an attempted Start must remain busy rather than fallback.
+    unreadyFrame(app,2,9);
+    assert.equal(app.api.browserHealth().tabs.find(t=>t.tabId===2).state,'reloadRequired');
+    assert.equal((await app.api.meetings()).meetings.some(m=>m.tabId===2),true);
+    assert.equal(app.api.controlStatus().sessions[0].recording,true);
+    const duplicate=await app.command(command('busy'));
+    assert.equal(duplicate.ok,false);assert.equal(duplicate.code,'busy');
+    await assert.rejects(app.api.start('tracks'),error=>error.resultCode==='busy');
+    assert.equal(app.audio.length,1);assert.equal(app.audio[0].sent.filter(p=>p.type==='start').length,1);
+    assert.equal(app.audio[0].sent.some(p=>p.type==='stop'),false,'health never fabricates a Stop');
+    await app.api.stop();
+  } finally {app.close()}
+});
+
+test('idle inventory rechecks whole-tab readiness after asynchronous tab lookup',async()=>{
+ const app=await setup(1);let release;
+ try {
+  let entered;const lookupEntered=new Promise(resolve=>entered=resolve),gate=new Promise(resolve=>release=resolve);
+  const get=app.chrome.tabs.get;
+  app.chrome.tabs.get=async id=>{entered();await gate;return get(id)};
+  const inventory=app.api.meetings();await lookupEntered;
+  unreadyFrame(app);release();
+  assert.equal((await inventory).meetings.some(m=>m.tabId===2),false);
+ } finally {release?.();app.close()}
+});
+
+
+for(const phase of ['lookup','connect'])test('track Start rechecks tab readiness after asynchronous '+phase,async()=>{
+ const app=await setup(1);
+ try {
+  let injected=false;
+  const key=phase==='lookup'?'get':'sendMessage',original=app.chrome.tabs[key];
+  app.chrome.tabs[key]=async(...args)=>{if(!injected){injected=true;unreadyFrame(app)}return original(...args)};
+  const result=await app.command({type:'command',requestId:'raced-start',action:'start',tabId:2,mode:'tracks',independent:true});
+  assert.equal(injected,true);assert.equal(result.ok,false);assert.equal(result.code,'pageUnreachable');
+  assert.equal(app.audio.length,0);
+ } finally {app.close()}
+});
+
+test('an unready meeting in another tab does not block a healthy tab',async()=>{
+ const app=await setup(1);
+ try {
+  app.tabs.set(3,{id:3,title:'Other meeting',url:'https://meet.example/other'});
+  unreadyFrame(app,3);
+  assert.equal(app.api.browserHealth().state,'reloadRequired');
+  assert.deepEqual([...(await app.api.meetings()).meetings].map(m=>m.tabId),[2]);
+  const result=await app.command({type:'command',requestId:'healthy-tab',action:'start',tabId:2,mode:'tracks',independent:true});
+  assert.equal(result.ok,true);assert.equal(app.audio.length,1);
+  await app.api.stop();
+ } finally {app.close()}
 });

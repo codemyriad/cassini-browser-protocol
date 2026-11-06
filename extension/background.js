@@ -51,21 +51,30 @@ const identityReady = (async () => {
 const lostMeetings = new Map();
 const tabRepairs = new Map();
 const relayReady = frame => frame.relayAlive === true && frame.hookReady === true && !frame.obsolete;
+// One decision for health, idle inventory and new track captures. Undetected
+// idle frames do not create a warning or change popup admission by themselves.
+function tabReadiness(tabId) {
+  const current = [...frames].filter(f => f.tabId === tabId && !f.obsolete);
+  const relevant = current.filter(f => f.sourceCount > 0);
+  const lost = [...lostMeetings.values()].some(f => f.tabId === tabId);
+  if (!lost && !relevant.length) return null;
+  const ready = !lost && relevant.every(relayReady);
+  const unavailable = relevant.some(f => f.relayAlive && !f.checking && !f.hookReady);
+  const repairing = [...tabRepairs.keys()].some(key => key === tabId || String(key).startsWith(`${tabId}:`));
+  const checking = !ready && !unavailable && (repairing || current.some(f => f.checking));
+  return {tabId, state:ready ? "ready" : checking ? "checking" : "reloadRequired",
+    hookSeen:current.some(f => f.hookSeen) || lost,
+    relayAlive:current.some(f => f.relayAlive),
+    ...(ready || checking ? {} : {message:"Reload the meeting tab so Cassini can record it.", action:"reloadMeetingTab"})};
+}
+function requireTrackReadiness(tabId) {
+  const readiness = tabReadiness(tabId);
+  if (readiness && readiness.state !== "ready")
+    throw refused("Cassini cannot reach this page yet. Reload the meeting tab, then try again.", "pageUnreachable");
+}
 function browserHealth() {
   const candidates = new Set([...lostMeetings.values()].map(f => f.tabId).concat([...frames].filter(f => !f.obsolete && f.sourceCount > 0).map(f => f.tabId)));
-  const tabs = [...candidates].slice(0, 100).map(tabId => {
-    const current = [...frames].filter(f => f.tabId === tabId && !f.obsolete);
-    const relevant = current.filter(f => f.sourceCount > 0);
-    const lost = [...lostMeetings.values()].some(f => f.tabId === tabId);
-    const ready = !lost && relevant.length > 0 && relevant.every(relayReady);
-    const unavailable = relevant.some(f => f.relayAlive && !f.checking && !f.hookReady);
-    const repairing = [...tabRepairs.keys()].some(key => key === tabId || String(key).startsWith(`${tabId}:`));
-    const checking = !ready && !unavailable && (repairing || current.some(f => f.checking));
-    return {tabId, state:ready ? "ready" : checking ? "checking" : "reloadRequired",
-      hookSeen:current.some(f => f.hookSeen) || lost,
-      relayAlive:current.some(f => f.relayAlive),
-      ...(ready || checking ? {} : {message:"Reload the meeting tab so Cassini can record it.", action:"reloadMeetingTab"})};
-  });
+  const tabs = [...candidates].slice(0, 100).map(tabReadiness);
   const state = tabs.some(t => t.state === "reloadRequired") ? "reloadRequired" : tabs.some(t => t.state === "checking") ? "checking" : tabs.length ? "ready" : "idle";
   return {worker:"ready", nativeControl:appControl.port ? "connected" : "disconnected",
     extensionVersion, extensionInstance, ...companionDiagnostics, state, tabs};
@@ -426,6 +435,7 @@ async function start(mode, tabId = null, options = {}) {
     if (request.cancelled || options.resumeIntent?.cancelled) throw new Error("Recording could not start.");
     if (!Number.isSafeInteger(tab?.id) || tab.id < 0 || !/^https?:/.test(tab.url || "")) throw refused("Open the meeting tab first. Recording works on web pages only.", "notWebPage");
     if (sessions.has(tab.id)) throw refused("A recording is already running. Stop it before starting another.", "busy");
+    if (mode === "tracks") requireTrackReadiness(tab.id);
     const identity = callInfo(tab.id);
     if (options.expectedCallGeneration !== undefined && options.expectedCallGeneration !== identity.generation)
       throw refused("That call is no longer active.", "gone");
@@ -454,6 +464,7 @@ async function start(mode, tabId = null, options = {}) {
           await new Promise(resolve => setTimeout(resolve, 50));
         }
         if (![...frames].some(frame => frame.tabId === tab.id && relayReady(frame))) throw refused("Cassini cannot reach this page yet. Reload the meeting tab, then try again.", "pageUnreachable");
+        requireTrackReadiness(tab.id);
       } else {
         streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
       }
@@ -813,6 +824,7 @@ async function meetings() {
   const found = tabs.map(([tabId, tab]) => {
     try {
       const session = sessions.get(tabId);
+      if (!session && tabReadiness(tabId)?.state !== "ready") return null;
       const known = !!tab && /^https?:/.test(tab.url || "");
       if (!known) tab = session?.lastTab;
       if (!tab || !/^https?:/.test(tab.url || "")) return null;
@@ -835,6 +847,7 @@ async function reloadMeetingTab(tabId) {
   const health = browserHealth().tabs.find(tab => tab.tabId === tabId);
   if (health?.state !== "reloadRequired") throw refused("That meeting tab does not need a reload.", "gone");
   await chrome.tabs.reload(tabId);
+  tabUpdated(tabId, {status:"loading"});
 }
 async function controlCommand(command, intent = {}) {
   await recovery;
@@ -845,6 +858,7 @@ async function controlCommand(command, intent = {}) {
   }
   if (command.action === "start") {
     if (startBusy(command)) throw refused("A recording is already running. Stop it before starting another.", "busy");
+    requireTrackReadiness(command.tabId);
     if (![...frames].some(frame => frame.tabId === command.tabId && relayReady(frame) && frame.sourceCount > 0))
       throw refused("No audio is available from that meeting yet.", "noSources");
     await start("tracks", command.tabId, { independent: command.independent === true,

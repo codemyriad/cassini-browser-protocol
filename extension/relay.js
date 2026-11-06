@@ -30,9 +30,11 @@
     // Resolve every admitted request before stopping the old hook. The draining
     // listener also rejects requests emitted by a scan already in flight.
     if (token || drainingToken) {
-      drainingToken ||= token;
-      for (const request of pending) control({type:"ack",token,request,error:"The extension reloaded. Audio recorded so far was saved."});
-      control({type:"stop",token:drainingToken}); token = null;
+      if (token) {
+        drainingToken = token; token = null;
+        for (const request of pending) control({type:"ack",token:drainingToken,request,error:"The extension reloaded. Audio recorded so far was saved."});
+        control({type:"stop",token:drainingToken});
+      }
       handshakeTimer = setTimeout(cleanup, 10000);
     } else cleanup();
   }
