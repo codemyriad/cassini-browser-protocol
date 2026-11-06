@@ -4,7 +4,7 @@ async function command(type, mode) {
   if (busy && type === "status") return;
   if (type !== "status") { busy = true; document.querySelectorAll("button").forEach(button => button.disabled = true); }
   try {
-    const result = await chrome.runtime.sendMessage({ target: "background", type, mode, tabId:reloadTabId });
+    const result = await chrome.runtime.sendMessage({ target: "background", type, mode, ...(type === "reloadMeetingTab" ? {tabId:reloadTabId} : {}) });
     if (result.error) throw new Error(result.error);
     statusText.textContent = result.message;
     const health = result.browserHealth;
