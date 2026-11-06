@@ -593,10 +593,14 @@ New writers always write the key, so `gaps: []` means no gaps and a missing key 
   last written frame, up to the Stop moment (a Stop while its writer queue is full, a drain that
   times out), is padded at the end as a `writer` range too; when the buffer that follows the loss
   starts after the Stop moment, only the loss's share before that moment is padded, after the
-  host time ahead of the loss, which is input time under the same rule. The problem names the loss with one
+  host time ahead of the loss, which is input time under the same rule, even when none of the
+  writer loss overlaps Stop. Tail durations are measured from the latest input buffer's host
+  end (its timestamp plus its duration), then appended at the file position: clock divergence
+  already absorbed between buffers is never padded again. The problem names the loss with one
   sentence per source, after any earlier problem: `N ms of <kind> audio was lost because the
   computer could not keep up; the gaps contain silence.` (N: that source's `writer` padding in
-  ms, rounded half up; kind: the track kind). Literal cases: conformance/gaps/writer.json.
+  ms, summed exactly before rounding half up once per source; kind: the track kind). Literal
+  cases: conformance/gaps/writer.json.
 - Writers record ranges whether or not multi-stream was negotiated: these are host facts.
 - Gap flag: only a `jump` or `input` padding write of at least one second (frames >= rate),
   including one written after the overflow marker, makes the session interrupted with

@@ -10,7 +10,8 @@ and presence helper.
 Each case lists abstract steps (frame counts only, PCM16 mono, 48 kHz unless `rate` is
 given) and the expected recorded spans in creation order. `features` lists the negotiated
 features: `[]` is a legacy session, which records ranges too. `selection` sets the initial
-`me`/`others` state, and both default to true.
+`me`/`others` state, and both default to true. Optional `problem` is an earlier problem
+that the writer-loss message must follow without replacing it.
 
 | op | Meaning |
 | --- | --- |
@@ -21,7 +22,7 @@ features: `[]` is a legacy session, which records ranges too. `selection` sets t
 | `trackEnd {id, droppedFrames}` | Negotiated end, replayed with reason `ended` and endOffsetMs null. Adds the count to the latest span that recorded the wire ID. |
 | `nativeTrack {id, kind, rate, boundaryMs?}` | Native span, with an optional selection boundary. |
 | `input {id, hostMs, frames, writerFrames=0}` | Native input buffer with its session-relative host stamp. `writerFrames`: frames the host writer lost right before it (R93-2 D2), at most the host time since the previous buffer (rounded half up), padded as a `writer` range ending where the buffer starts; only host time they do not cover is an `input` gap, padded before them. |
-| `writerTail {id, untilMs, resumeMs?, writerFrames?}` | Native audio the host writer lost after the span's last frame, padded as a `writer` range up to `untilMs` (a Stop moment). With `resumeMs`, the `writerFrames` lost lie right before a buffer at `resumeMs`, after `untilMs`: only their share before `untilMs` is padded, after the host time ahead of them as an `input` gap under the one-second rule (shorter is clock skew, not padded). |
+| `writerTail {id, untilMs, resumeMs?, writerFrames?}` | Native audio the host writer lost after its latest input's host end (timestamp plus duration), padded at the file position as a `writer` range up to `untilMs` (a Stop moment). Requires a preceding `input`; absorbed clock divergence is never restored. With `resumeMs`, the `writerFrames` lost lie right before a buffer at `resumeMs`, after `untilMs`: only their share before `untilMs` is padded, after the host time ahead of them as an `input` gap under the one-second rule (shorter is clock skew, not padded). That uncovered input time is clipped to Stop and padded independently, even if no writer frames overlap Stop. |
 
 Each recorded span is closed at the end of the case, as by a user Stop without a problem.
 Offsets round half up. A writer that keeps an inert zero-frame span for a source declared while
@@ -34,6 +35,11 @@ mean absent or zero. `atMs` and `durationMs` compare within 1e-6 ms; `frames` mu
 The overflow case gives `gapsCount`, `gapsHead` and `gapsTail` instead of 1001 literal
 entries. `state` and `problemKind` are the saved session's; `problemKind: null` means absent.
 `endReason` is the saved `end` event's reason: `user` when absent, `error` after host writer loss.
+Where `expected.problem` is present, compare that string exactly. Writer loss contributes one
+shared sentence per source, after any earlier problem, in source creation order. Sum writer
+padding durations exactly before rounding milliseconds half up once for each source; producer
+drops and input gaps are not writer loss. Cases without `expected.problem` do not constrain
+ordinary gap/capture problem copy.
 Native gap kinds assume an unwarped clock, so nominal and mapped positions agree.
 
 ## presence.json
@@ -56,5 +62,8 @@ presence.json or writedown.json literal, and that coalescing ranges, truncating 
 span, flagging every gap, or deriving the flag from stored ranges alone each fail at least one
 vector, as does counting host writer loss as a gap, keeping a user end after it, padding it on
 top of the host time it covers, padding more of it than the host time between the buffers, or
-padding a tail loss from the last written frame instead of where it lies. Not covered here (app fault injection): a long gap together with
+padding a tail loss from the last written frame instead of where it lies, restoring absorbed
+clock divergence, or losing uncovered input time when writer loss begins at/after Stop. Exact
+problem literals reject the old disk-stall copy, half-even rounding, per-range sentences, and
+dropping an earlier problem. Not covered here (app fault injection): a long gap together with
 capture loss or a failed write, where io and capture take precedence.

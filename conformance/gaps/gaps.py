@@ -25,14 +25,15 @@ def _number(value):
 
 
 class Writer:
-    def __init__(self, features=(), me=True, others=True):
+    def __init__(self, features=(), me=True, others=True, problem=None):
         self.negotiated = 'source-outcomes-v1' in features
         self.me, self.others = me, others
         self.spans, self.wire, self.native = [], {}, {}
         self.flagged = self.lost = False
+        self.problem = problem
 
     def _open(self, wire, kind, rate, boundary=None, native=False):
-        span = dict(wire=wire, kind=kind, rate=rate, frames=0, gapFrames=0, droppedFrames=0, gaps=[],
+        span = dict(wire=wire, kind=kind, rate=rate, frames=0, gapFrames=0, droppedFrames=0, writerFrames=0, gaps=[],
                     startOffsetMs=boundary, boundary=boundary is not None, native=native, ended=False)
         self.spans.append(span)
         return span
@@ -45,6 +46,7 @@ class Writer:
         at = _position(span)
         span['frames'] += frames
         if kind == 'writer':
+            span['writerFrames'] += frames
             span['droppedFrames'] += frames  # host write loss: io, never the gap flag (R93-2 D2)
             self.lost = True
         elif kind != 'prefix':
@@ -132,28 +134,52 @@ class Writer:
         With resumeMs, the writerFrames lost lie right before a buffer at resumeMs, past
         untilMs: only their share before untilMs is padded, after the host time ahead of
         them, which is an input gap under the one-second rule (shorter is clock skew)."""
-        span = self.native[id]['span']
-        start, rate = Fraction(str(span['startOffsetMs'])), span['rate']
-        until = _half_up((Fraction(str(untilMs)) - start) * rate / 1000)
-        frames = max(0, until - span['frames'])
-        if resumeMs is not None:
-            lost_from = _half_up((Fraction(str(resumeMs)) - start) * rate / 1000) - writerFrames
-            frames = min(frames, max(0, until - lost_from), writerFrames)
-            if frames and lost_from - span['frames'] >= rate:
-                self._pad(span, lost_from - span['frames'], 'input')
-        if frames:
-            self._pad(span, frames, 'writer')
+        state = self.native[id]
+        span, rate = state['span'], state['span']['rate']
+        # File time can differ from host time by clock divergence already absorbed
+        # between inputs. Measure new loss from the latest input's host end; append
+        # that duration at the current file position without bringing divergence back.
+        host_end = Fraction(str(state['host'])) + Fraction(state['frames'] * 1000, rate)
+        until = max(0, _half_up((Fraction(str(untilMs)) - host_end) * rate / 1000))
+        if resumeMs is None:
+            missing, lost = 0, until
+        else:
+            resume = _half_up((Fraction(str(resumeMs)) - host_end) * rate / 1000)
+            lost_from = max(0, resume - writerFrames)
+            missing = min(until, lost_from)
+            lost = max(0, min(until, resume) - lost_from)
+        # Uncovered input exists even when the loss starts at or beyond Stop.
+        if missing >= rate:
+            self._pad(span, missing, 'input')
+        if lost:
+            self._pad(span, lost, 'writer')
+
+    def _loss_message(self, kind, milliseconds):
+        return (f"{_half_up(milliseconds)} ms of {kind} audio was lost because the computer "
+                "could not keep up; the gaps contain silence.")
+
+    def _writer_problems(self):
+        # Count only host writer padding, not producer drops or input gaps. Sum
+        # exact durations before rounding once per source, in source creation order.
+        totals = {}
+        for span in self.spans:
+            if span['writerFrames']:
+                identity = span['wire']
+                kind, duration = totals.get(identity, (span['kind'], Fraction(0)))
+                totals[identity] = kind, duration + Fraction(span['writerFrames'] * 1000, span['rate'])
+        return [self._loss_message(kind, duration) for kind, duration in totals.values()]
 
     def result(self):
         tracks = [dict(wire=s['wire'], startOffsetMs=s['startOffsetMs'], frames=s['frames'], gapFrames=s['gapFrames'],
                        droppedFrames=s['droppedFrames'], gaps=s['gaps']) for s in self.spans]
-        return dict(state='interrupted' if self.flagged or self.lost else 'completed',
-                    problemKind='io' if self.lost else 'gap' if self.flagged else None,
-                    endReason='error' if self.lost else 'user', tracks=tracks)
+        return dict(state='interrupted' if self.flagged or self.lost or self.problem else 'completed',
+                    problemKind='io' if self.lost else 'capture' if self.problem else 'gap' if self.flagged else None,
+                    endReason='error' if self.lost else 'user', tracks=tracks,
+                    problem=' '.join(filter(None, [self.problem, *self._writer_problems()])) or None)
 
 
 def replay(case):
-    writer = Writer(case.get('features', ()), **case.get('selection', {}))
+    writer = Writer(case.get('features', ()), problem=case.get('problem'), **case.get('selection', {}))
     for step in case['steps']:
         writer.step(step)
     return writer.result()
