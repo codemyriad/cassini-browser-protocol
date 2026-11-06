@@ -5,6 +5,83 @@ async function hasOffscreenDocument() {
 }
 
 const frames = new Set();
+// A storage.session identity survives worker eviction, but Chrome clears it on
+// extension reload/update. No content script can read this storage area.
+const relayProtocol = 1;
+const TAB_READY_DEADLINE_MS = 2500;
+const relayTimers = {later:(fn,ms)=>setTimeout(fn,ms), cancel:id=>clearTimeout(id)};
+const extensionVersion = chrome.runtime.getManifest?.().version || "test";
+let extensionInstance;
+const identityReady = (async () => {
+  const stored = await chrome.storage.session.get("cassiniExtensionInstance");
+  extensionInstance = typeof stored.cassiniExtensionInstance === "string" && stored.cassiniExtensionInstance.length > 0 && stored.cassiniExtensionInstance.length <= 128 ? stored.cassiniExtensionInstance : crypto.randomUUID();
+  await chrome.storage.session.set({cassiniExtensionInstance:extensionInstance});
+})().catch(() => { extensionInstance = crypto.randomUUID(); });
+const lostMeetings = new Map();
+const tabRepairs = new Map();
+const relayReady = frame => frame.relayAlive === true && frame.hookReady === true && !frame.obsolete;
+function browserHealth() {
+  const candidates = new Set([...lostMeetings.values()].map(f => f.tabId).concat([...frames].filter(f => !f.obsolete && f.sourceCount > 0).map(f => f.tabId)));
+  const tabs = [...candidates].slice(0, 100).map(tabId => {
+    const current = [...frames].filter(f => f.tabId === tabId && !f.obsolete);
+    const relevant = current.filter(f => f.sourceCount > 0);
+    const lost = [...lostMeetings.values()].some(f => f.tabId === tabId);
+    const ready = !lost && relevant.length > 0 && relevant.every(relayReady);
+    const unavailable = relevant.some(f => f.relayAlive && !f.checking && !f.hookReady);
+    const repairing = [...tabRepairs.keys()].some(key => key === tabId || String(key).startsWith(`${tabId}:`));
+    const checking = !ready && !unavailable && (repairing || current.some(f => f.checking));
+    return {tabId, state:ready ? "ready" : checking ? "checking" : "reloadRequired",
+      hookSeen:current.some(f => f.hookSeen) || lost,
+      relayAlive:current.some(f => f.relayAlive),
+      ...(ready || checking ? {} : {message:"Reload the meeting tab so Cassini can record it.", action:"reloadMeetingTab"})};
+  });
+  const state = tabs.some(t => t.state === "reloadRequired") ? "reloadRequired" : tabs.some(t => t.state === "checking") ? "checking" : tabs.length ? "ready" : "idle";
+  return {worker:"ready", nativeControl:appControl.port ? "connected" : "disconnected",
+    extensionVersion, extensionInstance, state, tabs};
+}
+async function repairTab(tabId, frameId = null) {
+  const key = frameId === null ? tabId : `${tabId}:${frameId}`;
+  if (tabRepairs.has(key)) return tabRepairs.get(key);
+  const repair = (async () => {
+    await identityReady;
+    const probe = async () => {
+      let deadline;
+      try {
+        return await Promise.race([
+          chrome.tabs.sendMessage(tabId, {type:"cassini-connect"}, frameId === null ? {} : {frameId}).catch(() => null),
+          new Promise(resolve => { deadline = relayTimers.later(() => resolve(null), TAB_READY_DEADLINE_MS); })
+        ]);
+      } finally { relayTimers.cancel(deadline); }
+    };
+    const current = await probe();
+    if ((current?.connected || current?.needsReload) && current.protocol === relayProtocol && current.instanceId === extensionInstance) return;
+    // Never wrap RTCPeerConnection again on an already-running page. A fresh
+    // isolated relay can reuse a compatible MAIN hook; older hooks require reload.
+    try {
+      await chrome.scripting.executeScript({target:frameId === null ? {tabId,allFrames:true} : {tabId,frameIds:[frameId]},files:["relay.js"],world:"ISOLATED"});
+      await probe();
+    } catch (error) {
+      // A browser-confirmed removed frame is gone, not a broken meeting relay.
+      // A permission failure proves neither removal nor a new meeting.
+      if (frameId !== null && /No frame with id|No tab with id|Frame with ID .* (removed|not found)/i.test(String(error.message)))
+        lostMeetings.delete(`${tabId}:${frameId}`);
+    }
+  })().finally(() => { tabRepairs.delete(key); notifyControl(); });
+  tabRepairs.set(key, repair);
+  return repair;
+}
+let repairingTabs;
+function repairOpenTabs() {
+  if (repairingTabs) return repairingTabs;
+  repairingTabs = (async () => {
+    await recovery;
+    const tabs = await chrome.tabs.query({});
+    await Promise.all(tabs.filter(t => /^https?:/.test(t.url || "")).map(t => repairTab(t.id)));
+  })().catch(() => {}).finally(() => { repairingTabs = null; });
+  return repairingTabs;
+}
+chrome.runtime.onInstalled?.addListener(() => { void repairOpenTabs(); });
+chrome.runtime.onStartup?.addListener(() => { void repairOpenTabs(); });
 // Browser-owned lifecycle evidence, never supplied by a page-posted packet.
 const pageStates = new Map();
 // The app stops a closed tab's retained session as tabClosed after its 2 s
@@ -342,10 +419,10 @@ async function start(mode, tabId = null, options = {}) {
       if (mode === "tracks") {
         await chrome.tabs.sendMessage(tab.id, { type: "cassini-connect" }).catch(() => {});
         const deadline = Date.now() + 500;
-        while (!session.stopping && ![...frames].some(frame => frame.tabId === tab.id) && Date.now() < deadline) {
+        while (!session.stopping && ![...frames].some(frame => frame.tabId === tab.id && relayReady(frame)) && Date.now() < deadline) {
           await new Promise(resolve => setTimeout(resolve, 50));
         }
-        if (![...frames].some(frame => frame.tabId === tab.id)) throw refused("Cassini cannot reach this page yet. Reload the meeting tab, then try again.", "pageUnreachable");
+        if (![...frames].some(frame => frame.tabId === tab.id && relayReady(frame))) throw refused("Cassini cannot reach this page yet. Reload the meeting tab, then try again.", "pageUnreachable");
       } else {
         streamId = await chrome.tabCapture.getMediaStreamId({ targetTabId: tab.id });
       }
@@ -382,7 +459,7 @@ async function start(mode, tabId = null, options = {}) {
       session.ready = true;
       if (mode === "tracks") {
         for (const frame of frames) {
-          if (frame.tabId !== tab.id || session.frames.has(frame)) continue;
+          if (frame.tabId !== tab.id || !relayReady(frame) || session.frames.has(frame)) continue;
           session.frames.add(frame);
           frame.port.postMessage({ type: "start", token: session.token, origin: session.origin, captureLocal: session.captureLocal, sourceOutcomes: session.sourceOutcomes });
         }
@@ -473,23 +550,33 @@ async function forwardPacket(session, packet, documentGeneration) {
 
 chrome.runtime.onConnect.addListener(port => {
   if (port.name !== "cassini-frame" || port.sender?.id !== chrome.runtime.id || !port.sender.tab) return;
-  const frame = { port, tabId: port.sender.tab.id, frameId: port.sender.frameId ?? 0, sourceCount: 0, heard: false, fencedGenerations: new Set() };
+  const frame = { port, tabId: port.sender.tab.id, frameId: port.sender.frameId ?? 0, sourceCount: 0, heard: false, checking:true, relayAlive:false, hookReady:false, fencedGenerations: new Set() };
   if (pageState(frame.tabId) === "closed") return;
   if (frame.frameId === 0) setPageState(frame.tabId, "present");
   frames.add(frame);
   if (!identitiesHydrated && frame.frameId === 0) void recovery.then(() => {
     if (frames.has(frame) && !frame.obsolete) setPageState(frame.tabId, "present");
   });
-  port.postMessage({ type: "discover" });
-  // Newly inserted frames may carry meeting tracks; they share the original session clock.
-  const current = sessions.get(frame.tabId);
-  if (current?.ready && current.mode === "tracks" && !current.stopping) {
-    current.frames.add(frame);
-    port.postMessage({ type: "start", token: current.token, origin: current.origin, captureLocal: current.captureLocal, sourceOutcomes: current.sourceOutcomes });
-  }
+
   port.onMessage.addListener(async message => {
     if (!identitiesHydrated) await recovery;
     if (!frames.has(frame)) return;
+    if (message.type === "relayHello" || message.type === "relayReady" || message.type === "relayUnavailable") {
+      if (message.protocol !== relayProtocol || message.instanceId !== extensionInstance || frame.obsolete) return;
+      frame.relayAlive = true;
+      if (message.type !== "relayHello") {
+        frame.checking = false; clearTimeout(frame.handshakeDeadline); frame.hookReady = message.type === "relayReady";
+        frame.hookSeen ||= frame.hookReady;
+        if (frame.hookReady) {
+          const current = sessions.get(frame.tabId);
+          if (current?.ready && current.mode === "tracks" && !current.stopping && !current.frames.has(frame)) {
+            current.frames.add(frame);
+            port.postMessage({type:"start",token:current.token,origin:current.origin,captureLocal:current.captureLocal,sourceOutcomes:current.sourceOutcomes});
+          }
+        }
+      }
+      notifyControl(); return;
+    }
     if (message.type === "pageState") {
       if (!frame.obsolete && frame.frameId === 0 && ["present", "navigating"].includes(message.state)) {
         setPageState(frame.tabId, message.state);
@@ -499,6 +586,8 @@ chrome.runtime.onConnect.addListener(port => {
     }
     if (message.type === "discovery") {
       if (frame.obsolete || pageState(frame.tabId) === "closed") return;
+      frame.hookSeen = true;
+      lostMeetings.delete(`${frame.tabId}:${frame.frameId}`);
       // A subframe's spans belong to the main document it appeared under (D61).
       if (frame.frameId !== 0) frame.mainFrame ??= mainFrame(frame.tabId);
       const document = message.documentGeneration, generation = message.callGeneration;
@@ -576,6 +665,12 @@ chrome.runtime.onConnect.addListener(port => {
     try { port.postMessage({ type: "ack", token: session.token, request: message.request }); } catch {}
   });
   port.onDisconnect.addListener(() => {
+    if (frame.sourceCount > 0 && !frame.obsolete && pageState(frame.tabId) === "present") {
+      lostMeetings.set(`${frame.tabId}:${frame.frameId}`, {tabId:frame.tabId,frameId:frame.frameId});
+      if (lostMeetings.size > 100) lostMeetings.delete(lostMeetings.keys().next().value);
+      void repairTab(frame.tabId, frame.frameId);
+    }
+    clearTimeout(frame.handshakeDeadline);
     frames.delete(frame);
     notifyControl();
     frame.finished?.();
@@ -587,6 +682,15 @@ chrome.runtime.onConnect.addListener(port => {
         setPageState(frame.tabId, "navigating");
     }
   });
+  const hello = () => {
+    if (!frames.has(frame)) return;
+    frame.handshakeDeadline = setTimeout(() => {
+      if (!frames.has(frame) || !frame.checking) return;
+      frame.checking = false; notifyControl();
+    }, TAB_READY_DEADLINE_MS);
+    port.postMessage({type:"relayHello",protocol:relayProtocol,instanceId:extensionInstance});
+  };
+  if (extensionInstance) hello(); else void identityReady.then(hello).catch(() => {});
 });
 
 chrome.runtime.onMessage.addListener((message, sender, respond) => {
@@ -617,13 +721,15 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (!popup) throw new Error("Only the extension popup can control recording.");
     if (message.type === "start") await start(message.mode);
     else if (message.type === "stop") await stop();
+    else if (message.type === "reloadMeetingTab") await reloadMeetingTab(message.tabId);
     else if (message.type !== "status") throw new Error("Unknown control message.");
-    return status();
+    return {...status(), browserHealth:browserHealth()};
   })().then(respond, error => respond({ error: error.message, code: error.code, scope: error.scope, ...(error.retired === true ? {retired:true} : {}) }));
   return true;
 });
 chrome.tabs.onRemoved.addListener(id => {
-  if (!sessions.has(id) && ![...frames].some(f => f.tabId === id)) return;
+  for (const [key, value] of lostMeetings) if (value.tabId === id) lostMeetings.delete(key);
+  if (!sessions.has(id) && ![...frames].some(f => f.tabId === id)) { notifyControl(); return; }
   setPageState(id, "closed");
   for (const frame of frames) if (frame.tabId === id) { frame.sourceCount = 0; frame.heard = false; }
   const session = sessions.get(id);
@@ -642,6 +748,7 @@ function tabUpdated(id, change) {
     info.url = callAddress(change.url);
   }
   if (change.status === "loading") {
+    for (const [key, value] of lostMeetings) if (value.tabId === id) lostMeetings.delete(key);
     if (sessions.has(id) || [...frames].some(f => f.tabId === id)) setPageState(id, "navigating");
     for (const frame of frames) if (frame.tabId === id) { frame.sourceCount = 0; frame.heard = false; frame.obsolete = true; }
   }
@@ -661,11 +768,12 @@ function controlStatus(tabId = null) {
       stopping: session.stopping, message: value.message, pageState: pageState(session.tabId), failedSources: value.failedSources,
       documentGeneration: value.documentGeneration, callGeneration: session.callGeneration };
   });
+  packet.browserHealth = browserHealth();
   return packet;
 }
 async function meetings() {
   const counts = new Map();
-  for (const frame of frames) if (frame.sourceCount > 0) counts.set(frame.tabId, Math.min(4096, (counts.get(frame.tabId) || 0) + frame.sourceCount));
+  for (const frame of frames) if (relayReady(frame) && frame.sourceCount > 0) counts.set(frame.tabId, Math.min(4096, (counts.get(frame.tabId) || 0) + frame.sourceCount));
   for (const session of sessions.values()) if (!counts.has(session.tabId)) counts.set(session.tabId, 0);
   const tabs = await Promise.all([...counts].sort(([a], [b]) => Number(sessions.has(b)) - Number(sessions.has(a)) || a - b).slice(0, 100).map(async ([tabId]) => {
     try { return [tabId, await chrome.tabs.get(tabId)]; }
@@ -681,7 +789,7 @@ async function meetings() {
       if (known && callInfo(tabId).url === null) callInfo(tabId).url = callAddress(tab.url);
       // A can reload after its lookup finishes while B's is still pending.
       // Collect every row's current evidence synchronously after ALL lookups.
-      const current = [...frames].filter(frame => frame.tabId === tabId && frame.sourceCount > 0);
+      const current = [...frames].filter(frame => frame.tabId === tabId && relayReady(frame) && frame.sourceCount > 0);
       const sourceCount = known ? Math.min(4096, current.reduce((total, frame) => total + frame.sourceCount, 0)) : session.lastSourceCount;
       if (session && known) session.lastSourceCount = sourceCount;
       if (!sourceCount && !sessions.has(tabId)) return null;
@@ -691,12 +799,22 @@ async function meetings() {
   });
   return { type: "meetings", meetings: found.filter(Boolean) };
 }
+async function reloadMeetingTab(tabId) {
+  if (sessions.has(tabId) || pendingStarts.has(tabId)) throw refused("Stop and save the recording before reloading its tab.", "busy");
+  const health = browserHealth().tabs.find(tab => tab.tabId === tabId);
+  if (health?.state !== "reloadRequired") throw refused("That meeting tab does not need a reload.", "gone");
+  await chrome.tabs.reload(tabId);
+}
 async function controlCommand(command, intent = {}) {
   await recovery;
   if (intent.cancelled) throw new Error("Recording could not start.");
+  if (command.action === "reloadTab") {
+    await reloadMeetingTab(command.tabId);
+    return controlStatus();
+  }
   if (command.action === "start") {
     if (startBusy(command)) throw refused("A recording is already running. Stop it before starting another.", "busy");
-    if (![...frames].some(frame => frame.tabId === command.tabId && frame.sourceCount > 0))
+    if (![...frames].some(frame => frame.tabId === command.tabId && relayReady(frame) && frame.sourceCount > 0))
       throw refused("No audio is available from that meeting yet.", "noSources");
     await start("tracks", command.tabId, { independent: command.independent === true,
       captureLocal: command.captureLocal, microphone: command.microphone, keepOnNavigation: command.keepOnNavigation, expectedCallGeneration: command.callGeneration, resumeCapture: command.resumeCapture, requestId: command.requestId, resumeIntent: intent });
@@ -720,13 +838,9 @@ function cancelPendingStart(command) {
 }
 function notifyControl() { appControl.publish(); }
 const appControl = new AppControl({
-  runtime: chrome.runtime, alarms: chrome.alarms, busy: startBusy, capabilities: ["independent-sessions-v1", "call-evidence-v1", "page-state-v1", "multi-stream-v1", "resume-capture-v1", "heartbeat-v1"], cancelPending: cancelPendingStart,
-  connected: async () => {
-    await recovery;
-    const tabs = await chrome.tabs.query({});
-    await Promise.all(tabs.filter(tab => /^https?:/.test(tab.url || "")).map(tab => chrome.tabs.sendMessage(tab.id, { type: "cassini-connect" }).catch(() => {})));
-  },
+  runtime: chrome.runtime, alarms: chrome.alarms, busy: startBusy, capabilities: ["independent-sessions-v1", "call-evidence-v1", "page-state-v1", "multi-stream-v1", "resume-capture-v1", "heartbeat-v1", "tab-readiness-v1"], identity: () => ({extensionVersion,extensionInstance}), cancelPending: cancelPendingStart,
+  connected: repairOpenTabs,
   snapshot: async () => { await recovery; return [await meetings(), controlStatus()]; },
   command: controlCommand
 });
-appControl.start();
+void identityReady.then(() => { appControl.start(); void repairOpenTabs(); });

@@ -144,3 +144,13 @@ test('starting after an address change refreshes the call generation before the 
  await f.start('B',{sourceOutcomes:true});assert.equal(f.captures.length,1);
  assert.equal(f.messages.find(m=>m.type==='packet'&&m.packet.type==='track').token,'B');
 }));
+
+test('a replacement relay is ready only after the departing capture token drains',()=>fixture(async f=>{
+ const remote=f.remote();await f.tick();remote.packets=10;await f.tick();await f.start('departing');
+ await f.receive({type:'handshake',protocol:1,instanceId:'replacement'});
+ assert.equal(f.messages.some(m=>m.type==='hookReady'),false);
+ await f.stop();
+ assert.equal(f.messages.find(m=>m.type==='hookReady').instanceId,'replacement');
+ await f.start('replacement-capture');
+ assert.equal(f.captures.length,2,'the same live peer can record through the replacement relay');
+}));

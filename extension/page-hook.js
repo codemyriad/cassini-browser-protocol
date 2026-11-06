@@ -1,5 +1,6 @@
 (() => {
-  if (!window.RTCPeerConnection) return;
+  if (!window.RTCPeerConnection || globalThis.__cassiniPageHook) return;
+  globalThis.__cassiniPageHook = {protocol:1};
   const peers = new Set();
   const peerGenerations = new WeakMap();
   const knownLocalTracks = new WeakSet();
@@ -211,11 +212,20 @@
     } finally { sampling = false; }
   }
   setInterval(sampleEvidence, 1000);
-  let active = null;
+  let active = null, waitingHandshake = null;
   const emit = (token, value) => window.postMessage({ channel: "cassini-page", token, ...value }, "*");
   window.addEventListener("message", async event => {
     if (event.source !== window || event.data?.channel !== "cassini-control") return;
     const message = event.data;
+    if (message.type === "handshake") {
+      if (message.protocol === 1 && typeof message.instanceId === "string" && message.instanceId.length > 0 && message.instanceId.length <= 128) {
+        // A replacement relay cannot start a new capture until the departing
+        // relay's token has drained. Only the newest instance needs the reply.
+        if (active) waitingHandshake = message.instanceId;
+        else emit(null, {type:"hookReady", protocol:1, instanceId:message.instanceId});
+      }
+      return;
+    }
     if (message.type === "discover") { discover(true); return; }
     if (message.type === "ack" && active?.token === message.token) {
       const pending = active.pending.get(message.request);
@@ -381,6 +391,10 @@
       await state.context?.close();
       emit(state.token, { type: "stopped" });
       active = null;
+      if (waitingHandshake) {
+        emit(null, {type:"hookReady", protocol:1, instanceId:waitingHandshake});
+        waitingHandshake = null;
+      }
     }
   });
 })();

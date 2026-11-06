@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // Persistent app management, independent of the per-recording PCM connection.
 export class AppControl {
-  constructor({ runtime, alarms, snapshot, command, capabilities = [], cancelPending = () => {}, connected = async () => {},
+  constructor({ runtime, alarms, snapshot, command, capabilities = [], identity = () => ({}), cancelPending = () => {}, connected = async () => {},
                 later = (fn, ms) => setTimeout(fn, ms), cancel = id => clearTimeout(id), busy = () => false }) {
-    Object.assign(this, { runtime, alarms, snapshot, command, capabilities, cancelPending, connected, later, cancel, busy });
+    Object.assign(this, { runtime, alarms, snapshot, command, capabilities, identity, cancelPending, connected, later, cancel, busy });
     this.port = null;
     this.ready = false;
     this.retry = null;
@@ -64,7 +64,7 @@ export class AppControl {
     this.requests.clear(); this.completed.clear();
     port.onDisconnect.addListener(() => { void this.runtime.lastError; this.disconnected(port); });
     port.onMessage.addListener(message => this.receive(port, message));
-    const hello = { type: 'hello', version: 1 };
+    const hello = { type: 'hello', version: 1, ...this.identity() };
     if (this.capabilities.length) hello.capabilities = this.capabilities;
     this.send(port, hello);
     Promise.resolve().then(() => this.connected()).then(() => {
@@ -157,7 +157,7 @@ export class AppControl {
         try {
           // D58 #11: `busy` wins over every other refusal of a Start for that tab.
           if (this.busy(message)) throw Object.assign(new Error('A recording is already running. Stop it before starting another.'), { resultCode: 'busy' });
-          if (!['start', 'stop'].includes(message.action) || !Number.isSafeInteger(message.tabId) || message.tabId < 0)
+          if ((!['start', 'stop'].includes(message.action) && !(message.action === 'reloadTab' && this.capabilities.includes('tab-readiness-v1'))) || !Number.isSafeInteger(message.tabId) || message.tabId < 0)
             throw invalid('Choose a meeting to record.');
           if (message.action === 'start' && message.mode !== 'tracks')
             throw invalid('To record the whole tab, click Record the whole tab in the browser.');
