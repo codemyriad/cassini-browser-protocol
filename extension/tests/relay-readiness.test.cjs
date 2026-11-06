@@ -53,6 +53,7 @@ test('invalidated recording relay drains both admitted and late requests before 
   const f=relay(),port=f.ports[0];port.onMessage.emit({type:'start',token:'old'});
   f.page({type:'packet',token:'old',request:1,packet:{type:'audio'}});
   f.invalidate();port.onDisconnect.emit();
+  assert.equal(f.controls.filter(m=>m.type==='stop').length,1,'one stop for the departing token');
   f.page({type:'packet',token:'old',request:2,packet:{type:'audio'}});
   for(const request of [1,2])assert.ok(f.controls.some(m=>m.type==='ack'&&m.request===request&&m.error));
   f.page({type:'stopped',token:'old'});
@@ -117,7 +118,11 @@ test('explicit reload action is limited to a detected broken meeting and never s
     app.chrome.tabs.reload=async tabId=>reloads.push(tabId);
     unreadyFrame(app);
     const command=tabId=>({type:'command',requestId:'reload-'+tabId,action:'reloadTab',tabId,independent:true});
-    assert.equal((await app.command(command(2))).ok,true);
+    const result=await app.command(command(2));
+    assert.equal(result.ok,true);
+    assert.equal(result.status.browserHealth.state,'idle');
+    const duplicate=await app.command({...command(2),requestId:'reload-again'});
+    assert.equal(duplicate.ok,false);assert.equal(duplicate.code,'gone');
     assert.equal((await app.command(command(99))).ok,false);
     assert.deepEqual(reloads,[2]);assert.equal(app.audio.length,0);
     const hello=app.ports[0].sent.find(m=>m.type==='hello');

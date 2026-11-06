@@ -277,13 +277,26 @@ extension with a disposable signing key, so installed native-host allowlists can
 connect this fixture to a real app. It reloads through Chromium's extension manager, keeps the meeting
 document alive, joins an 880 Hz WebRTC peer, and waits for discovery, the new
 relay and non-silent PCM at a fixture native sink in the replacement worker.
-A second case keeps a pre-handshake hook across an upgrade, checks the reload
+It then reloads during active recording while the peer keeps sending, observes one
+relay stop and one shared-context close, and records again in the same document
+with no page errors. A separate case keeps a pre-handshake hook across an upgrade, checks the reload
 guidance and reload action, then rejoins and becomes ready. It uses no
 microphone, speaker, installed app or real Library. The 15 s bounds
 limit observed worker/discovery/audio waits; there are no fixed settling sleeps.
 The test runs in `npm test` and is portable to the bundled Chromium on macOS.
 
 The VM `relay-readiness` tests exercise incompatible hooks, stale instance replies,
-invalidated-relay cleanup, restricted injection, per-frame lost readiness and the
+invalidated-relay cleanup (including exactly one stop on invalidated disconnect),
+restricted injection, per-frame lost readiness and the
 explicit reload action. The control schema/consumer vectors separate native
 connectivity from tab readiness and require idle browsers to remain warning-free.
+
+The page-capture unit regression holds the recorder flush on an explicit promise,
+then delivers a duplicate Stop. Context closure, stopped, and replacement hookReady
+must wait for that flush and occur once; the replacement can then record. This
+covers the reviewed disconnect/retire ordering independently of Chromium's choice
+to invalidate a relay through its next send or its disconnect callback. Control
+unit tests hold recovery across notifications, stale callbacks and an old pending
+snapshot; only hello may publish before recovery completes or fails. Reload-action
+tests require the response to clear stale readiness and a repeated command to say
+gone even before Chrome delivers its loading event.

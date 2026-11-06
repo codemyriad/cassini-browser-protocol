@@ -378,7 +378,7 @@
         await state.scan();
         emit(state.token, { type: "ready" });
       } catch (error) { fail(error.message); }
-    } else if (message.type === "stop" && active?.token === message.token) {
+    } else if (message.type === "stop" && active?.token === message.token && !active.stopping) {
       const state = active;
       state.stopping = true;
       clearInterval(state.timer);
@@ -388,7 +388,8 @@
       const error = results.find(result => result.status === "rejected");
       if (error) emit(state.token, { type: "error", message: error.reason.message });
       await Promise.allSettled([...state.sourceUpdates]);
-      await state.context?.close();
+      const context = state.context; state.context = null;
+      await context?.close();
       emit(state.token, { type: "stopped" });
       active = null;
       if (waitingHandshake) {

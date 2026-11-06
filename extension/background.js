@@ -804,6 +804,7 @@ async function reloadMeetingTab(tabId) {
   const health = browserHealth().tabs.find(tab => tab.tabId === tabId);
   if (health?.state !== "reloadRequired") throw refused("That meeting tab does not need a reload.", "gone");
   await chrome.tabs.reload(tabId);
+  tabUpdated(tabId, {status:"loading"});
 }
 async function controlCommand(command, intent = {}) {
   await recovery;
