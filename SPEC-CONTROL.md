@@ -880,13 +880,19 @@ diagnostic. This extension change does not implement app-side persistence or UI.
 legacy hellos plus lost/normal Stop examples. Their optional keys remain valid
 under the older schemas' unknown-field policy.
 
-## Status popup (extension 0.2.19)
+## Status popup (extension 0.2.20)
 
 The browser companion popup displays active-tab source readiness independently
 from the native app-control connection. It has no recording Start/Stop or mode
 controls. Apps continue using the existing control commands; the trusted popup
 RPC remains available to isolated browser fixtures. This is a presentation
 change, with no wire-version, capability, audio, or recording-policy change.
+
+The popup requests scalar status with the browser-owned current `tabId`, so
+concurrent captures cannot borrow the first session’s recording state. A pending
+Start is shown as preparing, not active capture. A status lookup that does not
+answer within four seconds clears previous success wording and reports an
+unverified connection; it never automatically repeats a Start or reload.
 
 Only a health row for the browser-owned current tab may provide that tab’s
 readiness or reload action. A missing row means no reported detected meeting,

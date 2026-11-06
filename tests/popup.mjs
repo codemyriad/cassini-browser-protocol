@@ -20,7 +20,7 @@ try {
   const context = await browser.newContext({viewport:{width:376,height:800},permissions:['clipboard-read','clipboard-write']});
   await context.addInitScript(() => {
     window.fixture = {requests:[], copies:[], tab:{id:7,title:'Generated meeting <script>',url:'https://example.test/call/private'},
-      status:{browserHealth:{extensionVersion:'0.2.19',nativeControl:'connected',worker:'ready',filesOk:true,tabs:[]}}};
+      status:{browserHealth:{extensionVersion:'0.2.20',nativeControl:'connected',worker:'ready',filesOk:true,tabs:[]}}};
     window.chrome = {
       tabs:{async query(){return [fixture.tab]}},
       runtime:{async sendMessage(message){
@@ -30,6 +30,11 @@ try {
           fixture.status.browserHealth.tabs=[];
         }
         if(fixture.statusError)throw Error(fixture.statusError);
+        if(message.type==='status' && fixture.statusNeverResolves)return new Promise(()=>{});
+        if(message.type==='status' && fixture.captures){
+          const capture=fixture.captures.find(c=>c.tabId===message.tabId);
+          return {...structuredClone(fixture.status),...(capture||{recording:false,tabId:message.tabId})};
+        }
         return structuredClone(fixture.status);
       }}
     };
@@ -44,7 +49,20 @@ try {
   await page.evaluate(()=>fixture.status.browserHealth.tabs=[{tabId:3,state:'reloadRequired'},{tabId:7,state:'ready'}]);
   await page.getByRole('heading',{name:'Meeting sources detected',exact:true}).waitFor();
   assert.equal(await page.locator('#reload').isVisible(),false);
-  await page.evaluate(()=>fixture.status.browserHealth.tabs=[{tabId:3,state:'ready'},{tabId:7,state:'reloadRequired'}]);
+  await page.evaluate(()=>{
+    fixture.status.browserHealth.tabs=[{tabId:7,state:'reloadRequired'}];
+    fixture.captures=[{tabId:3,recording:true,tracks:1},{tabId:7,recording:true,tracks:2}];
+  });
+  await page.getByRole('heading',{name:'Browser capture is active',exact:true}).waitFor();
+  assert.equal(await page.locator('#reload').isVisible(),false,'a second active capture must not offer reload');
+  assert.match(await page.locator('#recording-note').textContent(),/2 browser audio tracks/);
+  assert.ok(await page.evaluate(()=>fixture.requests.filter(r=>r.type==='status').every(r=>r.tabId===7)));
+  await page.evaluate(()=>{fixture.captures=[{tabId:3,recording:true,tracks:1}];fixture.status.browserHealth.tabs=[{tabId:7,state:'ready'}]});
+  await page.getByRole('heading',{name:'Meeting sources detected',exact:true}).waitFor();
+  await page.evaluate(()=>{fixture.captures=[{tabId:7,recording:false,starting:true}];fixture.status.browserHealth.tabs=[{tabId:7,state:'reloadRequired'}]});
+  await page.getByRole('heading',{name:'Preparing browser capture…',exact:true}).waitFor();
+  assert.equal(await page.locator('#reload').isVisible(),false);
+  await page.evaluate(()=>{delete fixture.captures;fixture.status.browserHealth.tabs=[{tabId:3,state:'ready'},{tabId:7,state:'reloadRequired'}]});
   await page.getByRole('button',{name:'Reload meeting tab',exact:true}).waitFor();
   assert.match(await page.locator('#reload-warning').textContent(),/briefly disconnects/);
   await page.evaluate(()=>fixture.reloadError='Stop and save the recording before reloading its tab.');
@@ -70,6 +88,12 @@ try {
   assert.equal(await page.locator('#reload').isVisible(),false);
   assert.equal(await page.locator('#connection').getAttribute('data-connected'),'false');
   assert.match(await page.locator('#recording-note').textContent(),/unavailable/);
+  await page.evaluate(()=>{delete fixture.statusError;fixture.status.browserHealth.tabs=[{tabId:7,state:'ready'}]});
+  await page.getByRole('heading',{name:'Meeting sources detected',exact:true}).waitFor();
+  await page.evaluate(()=>fixture.statusNeverResolves=true);
+  await page.getByRole('heading',{name:'Meeting detection is unavailable',exact:true}).waitFor();
+  assert.match(await page.locator('#explanation').textContent(),/did not answer in time/);
+  assert.equal(await page.locator('#connection').getAttribute('data-connected'),'false');
   assert.equal(await page.evaluate(()=>fixture.requests.some(r=>r.type==='start'||r.type==='stop')),false);
   assert.deepEqual(errors,[]);
   await context.close();

@@ -10,11 +10,14 @@ export function popupState(result, tab) {
     description: 'The extension did not return connection details. Try reopening this popup.'};
   if (!tab || !/^https?:/.test(tab.url || '')) return {...view, title: 'This page isn’t supported',
     description: 'Open this popup on the browser tab where your meeting is running.'};
+  if (result.starting === true && result.tabId === tab.id) return {...view, title: 'Preparing browser capture…',
+    description: 'Cassini has requested capture for this tab. Waiting for the browser to finish preparing it.',
+    note: 'Audio capture is not yet confirmed'};
   if (capture) return {...view, tone: result.failedSources?.length ? 'warning' : 'good',
-    title: result.stopping ? 'Finishing browser capture' : 'Browser capture is active',
+    title: result.stopping ? 'Finishing browser capture' : result.tracks > 0 ? 'Browser capture is active' : 'Waiting for browser audio',
     description: result.failedSources?.length ? 'Some browser audio sources have a problem. Check the meeting in Cassini.' :
       result.tracks > 0 ? 'The extension is capturing audio for this tab. Check Cassini for the recording and its saved audio.' :
-        'Capture has started, but no audio tracks have been reported yet. Check the meeting in Cassini.',
+        'No audio tracks have been reported for this capture yet. Check the meeting in Cassini.',
     note: result.tracks > 0 ? `${result.tracks} browser audio ${result.tracks === 1 ? 'track' : 'tracks'} · manage recording in Cassini` : 'Waiting for browser audio tracks'};
   if (current?.state === 'reloadRequired') return {...view, tone: 'warning', reloadTabId: tab.id,
     title: 'This tab needs to reload', description: 'Cassini cannot reach the meeting’s audio sources on this page. Reload the tab, then rejoin your call.'};

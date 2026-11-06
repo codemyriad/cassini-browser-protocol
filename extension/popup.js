@@ -3,6 +3,12 @@ import { popupState } from './popup-state.mjs';
 const element = id => document.getElementById(id);
 let pending = false, actionPending = false, reloadTabId = null, diagnosticText = '';
 let requestGeneration = 0;
+function boundedReply(promise) {
+  let timer;
+  return Promise.race([promise, new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error('The extension did not answer in time. Recording status is unverified; check Cassini.')), 4000);
+  })]).finally(() => clearTimeout(timer));
+}
 function showActionError(message) {
   element('action-error').textContent = message;
   element('action-error').hidden = !message;
@@ -25,7 +31,7 @@ function render(result, tab) {
   // Do not copy meeting URLs/titles or filesystem paths into the report.
   diagnosticText = JSON.stringify({currentTabId: tab?.id ?? null,
     browserHealth: result.browserHealth ?? null,
-    currentTabCapture: result.tabId === tab?.id ? {recording: !!result.recording, stopping: !!result.stopping,
+    currentTabCapture: result.tabId === tab?.id ? {recording: !!result.recording, starting: !!result.starting, stopping: !!result.stopping,
       tracks: result.tracks ?? 0, failedSources: result.failedSources || []} : null}, null, 2);
   element('diagnostics').textContent = diagnosticText;
   element('copy').disabled = false;
@@ -35,13 +41,15 @@ async function refresh() {
   pending = true;
   const generation = ++requestGeneration;
   try {
-    const [result, tabs] = await Promise.all([
-      chrome.runtime.sendMessage({target: 'background', type: 'status'}),
-      chrome.tabs.query({active: true, currentWindow: true})
-    ]);
+    const {result, tab} = await boundedReply((async () => {
+      const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
+      const result = await chrome.runtime.sendMessage({target: 'background', type: 'status',
+        ...(Number.isSafeInteger(tab?.id) && tab.id >= 0 ? {tabId: tab.id} : {})});
+      return {result, tab};
+    })());
     if (generation !== requestGeneration) return;
     if (!result || result.error) throw new Error(result?.error || 'No reply from the extension');
-    render(result, tabs[0]);
+    render(result, tab);
   } catch (error) {
     if (generation !== requestGeneration) return;
     reloadTabId = null;

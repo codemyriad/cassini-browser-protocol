@@ -31,7 +31,8 @@ test('recording controls and stream identities stay separate from capture availa
   assert.equal(view.title, 'Meeting sources detected');
   assert.doesNotMatch(view.title + view.description, /is recording|participants|voices/);
   const empty = popupState(status([], {recording: true, tabId: 7, tracks: 0}), tab);
-  assert.match(empty.description, /no audio tracks/);
+  assert.match(empty.description, /No audio tracks/);
+  assert.equal(empty.title, 'Waiting for browser audio');
   const capture = popupState(status([], {recording: true, tabId: 7, tracks: 2}), tab);
   assert.equal(capture.title, 'Browser capture is active');
   assert.match(capture.note, /2 browser audio tracks/);
@@ -72,4 +73,12 @@ test('meeting detection remains visible when the native connection is unavailabl
   const view = popupState(result,tab);
   assert.equal(view.connected,false);assert.equal(view.title,'Meeting sources detected');
   assert.match(view.description,/Open Cassini to connect/);
+});
+
+test('a pending Start is not active capture and cannot offer reload', async () => {
+  const {popupState} = await state;
+  const view = popupState(status([{tabId:7,state:'reloadRequired'}], {recording:false,starting:true,tabId:7}), tab);
+  assert.equal(view.title,'Preparing browser capture…');
+  assert.equal(view.reloadTabId,null);
+  assert.match(view.note,/not yet confirmed/);
 });
