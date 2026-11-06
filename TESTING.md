@@ -300,3 +300,10 @@ unit tests hold recovery across notifications, stale callbacks and an old pendin
 snapshot; only hello may publish before recovery completes or fails. Reload-action
 tests require the response to clear stale readiness and a repeated command to say
 gone even before Chrome delivers its loading event.
+
+Mixed-frame readiness regressions combine a healthy frame with an unavailable,
+checking, or lost meeting frame. They verify idle inventory omission, refusal of
+app and popup track Start before native creation, recovery to exactly one capture,
+retained active inventory/status and busy precedence. Separate event-driven cases
+change readiness during tab lookup/relay discovery and inventory lookup, and check
+that an unrelated unready tab does not block a healthy one.
