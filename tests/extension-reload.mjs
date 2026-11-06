@@ -123,8 +123,11 @@ try {
   }
   await installAudioSink(fresh);
   const status = () => popup.evaluate(() => chrome.runtime.sendMessage({target:'background',type:'status'}));
-  let current = await status();
+  let current = await observed(async () => { const value = await status(); return value.browserHealth?.filesOk === undefined ? null : value; }, "packaged-file self-check");
   assert.equal(current.browserHealth.state, 'ready');
+  assert.equal(current.browserHealth.filesOk,true);
+  assert.equal(current.browserHealth.installType,'development');
+  assert.equal(current.browserHealth.extensionVersion,manifest.version);
   assert.notEqual(current.browserHealth.extensionInstance,initialBridge.instanceId,'reload replaces the extension instance');
   assert.equal(current.browserHealth.tabs.find(tab => tab.tabId === tabId).relayAlive, true);
   // Repeated repair in a healthy realm must keep one relay and capture path.
@@ -222,6 +225,17 @@ try {
     return status.browserHealth?.tabs.some(tab=>tab.tabId===tabId&&tab.state==='ready');
   },legacyTabId), 'reloaded and rejoined meeting readiness');
   console.log('PASS incompatible live hook: explicit reload guidance, user reload action, rejoined meeting becomes ready');
+  // Missing packaged files are self-check diagnostics, independent of tab
+  // readiness. Mutate only the disposable unpacked copy, never the checkout.
+  await rm(path.join(extension,'pcm-worklet.js'));
+  const missingFilePopup = await reloadExtension();
+  const missingFile = await observed(() => missingFilePopup.evaluate(async () => {
+    const status = await chrome.runtime.sendMessage({target:'background',type:'status'});
+    return status.browserHealth?.filesOk === false ? status.browserHealth : null;
+  }), 'missing packaged worklet diagnostic');
+  assert.equal(missingFile.installType,'development');
+  assert.equal(missingFile.extensionVersion,manifest.version);
+  console.log('PASS companion self-check: unpacked install, runtime version, healthy resources and missing worklet diagnostics');
 } finally {
   await context?.close(); server.close(); await rm(temporary, {recursive:true,force:true});
 }

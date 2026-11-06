@@ -807,3 +807,75 @@ following snapshots instead of replaying Start on a stale tab instance.
 persistent meeting page to a synthetic audio peer and verifies non-silent PCM at
 the replacement worker. Its native sink is an in-memory fixture, not an app writer
 or evidence of device/native-host integration. No microphone or speaker is used.
+
+## Companion diagnostics (extension 0.2.18)
+
+The version/instance hello from `tab-readiness-v1` also carries optional diagnostic
+fields `installType` and `filesOk`. These fields do not introduce a new wire
+version or capability; **feature gating continues to use capabilities**, never
+version strings, install type, or the self-check. Versions are for diagnostic
+wording and comparison with an app's bundled companion pin.
+
+```json
+{"type":"hello","version":1,"extensionVersion":"0.2.18","extensionInstance":"extension-load-1","installType":"development","filesOk":true,"capabilities":["multi-stream-v1","page-state-v1","call-evidence-v1","resume-capture-v1","heartbeat-v1","tab-readiness-v1"]}
+```
+
+- `extensionVersion` comes from `chrome.runtime.getManifest().version`.
+- `installType` comes from `chrome.management.getSelf()`, which needs no additional
+  management permission. Its values are `admin`, `development` (unpacked),
+  `normal`, `sideload`, `other`, or `unknown` when unavailable.
+- `filesOk` is true only when startup fetches and reads nonempty `capture.js` and
+  `pcm-worklet.js` through this extension's own `runtime.getURL`, without cache.
+  A missing/unreadable/empty file or a file-read timeout reports false. This is a
+  packaged-file readability check, not a checksum, module execution, audio-device
+  test, or proof of per-tab readiness. Unavailable installation metadata leaves
+  `installType: "unknown"` independently of the file result.
+- Startup bounds the check at 2.5 s, aborting pending file fetches. It completes
+  before the first native control connection, so hello is still sent immediately
+  on that connection. Each worker checks once and reuses the result across
+  control reconnects; worker restart/update performs a fresh check. No retry
+  conceals a missing file. `status.browserHealth` and the popup details expose the
+  same completed diagnostics; fields can be absent while the popup's startup
+  check is pending. A missing file does not accuse an idle browser of a broken
+  meeting tab.
+
+Older hellos omit these fields: absence means unknown, not a successful check.
+Apps may use diagnostics for setup/recovery wording; they do not change the
+existing capability contract or infer that a particular meeting failed.
+
+### Cause of a lost browser capture
+
+An extension Stop that already carries `failureReason: "lost"` also carries an
+optional `cause`, next to the existing `problem` text:
+
+```json
+{"type":"stop","captureId":"capture-1","failureReason":"lost","cause":"frameError","problem":"The meeting page could not record separate tracks. Record the whole tab instead. Audio recorded so far was saved."}
+```
+
+| Cause | Observed extension trigger |
+| --- | --- |
+| `frameError` | The page hook or offscreen capture reports a fatal error. |
+| `frameClosed` | A recording relay disconnects under the existing immediate-loss policy. |
+| `tabClosed` | Chrome reports the recording tab removed under that policy. |
+| `nativeHostError` | The native host reports a capture-wide error or an audio request fails/times out. Source-scoped refusals retain their existing behavior. |
+| `startupError` | An unexpected startup failure occurs after the native folder is owned, outside an explicit cancellation. |
+| `transportClosed` | The native audio port disconnects or a native-port write throws. |
+| `lifecycle` | The frame stops unexpectedly without a more specific terminal error. |
+
+The first terminal loss cause wins. An earlier nonfatal source warning does not
+choose it, and a later failure during cleanup cannot replace it. The extension
+chooses causes at its own failure branches; it does not trust a page-supplied
+cause or classify failures by parsing human-readable text. The new field changes
+neither when a failure is declared nor the existing Stop/fallback policy.
+
+Cause is a bounded ASCII identifier (1–80 characters). Readers tolerate unknown
+future codes and absent legacy causes; a cause never changes `failureReason`,
+recording state, or end reason. A normal explicit Stop, an opted-in navigation
+boundary, or a source warning alone adds neither a lost failureReason nor cause.
+If the native pipe is already closed, no Stop diagnostic can be delivered over
+it: the app/writer still observes EOF and records its own `transportClosed`
+diagnostic. This extension change does not implement app-side persistence or UI.
+
+`conformance/control/companion-diagnostics-vectors.json` contains current and
+legacy hellos plus lost/normal Stop examples. Their optional keys remain valid
+under the older schemas' unknown-field policy.

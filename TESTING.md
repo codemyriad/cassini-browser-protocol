@@ -307,3 +307,15 @@ app and popup track Start before native creation, recovery to exactly one captur
 retained active inventory/status and busy precedence. Separate event-driven cases
 change readiness during tab lookup/relay discovery and inventory lookup, and check
 that an unrelated unready tab does not block a healthy one.
+
+## Companion diagnostics
+
+The companion-diagnostics unit tests check hello version/install metadata, both
+404 file cases, empty/unreadable files, a controlled startup deadline, reconnect
+caching, each terminal loss cause, first-cause preservation and normal Stops.
+The unpacked-extension browser test checks Chrome's actual development install
+type and resource self-check, then removes the worklet only from its disposable
+copy and checks the degraded diagnostic. Schema vectors retain legacy hellos and
+Stops, and tolerate unknown future cause identifiers. These are extension-side
+checks; app setup wording, fallback persistence and Details rendering belong to
+the consumer implementations.
