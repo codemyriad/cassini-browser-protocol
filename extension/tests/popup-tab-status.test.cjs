@@ -60,12 +60,15 @@ test('an untargeted popup Start is scoped once the browser resolves its actual t
  const gate=new Promise(resolve=>release=resolve);
  try {
   const query=app.chrome.tabs.query;app.chrome.tabs.query=async options=>options.active?[app.tabs.get(2)]:query(options);
-  const get=app.chrome.tabCapture.getMediaStreamId;let entered=false;
-  app.chrome.tabCapture.getMediaStreamId=async()=>{entered=true;await gate;return get()};
-  starting=app.api.start('tab').catch(error=>error);await until(()=>entered);
+  let entered=false;
+  app.chrome.tabCapture.getMediaStreamId=async()=> 'fixture-stream';
+  app.chrome.runtime.sendMessage=async()=>({});
+  app.chrome.offscreen.createDocument=async()=>{entered=true;await gate};
+  starting=app.api.start('tab');await until(()=>entered);
+  assert.equal((await rpc(app,{})).recording,true,'legacy ready flag precedes offscreen setup completion');
   const result=await rpc(app,{tabId:2});assert.equal(result.starting,true);assert.equal(result.recording,false);
   release();await starting;
-  assert.equal((await rpc(app,{tabId:2})).starting,false);
+  const ready=await rpc(app,{tabId:2});assert.equal(ready.starting,false);assert.equal(ready.recording,true);
  } finally {release();await starting;await cleanup(app)}
 });
 

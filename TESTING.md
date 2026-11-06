@@ -326,3 +326,7 @@ retained capture with degraded readiness, legacy first-session selection, pendin
 tab lookup/native acknowledgement/persistence, an untargeted popup Start once its
 tab is known, malformed IDs, stopped-tab isolation and popup-only authorization.
 Startup barriers are explicit promises/events; they introduce no settling sleeps.
+
+The existing popup transport omits tabId from its legacy status requests (rather
+than sending a null reload target); explicit null remains an invalid scoped ID.
+The unpacked Chromium reload regression exercises this real popup/RPC pairing.
