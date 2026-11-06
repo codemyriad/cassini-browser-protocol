@@ -397,7 +397,8 @@ session timeline, not an epoch timestamp; it is at least every finalized known
 track end and prior event time. Finalize/sync accepted PCM, then atomically
 checkpoint finalized tracks, saved state and the one end event before acknowledging
 Stop. A failed stop due to I/O records error where a durable checkpoint is possible;
-gaps alone do not change a user Stop into an error. Unknown/old end reasons are
+so does audio the host writer lost (a `writer` range, Gap ranges). Gaps alone do not
+change a user Stop into an error. Unknown/old end reasons are
 never guessed by a reader. Repeated Stop/close cannot append a second end or
 change its reason; no event follows end. Reserve one of the1000 event slots for
 it (new source/selection changes at999 events are rejected without modifying the
@@ -583,7 +584,19 @@ New writers always write the key, so `gaps: []` means no gaps and a missing key 
   Producer drop counts appear only in recording details: they never change state or problemKind.
 - A host writer that pads its own lost frames in place (instead of failing the source) records
   that padding as a `writer` range. It counts in droppedFrames, not gapFrames, and never sets the
-  gap flag; host write loss is reported as io.
+  gap flag, however long; host write loss is reported as io (R93-2 D2): the session is interrupted
+  with problemKind `io`, ahead of `gap`, and its `end` reason is `error`, even after a user Stop.
+  On a native source the lost frames lie right before the buffer that follows them, so the
+  `writer` range ends where that buffer starts; they are never more than the host time between
+  the two buffers (in frames, rounded half up), and only host time they do not cover is input time,
+  padded before them as an `input` range under the gap flag rule. Audio lost after a source's
+  last written frame, up to the Stop moment (a Stop while its writer queue is full, a drain that
+  times out), is padded at the end as a `writer` range too; when the buffer that follows the loss
+  starts after the Stop moment, only the loss's share before that moment is padded, after the
+  host time ahead of the loss, which is input time under the same rule. The problem names the loss with one
+  sentence per source, after any earlier problem: `N ms of <kind> audio was lost because the
+  computer could not keep up; the gaps contain silence.` (N: that source's `writer` padding in
+  ms, rounded half up; kind: the track kind). Literal cases: conformance/gaps/writer.json.
 - Writers record ranges whether or not multi-stream was negotiated: these are host facts.
 - Gap flag: only a `jump` or `input` padding write of at least one second (frames >= rate),
   including one written after the overflow marker, makes the session interrupted with

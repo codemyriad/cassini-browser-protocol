@@ -1,5 +1,6 @@
 """D52.2 (P7) gap ranges and presence: literal vectors, oracle and mutation guards."""
 import copy
+from fractions import Fraction
 import importlib.util
 import json
 from pathlib import Path
@@ -16,6 +17,8 @@ PRESENCE = json.loads((ROOT / 'conformance/gaps/presence.json').read_text())['ca
 
 def matches(actual, expected):
     if (actual['state'], actual['problemKind']) != (expected['state'], expected['problemKind']):
+        return False
+    if actual['endReason'] != expected.get('endReason', 'user'):
         return False
     if len(actual['tracks']) != len(expected['tracks']):
         return False
@@ -81,6 +84,50 @@ class FlagFromStoredRanges(gaps.Writer):
         return dict(result, state='interrupted' if long else 'completed', problemKind='gap' if long else None)
 
 
+class WriterLossAsGap(gaps.Writer):
+    """Host writer loss counted as missing input (the pre-D2 GNOME reading)."""
+    def _pad(self, span, frames, kind):
+        super()._pad(span, frames, 'input' if kind == 'writer' else kind)
+
+
+class WriterLossKeepsUserEnd(gaps.Writer):
+    def result(self):
+        return dict(super().result(), endReason='user')
+
+
+class WriterLossCoversNoHostTime(gaps.Writer):
+    """Pads the lost frames on top of the whole host-time gap."""
+    def input(self, id, hostMs, frames, writerFrames=0):
+        super().input(id, hostMs, frames)
+        if writerFrames:
+            span = self.native[id]['span']
+            span['frames'] -= frames
+            self._pad(span, writerFrames, 'writer')
+            span['frames'] += frames
+
+
+class WriterLossUnbounded(gaps.Writer):
+    """Pads every lost frame a host reports, beyond the host time between the buffers."""
+    def input(self, id, hostMs, frames, writerFrames=0):
+        state = self.native[id]
+        if state['host'] is None or not writerFrames:
+            return super().input(id, hostMs, frames)
+        span = state['span']
+        lag = (Fraction(str(hostMs)) - Fraction(str(state['host']))) * span['rate'] / 1000 - state['frames']
+        gap = gaps._half_up(lag - writerFrames)
+        if gap >= span['rate']:
+            self._pad(span, gap, 'input')
+        self._pad(span, writerFrames, 'writer')
+        state['host'], state['frames'] = hostMs, frames
+        span['frames'] += frames
+
+
+class WriterTailFromLastFrame(gaps.Writer):
+    """Pads a tail loss from the last written frame, ignoring where the loss lies."""
+    def writerTail(self, id, untilMs, resumeMs=None, writerFrames=None):
+        super().writerTail(id, untilMs)
+
+
 class GapTests(unittest.TestCase):
     def test_oracle_reproduces_every_hand_written_writer_case(self):
         for case in WRITER:
@@ -94,7 +141,11 @@ class GapTests(unittest.TestCase):
 
     def test_mutations_fail_the_vectors(self):
         for name, mutant in (('coalesce', Coalescing), ('truncate', Truncating), ('current-span-drops', CurrentSpanOnly),
-                             ('flag-any-gap', AnyGapFlags), ('flag-from-stored-ranges', FlagFromStoredRanges)):
+                             ('flag-any-gap', AnyGapFlags), ('flag-from-stored-ranges', FlagFromStoredRanges),
+                             ('writer-loss-as-gap', WriterLossAsGap), ('writer-loss-user-end', WriterLossKeepsUserEnd),
+                             ('writer-loss-covers-no-host-time', WriterLossCoversNoHostTime),
+                             ('writer-loss-unbounded', WriterLossUnbounded),
+                             ('writer-tail-from-last-frame', WriterTailFromLastFrame)):
             with self.subTest(mutation=name):
                 self.assertTrue(any(not matches(replay(c, mutant), c['expected']) for c in WRITER))
 

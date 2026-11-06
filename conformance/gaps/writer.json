@@ -825,6 +825,338 @@
      }
     ]
    }
+  },
+  {
+   "name": "native-writer-loss-is-io-and-ends-in-error",
+   "features": [],
+   "steps": [
+    {
+     "op": "nativeTrack",
+     "id": "a",
+     "kind": "microphone"
+    },
+    {
+     "op": "input",
+     "id": "a",
+     "hostMs": 0,
+     "frames": 48000
+    },
+    {
+     "op": "input",
+     "id": "a",
+     "hostMs": 3000,
+     "frames": 48000,
+     "writerFrames": 96000
+    }
+   ],
+   "expected": {
+    "state": "interrupted",
+    "problemKind": "io",
+    "endReason": "error",
+    "tracks": [
+     {
+      "wire": "a",
+      "startOffsetMs": 0,
+      "frames": 192000,
+      "gapFrames": 0,
+      "droppedFrames": 96000,
+      "gaps": [
+       {
+        "atMs": 1000,
+        "durationMs": 2000,
+        "frames": 96000,
+        "kind": "writer"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "native-writer-loss-leaves-only-uncovered-host-time-as-input",
+   "features": [],
+   "steps": [
+    {
+     "op": "nativeTrack",
+     "id": "a",
+     "kind": "microphone"
+    },
+    {
+     "op": "input",
+     "id": "a",
+     "hostMs": 0,
+     "frames": 48000
+    },
+    {
+     "op": "input",
+     "id": "a",
+     "hostMs": 4000,
+     "frames": 48000,
+     "writerFrames": 48000
+    }
+   ],
+   "expected": {
+    "state": "interrupted",
+    "problemKind": "io",
+    "endReason": "error",
+    "tracks": [
+     {
+      "wire": "a",
+      "startOffsetMs": 0,
+      "frames": 240000,
+      "gapFrames": 96000,
+      "droppedFrames": 48000,
+      "gaps": [
+       {
+        "atMs": 1000,
+        "durationMs": 2000,
+        "frames": 96000,
+        "kind": "input"
+       },
+       {
+        "atMs": 3000,
+        "durationMs": 1000,
+        "frames": 48000,
+        "kind": "writer"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "short-native-writer-loss-is-still-io",
+   "features": [],
+   "steps": [
+    {
+     "op": "nativeTrack",
+     "id": "a",
+     "kind": "microphone"
+    },
+    {
+     "op": "input",
+     "id": "a",
+     "hostMs": 0,
+     "frames": 48000
+    },
+    {
+     "op": "input",
+     "id": "a",
+     "hostMs": 1250,
+     "frames": 48000,
+     "writerFrames": 12000
+    }
+   ],
+   "expected": {
+    "state": "interrupted",
+    "problemKind": "io",
+    "endReason": "error",
+    "tracks": [
+     {
+      "wire": "a",
+      "startOffsetMs": 0,
+      "frames": 108000,
+      "gapFrames": 0,
+      "droppedFrames": 12000,
+      "gaps": [
+       {
+        "atMs": 1000,
+        "durationMs": 250,
+        "frames": 12000,
+        "kind": "writer"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "native-writer-tail-is-padded-up-to-the-stop-moment",
+   "features": [],
+   "steps": [
+    {
+     "op": "nativeTrack",
+     "id": "a",
+     "kind": "microphone"
+    },
+    {
+     "op": "input",
+     "id": "a",
+     "hostMs": 0,
+     "frames": 48000
+    },
+    {
+     "op": "writerTail",
+     "id": "a",
+     "untilMs": 1500
+    }
+   ],
+   "expected": {
+    "state": "interrupted",
+    "problemKind": "io",
+    "endReason": "error",
+    "tracks": [
+     {
+      "wire": "a",
+      "startOffsetMs": 0,
+      "frames": 72000,
+      "gapFrames": 0,
+      "droppedFrames": 24000,
+      "gaps": [
+       {
+        "atMs": 1000,
+        "durationMs": 500,
+        "frames": 24000,
+        "kind": "writer"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "native-writer-loss-is-bounded-by-host-time",
+   "features": [],
+   "steps": [
+    {
+     "op": "nativeTrack",
+     "id": "a",
+     "kind": "microphone"
+    },
+    {
+     "op": "input",
+     "id": "a",
+     "hostMs": 0,
+     "frames": 48000
+    },
+    {
+     "op": "input",
+     "id": "a",
+     "hostMs": 1500,
+     "frames": 48000,
+     "writerFrames": 48000
+    }
+   ],
+   "expected": {
+    "state": "interrupted",
+    "problemKind": "io",
+    "endReason": "error",
+    "tracks": [
+     {
+      "wire": "a",
+      "startOffsetMs": 0,
+      "frames": 120000,
+      "gapFrames": 0,
+      "droppedFrames": 24000,
+      "gaps": [
+       {
+        "atMs": 1000,
+        "durationMs": 500,
+        "frames": 24000,
+        "kind": "writer"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "native-writer-tail-after-stop-keeps-input-time-ahead-of-it",
+   "features": [],
+   "steps": [
+    {
+     "op": "nativeTrack",
+     "id": "a",
+     "kind": "microphone"
+    },
+    {
+     "op": "input",
+     "id": "a",
+     "hostMs": 0,
+     "frames": 48000
+    },
+    {
+     "op": "writerTail",
+     "id": "a",
+     "untilMs": 3500,
+     "resumeMs": 3800,
+     "writerFrames": 48000
+    }
+   ],
+   "expected": {
+    "state": "interrupted",
+    "problemKind": "io",
+    "endReason": "error",
+    "tracks": [
+     {
+      "wire": "a",
+      "startOffsetMs": 0,
+      "frames": 168000,
+      "gapFrames": 86400,
+      "droppedFrames": 33600,
+      "gaps": [
+       {
+        "atMs": 1000,
+        "durationMs": 1800,
+        "frames": 86400,
+        "kind": "input"
+       },
+       {
+        "atMs": 2800,
+        "durationMs": 700,
+        "frames": 33600,
+        "kind": "writer"
+       }
+      ]
+     }
+    ]
+   }
+  },
+  {
+   "name": "native-writer-tail-after-stop-pads-only-its-share-before-stop",
+   "features": [],
+   "steps": [
+    {
+     "op": "nativeTrack",
+     "id": "a",
+     "kind": "microphone"
+    },
+    {
+     "op": "input",
+     "id": "a",
+     "hostMs": 0,
+     "frames": 48000
+    },
+    {
+     "op": "writerTail",
+     "id": "a",
+     "untilMs": 1500,
+     "resumeMs": 1800,
+     "writerFrames": 33600
+    }
+   ],
+   "expected": {
+    "state": "interrupted",
+    "problemKind": "io",
+    "endReason": "error",
+    "tracks": [
+     {
+      "wire": "a",
+      "startOffsetMs": 0,
+      "frames": 67200,
+      "gapFrames": 0,
+      "droppedFrames": 19200,
+      "gaps": [
+       {
+        "atMs": 1000,
+        "durationMs": 400,
+        "frames": 19200,
+        "kind": "writer"
+       }
+      ]
+     }
+    ]
+   }
   }
  ]
 }

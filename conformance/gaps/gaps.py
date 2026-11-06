@@ -29,7 +29,7 @@ class Writer:
         self.negotiated = 'source-outcomes-v1' in features
         self.me, self.others = me, others
         self.spans, self.wire, self.native = [], {}, {}
-        self.flagged = False
+        self.flagged = self.lost = False
 
     def _open(self, wire, kind, rate, boundary=None, native=False):
         span = dict(wire=wire, kind=kind, rate=rate, frames=0, gapFrames=0, droppedFrames=0, gaps=[],
@@ -44,7 +44,10 @@ class Writer:
         """One entry per padding write; never coalesced, never truncated silently."""
         at = _position(span)
         span['frames'] += frames
-        if kind != 'prefix':
+        if kind == 'writer':
+            span['droppedFrames'] += frames  # host write loss: io, never the gap flag (R93-2 D2)
+            self.lost = True
+        elif kind != 'prefix':
             span['gapFrames'] += frames
             self.flagged |= frames >= span['rate']
         gaps = span['gaps']
@@ -100,7 +103,8 @@ class Writer:
     def nativeTrack(self, id, kind='microphone', rate=48000, boundaryMs=None):
         self.native[id] = dict(span=self._open(id, kind, rate, boundaryMs, native=True), host=None, frames=0)
 
-    def input(self, id, hostMs, frames):
+    def input(self, id, hostMs, frames, writerFrames=0):
+        """writerFrames: frames the host lost right before this buffer (R93-2 D2)."""
         state = self.native[id]
         span = state['span']
         if state['host'] is None:
@@ -112,17 +116,40 @@ class Writer:
                     self._pad(span, prefix, 'prefix')
         else:
             lag = (Fraction(str(hostMs)) - Fraction(str(state['host']))) * span['rate'] / 1000 - state['frames']
-            gap = _half_up(lag)
+            # The lost frames fill host time: never more than lies between the buffers.
+            writerFrames = min(writerFrames, max(0, _half_up(lag)))
+            gap = _half_up(lag - writerFrames)  # only host time the lost frames do not cover
             if gap >= span['rate']:
                 self._pad(span, gap, 'input')
+            if writerFrames:
+                self._pad(span, writerFrames, 'writer')
         state['host'], state['frames'] = hostMs, frames
         span['frames'] += frames
+
+    def writerTail(self, id, untilMs, resumeMs=None, writerFrames=None):
+        """Audio lost after the last written frame, padded up to untilMs (a Stop moment).
+
+        With resumeMs, the writerFrames lost lie right before a buffer at resumeMs, past
+        untilMs: only their share before untilMs is padded, after the host time ahead of
+        them, which is an input gap under the one-second rule (shorter is clock skew)."""
+        span = self.native[id]['span']
+        start, rate = Fraction(str(span['startOffsetMs'])), span['rate']
+        until = _half_up((Fraction(str(untilMs)) - start) * rate / 1000)
+        frames = max(0, until - span['frames'])
+        if resumeMs is not None:
+            lost_from = _half_up((Fraction(str(resumeMs)) - start) * rate / 1000) - writerFrames
+            frames = min(frames, max(0, until - lost_from), writerFrames)
+            if frames and lost_from - span['frames'] >= rate:
+                self._pad(span, lost_from - span['frames'], 'input')
+        if frames:
+            self._pad(span, frames, 'writer')
 
     def result(self):
         tracks = [dict(wire=s['wire'], startOffsetMs=s['startOffsetMs'], frames=s['frames'], gapFrames=s['gapFrames'],
                        droppedFrames=s['droppedFrames'], gaps=s['gaps']) for s in self.spans]
-        return dict(state='interrupted' if self.flagged else 'completed',
-                    problemKind='gap' if self.flagged else None, tracks=tracks)
+        return dict(state='interrupted' if self.flagged or self.lost else 'completed',
+                    problemKind='io' if self.lost else 'gap' if self.flagged else None,
+                    endReason='error' if self.lost else 'user', tracks=tracks)
 
 
 def replay(case):
