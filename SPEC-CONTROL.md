@@ -925,3 +925,34 @@ For compatibility, omitting `tabId` preserves the legacy `status()` scalar,
 including first-session selection and its in-flight `recording` behavior, and
 adds no `starting` field. Native app-control status, inventory, capture admission,
 reload refusals, relay policy, wire version and capabilities are unchanged.
+
+## Status popup (extension 0.2.20)
+
+The browser companion popup displays active-tab source readiness independently
+from the native app-control connection. It has no recording Start/Stop or mode
+controls. Apps continue using the existing control commands; the trusted popup
+RPC remains available to isolated browser fixtures. This is a presentation
+change, with no wire-version, capability, audio, or recording-policy change.
+
+The popup requests scalar status with the browser-owned current `tabId`, so
+concurrent captures cannot borrow the first session’s recording state. A pending
+Start is shown as preparing, not active capture. A status lookup that does not
+answer within four seconds clears previous success wording and reports an
+unverified connection; it never automatically repeats a Start or reload.
+
+Only a health row for the browser-owned current tab may provide that tab’s
+readiness or reload action. A missing row means no reported detected meeting,
+not proof of successful page injection, unsupported audio, or missing permission.
+A source is not a participant identity. A native connection, page readiness, or
+track count does not prove saved audio. The packaged-file self-check is displayed
+as diagnostic information and never overrides the current-tab readiness state.
+
+A user reload warns about leaving the call, uses the existing guarded
+`reloadMeetingTab` action, and awaits new evidence rather than claiming detection
+or recording succeeded. Rejoin guidance survives source-free refreshes until the
+same tab has new health/capture evidence or the selected tab changes. Obsolete
+action refusals clear after recovery or a status-fetch failure. Connection details
+may be copied without meeting titles,
+URLs, or recording paths. Confirmed app recording state, app auto-record policy,
+and launching the native app require additional explicit app-backed interfaces;
+the popup does not infer or fabricate them.
