@@ -99,7 +99,8 @@ class WriterLossKeepsUserEnd(gaps.Writer):
 
 class WriterLossCoversNoHostTime(gaps.Writer):
     """Pads the lost frames on top of the whole host-time gap."""
-    def input(self, id, hostMs, frames, writerFrames=0):
+    def input(self, id, hostMs, frames, writerFrames=0, inferredFrames=0):
+        writerFrames += inferredFrames
         super().input(id, hostMs, frames)
         if writerFrames:
             span = self.native[id]['span']
@@ -108,38 +109,42 @@ class WriterLossCoversNoHostTime(gaps.Writer):
             span['frames'] += frames
 
 
-class WriterLossUnbounded(gaps.Writer):
-    """Pads every lost frame a host reports, beyond the host time between the buffers."""
-    def input(self, id, hostMs, frames, writerFrames=0):
-        state = self.native[id]
-        if state['host'] is None or not writerFrames:
-            return super().input(id, hostMs, frames)
-        span = state['span']
-        lag = (Fraction(str(hostMs)) - Fraction(str(state['host']))) * span['rate'] / 1000 - state['frames']
-        gap = gaps._half_up(lag - writerFrames)
-        if gap >= span['rate']:
-            self._pad(span, gap, 'input')
-        self._pad(span, writerFrames, 'writer')
-        state['host'], state['frames'] = hostMs, frames
-        span['frames'] += frames
+class InferredLossUnbounded(gaps.Writer):
+    """Treats an estimate as an exact queue-dropped callback count."""
+    def input(self, id, hostMs, frames, writerFrames=0, inferredFrames=0):
+        super().input(id, hostMs, frames, writerFrames=writerFrames + inferredFrames)
+
+
+class InferredTailUnbounded(gaps.Writer):
+    def writerTail(self, id, untilMs, resumeMs=None, writerFrames=None, inferredFrames=None):
+        super().writerTail(id, untilMs, resumeMs, writerFrames=inferredFrames if inferredFrames is not None else writerFrames)
+
+
+class KnownLossCapped(gaps.Writer):
+    """The f52f0e1 oracle shortens known lost callback frames to host time."""
+    def input(self, id, hostMs, frames, writerFrames=0, inferredFrames=0):
+        super().input(id, hostMs, frames, inferredFrames=writerFrames + inferredFrames)
+
+    def writerTail(self, id, untilMs, resumeMs=None, writerFrames=None, inferredFrames=None):
+        super().writerTail(id, untilMs, resumeMs, inferredFrames=writerFrames if writerFrames is not None else inferredFrames)
 
 
 class WriterTailFromLastFrame(gaps.Writer):
     """Pads a tail loss from the last written frame, ignoring where the loss lies."""
-    def writerTail(self, id, untilMs, resumeMs=None, writerFrames=None):
+    def writerTail(self, id, untilMs, resumeMs=None, writerFrames=None, inferredFrames=None):
         super().writerTail(id, untilMs)
 
 
 class TailFromFilePosition(gaps.Writer):
     """#62 review: old oracle resurrects clock divergence absorbed between inputs."""
-    def writerTail(self, id, untilMs, resumeMs=None, writerFrames=None):
+    def writerTail(self, id, untilMs, resumeMs=None, writerFrames=None, inferredFrames=None):
         span = self.native[id]['span']
         start, rate = Fraction(str(span['startOffsetMs'])), span['rate']
         until = gaps._half_up((Fraction(str(untilMs)) - start) * rate / 1000)
         frames = max(0, until - span['frames'])
         if resumeMs is not None:
-            lost_from = gaps._half_up((Fraction(str(resumeMs)) - start) * rate / 1000) - writerFrames
-            frames = min(frames, max(0, until - lost_from), writerFrames)
+            lost_from = gaps._half_up((Fraction(str(resumeMs)) - start) * rate / 1000) - (writerFrames if writerFrames is not None else inferredFrames)
+            frames = min(frames, max(0, until - lost_from), writerFrames if writerFrames is not None else inferredFrames)
             if frames and lost_from - span['frames'] >= rate:
                 self._pad(span, lost_from - span['frames'], 'input')
         if frames:
@@ -148,11 +153,11 @@ class TailFromFilePosition(gaps.Writer):
 
 class TailNeedsWriterOverlap(gaps.Writer):
     """#62 review: input before Stop disappears if writer loss is all after it."""
-    def writerTail(self, id, untilMs, resumeMs=None, writerFrames=None):
+    def writerTail(self, id, untilMs, resumeMs=None, writerFrames=None, inferredFrames=None):
         rate = self.native[id]['span']['rate']
-        if resumeMs is not None and Fraction(str(resumeMs)) - Fraction(writerFrames * 1000, rate) >= Fraction(str(untilMs)):
+        if resumeMs is not None and Fraction(str(resumeMs)) - Fraction((writerFrames if writerFrames is not None else inferredFrames) * 1000, rate) >= Fraction(str(untilMs)):
             return
-        super().writerTail(id, untilMs, resumeMs, writerFrames)
+        super().writerTail(id, untilMs, resumeMs, writerFrames, inferredFrames)
 
 
 class OldWriterProblem(gaps.Writer):
@@ -195,7 +200,7 @@ class GapTests(unittest.TestCase):
                              ('flag-any-gap', AnyGapFlags), ('flag-from-stored-ranges', FlagFromStoredRanges),
                              ('writer-loss-as-gap', WriterLossAsGap), ('writer-loss-user-end', WriterLossKeepsUserEnd),
                              ('writer-loss-covers-no-host-time', WriterLossCoversNoHostTime),
-                             ('writer-loss-unbounded', WriterLossUnbounded),
+                             ('inferred-loss-unbounded', InferredLossUnbounded), ('known-loss-capped', KnownLossCapped),
                              ('writer-tail-from-last-frame', WriterTailFromLastFrame)):
             with self.subTest(mutation=name):
                 self.assertTrue(any(not matches(replay(c, mutant), c['expected']) for c in WRITER))
@@ -211,6 +216,18 @@ class GapTests(unittest.TestCase):
         ):
             with self.subTest(case=name, mutation=mutant.__name__):
                 self.assertFalse(matches(replay(cases[name], mutant), cases[name]['expected']))
+
+    def test_d69_1_known_and_inferred_loss_are_distinct(self):
+        cases = {case['name']: case for case in WRITER}
+        for name in ('mac-known-dropped-callback-keeps-all-frames-under-host-divergence',
+                     'mac-known-dropped-tail-keeps-all-frames-past-stop',
+                     'known-dropped-tail-without-following-buffer-is-exact'):
+            with self.subTest(case=name):
+                self.assertFalse(matches(replay(cases[name], KnownLossCapped), cases[name]['expected']))
+        name = 'inferred-loss-under-the-same-host-divergence-is-clipped'
+        self.assertFalse(matches(replay(cases[name], InferredLossUnbounded), cases[name]['expected']))
+        name = 'inferred-tail-under-the-same-host-divergence-is-clipped'
+        self.assertFalse(matches(replay(cases[name], InferredTailUnbounded), cases[name]['expected']))
 
     def test_shared_problem_literals_reject_incorrect_copy_rounding_and_aggregation(self):
         cases = {case['name']: case for case in WRITER}

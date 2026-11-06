@@ -105,8 +105,10 @@ class Writer:
     def nativeTrack(self, id, kind='microphone', rate=48000, boundaryMs=None):
         self.native[id] = dict(span=self._open(id, kind, rate, boundaryMs, native=True), host=None, frames=0)
 
-    def input(self, id, hostMs, frames, writerFrames=0):
-        """writerFrames: frames the host lost right before this buffer (R93-2 D2)."""
+    def input(self, id, hostMs, frames, writerFrames=0, inferredFrames=0):
+        """Known callback loss is exact; inferred loss is a host-time estimate (D69.1)."""
+        if writerFrames and inferredFrames:
+            raise ValueError('Use known writerFrames or inferredFrames, not both')
         state = self.native[id]
         span = state['span']
         if state['host'] is None:
@@ -118,8 +120,9 @@ class Writer:
                     self._pad(span, prefix, 'prefix')
         else:
             lag = (Fraction(str(hostMs)) - Fraction(str(state['host']))) * span['rate'] / 1000 - state['frames']
-            # The lost frames fill host time: never more than lies between the buffers.
-            writerFrames = min(writerFrames, max(0, _half_up(lag)))
+            # Only inferred loss is capped. Observed queue-dropped callback frames
+            # remain exact even when host/sample clock divergence was absorbed.
+            writerFrames += min(inferredFrames, max(0, _half_up(lag)))
             gap = _half_up(lag - writerFrames)  # only host time the lost frames do not cover
             if gap >= span['rate']:
                 self._pad(span, gap, 'input')
@@ -128,27 +131,34 @@ class Writer:
         state['host'], state['frames'] = hostMs, frames
         span['frames'] += frames
 
-    def writerTail(self, id, untilMs, resumeMs=None, writerFrames=None):
-        """Audio lost after the last written frame, padded up to untilMs (a Stop moment).
+    def writerTail(self, id, untilMs, resumeMs=None, writerFrames=None, inferredFrames=None):
+        """Known admitted callback loss is exact, even past the Stop trigger.
 
-        With resumeMs, the writerFrames lost lie right before a buffer at resumeMs, past
-        untilMs: only their share before untilMs is padded, after the host time ahead of
-        them, which is an input gap under the one-second rule (shorter is clock skew)."""
+        Without writerFrames, estimate unobserved loss from host time, clipped to
+        untilMs. resumeMs/inferredFrames locate that estimated loss before a later
+        buffer; uncovered host time ahead of it is an input gap.
+        """
+        if writerFrames is not None and inferredFrames is not None:
+            raise ValueError('Use known writerFrames or inferredFrames, not both')
         state = self.native[id]
         span, rate = state['span'], state['span']['rate']
-        # File time can differ from host time by clock divergence already absorbed
-        # between inputs. Measure new loss from the latest input's host end; append
-        # that duration at the current file position without bringing divergence back.
+        # File time can differ from host time by clock divergence already absorbed.
+        # Only new host time after the latest input's host end can be inferred.
         host_end = Fraction(str(state['host'])) + Fraction(state['frames'] * 1000, rate)
         until = max(0, _half_up((Fraction(str(untilMs)) - host_end) * rate / 1000))
-        if resumeMs is None:
+        if writerFrames is not None:
+            missing, lost = 0, writerFrames
+            if resumeMs is not None:
+                resume = _half_up((Fraction(str(resumeMs)) - host_end) * rate / 1000)
+                missing = min(until, max(0, resume - writerFrames))
+        elif resumeMs is None:
             missing, lost = 0, until
         else:
             resume = _half_up((Fraction(str(resumeMs)) - host_end) * rate / 1000)
-            lost_from = max(0, resume - writerFrames)
+            lost_from = max(0, resume - inferredFrames)
             missing = min(until, lost_from)
             lost = max(0, min(until, resume) - lost_from)
-        # Uncovered input exists even when the loss starts at or beyond Stop.
+        # Uncovered input exists even when inferred loss starts at or beyond Stop.
         if missing >= rate:
             self._pad(span, missing, 'input')
         if lost:

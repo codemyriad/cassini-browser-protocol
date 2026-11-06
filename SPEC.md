@@ -586,18 +586,26 @@ New writers always write the key, so `gaps: []` means no gaps and a missing key 
   that padding as a `writer` range. It counts in droppedFrames, not gapFrames, and never sets the
   gap flag, however long; host write loss is reported as io (R93-2 D2): the session is interrupted
   with problemKind `io`, ahead of `gap`, and its `end` reason is `error`, even after a user Stop.
-  On a native source the lost frames lie right before the buffer that follows them, so the
-  `writer` range ends where that buffer starts; they are never more than the host time between
-  the two buffers (in frames, rounded half up), and only host time they do not cover is input time,
-  padded before them as an `input` range under the gap flag rule. Audio lost after a source's
-  last written frame, up to the Stop moment (a Stop while its writer queue is full, a drain that
-  times out), is padded at the end as a `writer` range too; when the buffer that follows the loss
-  starts after the Stop moment, only the loss's share before that moment is padded, after the
-  host time ahead of the loss, which is input time under the same rule, even when none of the
-  writer loss overlaps Stop. Tail durations are measured from the latest input buffer's host
-  end (its timestamp plus its duration), then appended at the file position: clock divergence
-  already absorbed between buffers is never padded again. The problem names the loss with one
-  sentence per source, after any earlier problem: `N ms of <kind> audio was lost because the
+  Native writer loss distinguishes known dropped callback frames from inferred loss (D69.1).
+  Callback buffers admitted before Stop but dropped by the writer's bounded queue are known
+  loss: pad their exact sample-frame count on the native sample timeline. Host-stamp
+  divergence already absorbed by the native clock never shortens those frames. Between
+  surviving buffers, subtract the known lost duration from the host-time interval when
+  finding uncovered input time; only that remainder can be an `input` gap under the
+  one-second rule, padded before the `writer` range. The known loss ends at the following
+  buffer's position on the sample timeline, which need not equal its host stamp.
+  A known dropped tail is padded in full after the last written frame, even when its sample
+  end extends past the Stop trigger time; this does not admit callbacks received after Stop.
+  Inferred loss is time where no buffer was observed, estimated from host time (for example,
+  an unobserved interval attributed to a stalled writer). Only inferred loss is capped to
+  the host time between buffers and to Stop. If the estimate lies right before a buffer
+  starting after Stop, pad only its share before Stop; uncovered host time ahead of it is
+  still an `input` gap under the same rule, even if no inferred writer loss overlaps Stop.
+  Inferred tail durations are measured from the latest input buffer's host end (timestamp
+  plus duration), then appended at the file position: absorbed clock divergence is never
+  padded again. Known and inferred loss describe disjoint missing audio and are never
+  counted twice. The problem names the loss with one sentence per source, after any earlier
+  problem: `N ms of <kind> audio was lost because the
   computer could not keep up; the gaps contain silence.` (N: that source's `writer` padding in
   ms, summed exactly before rounding half up once per source; kind: the track kind). Literal
   cases: conformance/gaps/writer.json.
