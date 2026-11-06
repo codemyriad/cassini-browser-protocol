@@ -10,8 +10,10 @@ export function popupState(result, tab) {
     description: 'The extension did not return connection details. Try reopening this popup.'};
   if (!tab || !/^https?:/.test(tab.url || '')) return {...view, title: 'This page isn’t supported',
     description: 'Open this popup on the browser tab where your meeting is running.'};
-  if (result.starting === true && result.tabId === tab.id) return {...view, title: 'Preparing browser capture…',
-    description: 'Cassini has requested capture for this tab. Waiting for the browser to finish preparing it.',
+  if (result.starting === true && result.tabId === tab.id) return {...view,
+    title: result.stopping ? 'Cancelling browser capture…' : 'Preparing browser capture…',
+    description: result.stopping ? 'Waiting for the capture request to finish stopping.' :
+      'Cassini has requested capture for this tab. Waiting for the browser to finish preparing it.',
     note: 'Audio capture is not yet confirmed'};
   if (capture) return {...view, tone: result.failedSources?.length ? 'warning' : 'good',
     title: result.stopping ? 'Finishing browser capture' : result.tracks > 0 ? 'Browser capture is active' : 'Waiting for browser audio',

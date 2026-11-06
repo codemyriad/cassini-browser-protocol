@@ -81,4 +81,7 @@ test('a pending Start is not active capture and cannot offer reload', async () =
   assert.equal(view.title,'Preparing browser capture…');
   assert.equal(view.reloadTabId,null);
   assert.match(view.note,/not yet confirmed/);
+  const cancelling = popupState(status([{tabId:7,state:'reloadRequired'}], {recording:false,starting:true,stopping:true,tabId:7}), tab);
+  assert.equal(cancelling.title,'Cancelling browser capture…');
+  assert.equal(cancelling.reloadTabId,null);
 });
