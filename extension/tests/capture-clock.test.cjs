@@ -4,6 +4,14 @@ const fs = require('node:fs');
 const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '../capture.js'), 'utf8');
 
+test('PCM base64 is byte-exact across conversion blocks and large buffers', async () => {
+  const { base64 } = await import(`data:text/javascript;base64,${Buffer.from(source).toString('base64')}`);
+  for (const size of [0, 1, 2, 3, 8191, 8192, 8193, 16384, 262145]) {
+    const bytes = Uint8Array.from({ length: size }, (_, i) => (i * 73 + 19) % 256);
+    assert.equal(base64(bytes.buffer), Buffer.from(bytes).toString('base64'), `${size} bytes`);
+  }
+});
+
 // D61: Date.now() is the wall clock the session origin comes from; performance.now()
 // is the document's monotonic clock. timeOrigin is deliberately unrelated to both,
 // so a calibration that reads it moves every offset.
@@ -327,7 +335,12 @@ async function device(run, { stamps = true, outputLatency = 0, retries = [] } = 
       async start(id, { own = false } = {}) {
         shared ??= new Context();
         const recorder = await capture({ stream: {}, id, label: id, kind: 'local', origin: 100000, workletURL: '', reportOutcomes: true,
-          sharedContext: own ? undefined : shared, send: async packet => packets.push(packet),
+          sharedContext: own ? undefined : shared, send: async packet => {
+            // These long clock simulations assert placement and ordering, not PCM contents.
+            // Release the encoded silence once sent instead of retaining hours of audio.
+            const { pcm, ...metadata } = packet;
+            packets.push(metadata);
+          },
           fail: message => failures.push(message), warn: (message, details) => warnings.push(details?.kind ?? message),
           schedule: (fn, ms) => { timers.push(fn); return timers.length; }, cancel: () => {}, retryDelayMs: 0 });
         const requested = now;

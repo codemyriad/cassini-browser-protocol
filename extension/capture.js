@@ -1,7 +1,11 @@
 export function base64(buffer) {
   const bytes = new Uint8Array(buffer);
   let text = "";
-  for (let i = 0; i < bytes.length; i++) text += String.fromCharCode(bytes[i]);
+  // Convert bounded blocks: per-byte concatenation creates a string node for every
+  // PCM byte. Keep each call below engine argument limits, including large buffers.
+  for (let i = 0; i < bytes.length; i += 8192) {
+    text += String.fromCharCode.apply(null, bytes.subarray(i, i + 8192));
+  }
   return btoa(text);
 }
 
