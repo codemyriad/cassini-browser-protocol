@@ -17,7 +17,7 @@ async function setup(sourceCount = 3, previous = {}, hostFeatures = [], nativeFa
   const tabs = new Map([[2, { id: 2, title: 'Meeting B', url: 'https://meet.example/call' }], [99, { id: 99, title: 'Active unrelated page', url: 'https://other.example/' }]]);
   const getCalls = [], queries = [];
   const chrome = {
-    runtime: { id: 'extension', onConnect: event(), onMessage: event(), getURL: name => 'chrome-extension://extension/' + name,
+    runtime: { id: 'extension', onConnect: event(), onMessage: event(), onInstalled: event(), onStartup: event(), getURL: name => 'chrome-extension://extension/' + name,
       getContexts: async () => [], connectNative(name) {
         if (name === 'io.codemyriad.cassini' && nativeFactory) { const port = nativeFactory(); audio.push(port); return port; }
         const port = { name, sent: [], closed: false, onMessage: event(), onDisconnect: event(),
@@ -45,15 +45,16 @@ async function setup(sourceCount = 3, previous = {}, hostFeatures = [], nativeFa
   vm.runInContext(fs.readFileSync(path.join(extension, 'app-control.js'), 'utf8').replace('export class AppControl', 'class AppControl'), context);
   context.controlLater = later; context.controlCancel = cancel;
   const background = fs.readFileSync(path.join(extension, 'background.js'), 'utf8').replace(/^import .*\n/, '').replace('runtime: chrome.runtime, alarms: chrome.alarms,', 'runtime: chrome.runtime, alarms: chrome.alarms, later: controlLater, cancel: controlCancel,');
-  vm.runInContext(background + '\nglobalThis.api={status,controlStatus,appControl,frames,start,stop,meetings,callInfo,sessionTimers};', context);
+  vm.runInContext(background + '\nglobalThis.api={status,controlStatus,appControl,frames,start,stop,meetings,callInfo,sessionTimers,repairTab,repairOpenTabs,browserHealth,relayTimers};', context);
   beforeReady?.({chrome, api:context.api, frame, tabs});
   await until(() => ports.length && ports[0].sent.some(m => m.type === 'status'));
   function frame(tabId = 2, count = sourceCount, frameId = 0) {
     const port = { name: 'cassini-frame', sender: { id: 'extension', tab: { id: tabId }, frameId }, onMessage: event(), onDisconnect: event(), sent: [],
-      postMessage(message) { this.sent.push(message); if (message.type === 'stop') queueMicrotask(() => this.onMessage.emit({ type: 'stopped' })); } };
+      postMessage(message) { this.sent.push(message); if (message.type === 'relayHello') { this.onMessage.emit({...message}); this.onMessage.emit({...message,type:'relayReady'}); } if (message.type === 'stop') queueMicrotask(() => this.onMessage.emit({ type: 'stopped' })); } };
     chrome.runtime.onConnect.emit(port); port.onMessage.emit({ type: 'discovery', sourceCount: count, title: 'Spoofed title', url: 'https://spoofed.invalid/' }); pages.push(port); return port;
   }
   frame();
+  await until(() => [...context.api.frames].some(f => f.hookReady));
   await context.api.appControl.publishing;
   async function command(message) {
     const port = context.api.appControl.port; const before = port.sent.length;
