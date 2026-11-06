@@ -1,7 +1,7 @@
 import { popupState } from './popup-state.mjs';
 
 const element = id => document.getElementById(id);
-let pending = false, actionPending = false, reloadTabId = null, diagnosticText = '';
+let pending = false, actionPending = false, reloadTabId = null, reloadedTabId = null, diagnosticText = '';
 let requestGeneration = 0;
 function boundedReply(promise) {
   let timer;
@@ -14,8 +14,12 @@ function showActionError(message) {
   element('action-error').hidden = !message;
 }
 function render(result, tab) {
-  const view = popupState(result, tab);
+  const current = result.browserHealth?.tabs?.find(item => item.tabId === tab?.id);
+  const capture = result.tabId === tab?.id && (result.recording === true || result.starting === true);
+  if (tab?.id !== reloadedTabId || current || capture) reloadedTabId = null;
+  const view = popupState(result, tab, reloadedTabId);
   reloadTabId = view.reloadTabId;
+  if (reloadTabId === null) showActionError('');
   element('connection').textContent = view.connected ? 'App link connected · audio checked separately below' : 'Cassini app link is not connected';
   element('connection').dataset.connected = String(view.connected);
   element('tab-title').textContent = tab?.title || 'No meeting tab selected';
@@ -53,6 +57,7 @@ async function refresh() {
   } catch (error) {
     if (generation !== requestGeneration) return;
     reloadTabId = null;
+    showActionError('');
     element('connection').textContent = 'App connection is unverified';
     element('connection').dataset.connected = 'false';
     element('installation-warning').hidden = true;
@@ -77,6 +82,7 @@ element('reload').addEventListener('click', async () => {
   try {
     const result = await chrome.runtime.sendMessage({target: 'background', type: 'reloadMeetingTab', tabId});
     if (!result || result.error) throw new Error(result?.error || 'The tab could not be reloaded');
+    reloadedTabId = tabId;
     element('status').textContent = 'Tab reloaded · rejoin your call';
     element('explanation').textContent = 'Waiting for fresh meeting sources. Reloading does not confirm that audio is available.';
     element('card').dataset.tone = 'neutral';

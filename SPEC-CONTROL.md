@@ -949,7 +949,10 @@ as diagnostic information and never overrides the current-tab readiness state.
 
 A user reload warns about leaving the call, uses the existing guarded
 `reloadMeetingTab` action, and awaits new evidence rather than claiming detection
-or recording succeeded. Connection details may be copied without meeting titles,
+or recording succeeded. Rejoin guidance survives source-free refreshes until the
+same tab has new health/capture evidence or the selected tab changes. Obsolete
+action refusals clear after recovery or a status-fetch failure. Connection details
+may be copied without meeting titles,
 URLs, or recording paths. Confirmed app recording state, app auto-record policy,
 and launching the native app require additional explicit app-backed interfaces;
 the popup does not infer or fabricate them.

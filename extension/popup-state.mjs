@@ -1,6 +1,6 @@
 // Only describe evidence exposed by the current worker. A native port, a page
 // hook, a recording request, and confirmed saved audio are different things.
-export function popupState(result, tab) {
+export function popupState(result, tab, reloadedTabId = null) {
   const health = result?.browserHealth;
   const current = health?.tabs?.find(item => item.tabId === tab?.id);
   const capture = result?.recording === true && result.tabId === tab?.id;
@@ -21,6 +21,8 @@ export function popupState(result, tab) {
       result.tracks > 0 ? 'The extension is capturing audio for this tab. Check Cassini for the recording and its saved audio.' :
         'No audio tracks have been reported for this capture yet. Check the meeting in Cassini.',
     note: result.tracks > 0 ? `${result.tracks} browser audio ${result.tracks === 1 ? 'track' : 'tracks'} · manage recording in Cassini` : 'Waiting for browser audio tracks'};
+  if (reloadedTabId === tab.id && !current) return {...view, title: 'Tab reloaded · rejoin your call',
+    description: 'Waiting for fresh meeting sources. Reloading does not confirm that audio is available.'};
   if (current?.state === 'reloadRequired') return {...view, tone: 'warning', reloadTabId: tab.id,
     title: 'This tab needs to reload', description: 'Cassini cannot reach the meeting’s audio sources on this page. Reload the tab, then rejoin your call.'};
   if (current?.state === 'checking') return {...view, title: 'Checking the page connection…',

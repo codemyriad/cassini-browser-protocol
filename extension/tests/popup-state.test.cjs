@@ -85,3 +85,16 @@ test('a pending Start is not active capture and cannot offer reload', async () =
   assert.equal(cancelling.title,'Cancelling browser capture…');
   assert.equal(cancelling.reloadTabId,null);
 });
+
+
+test('post-reload guidance stays specific to the same tab until new evidence arrives',async()=>{
+ const {popupState}=await state;
+ const waiting=popupState(status(),tab,7);
+ assert.equal(waiting.title,'Tab reloaded · rejoin your call');assert.equal(waiting.reloadTabId,null);
+ for(const readiness of ['checking','ready','reloadRequired'])
+  assert.notEqual(popupState(status([{tabId:7,state:readiness}]),tab,7).title,waiting.title);
+ for(const extra of [{recording:true,tabId:7,tracks:1},{recording:false,starting:true,tabId:7}])
+  assert.notEqual(popupState(status([],extra),tab,7).title,waiting.title);
+ assert.notEqual(popupState(status(),{...tab,id:8},7).title,waiting.title);
+ assert.equal(popupState({},tab,7).title,'Meeting detection is unavailable');
+});

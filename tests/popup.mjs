@@ -69,8 +69,20 @@ try {
   await page.locator('#reload').click();
   await page.getByText('Stop and save the recording before reloading its tab.',{exact:true}).waitFor();
   assert.equal(await page.locator('#reload').isEnabled(),true);
-  await page.evaluate(()=>{delete fixture.reloadError});
+  // A backend recovery clears a refused action even without another click.
+  await page.evaluate(()=>fixture.status.browserHealth.tabs=[{tabId:7,state:'ready'}]);
+  await page.getByRole('heading',{name:'Meeting sources detected',exact:true}).waitFor();
+  assert.equal(await page.locator('#action-error').isVisible(),false);
+  await page.evaluate(()=>{delete fixture.reloadError;fixture.status.browserHealth.tabs=[{tabId:7,state:'reloadRequired'}]});
+  await page.getByRole('button',{name:'Reload meeting tab',exact:true}).waitFor();
   await page.locator('#reload').click();
+  await page.getByRole('heading',{name:'Tab reloaded · rejoin your call',exact:true}).waitFor();
+  const polls=await page.evaluate(()=>fixture.requests.filter(r=>r.type==='status').length);
+  await page.waitForFunction(count=>fixture.requests.filter(r=>r.type==='status').length>=count+2,polls);
+  assert.equal(await page.locator('#status').textContent(),'Tab reloaded · rejoin your call','guidance survives refreshes without new evidence');
+  await page.evaluate(()=>fixture.status.browserHealth.tabs=[{tabId:7,state:'ready'}]);
+  await page.getByRole('heading',{name:'Meeting sources detected',exact:true}).waitFor();
+  await page.evaluate(()=>fixture.status.browserHealth.tabs=[]);
   await page.getByRole('heading',{name:'No meeting sources detected',exact:true}).waitFor();
   assert.deepEqual(await page.evaluate(()=>fixture.requests.filter(r=>r.type==='reloadMeetingTab').map(r=>r.tabId)),[7,7]);
   await page.locator('summary').click();
@@ -82,12 +94,28 @@ try {
   await mkdir(path.join(root,'artifacts'),{recursive:true});
   await page.screenshot({path:path.join(root,'artifacts/popup-idle.png'),fullPage:true});
   await page.emulateMedia({colorScheme:'dark'});
+  await page.evaluate(()=>fixture.status.browserHealth.filesOk=false);
+  await page.locator('#installation-warning').waitFor();
+  const contrast=await page.evaluate(()=>{
+    const rgb=value=>value.match(/[\d.]+/g).slice(0,3).map(Number);
+    const luminance=values=>values.map(n=>{const v=n/255;return v<=0.04045?v/12.92:((v+0.055)/1.055)**2.4})
+      .reduce((sum,n,i)=>sum+n*[0.2126,0.7152,0.0722][i],0);
+    const a=luminance(rgb(getComputedStyle(document.querySelector('#installation-warning')).color));
+    const b=luminance(rgb(getComputedStyle(document.documentElement).backgroundColor));
+    return (Math.max(a,b)+0.05)/(Math.min(a,b)+0.05);
+  });
+  assert.ok(contrast>=4.5,`dark warning contrast must remain readable: ${contrast.toFixed(2)}:1`);
   await page.screenshot({path:path.join(root,'artifacts/popup-dark.png'),fullPage:true});
+  await page.evaluate(()=>{fixture.status.browserHealth.tabs=[{tabId:7,state:'reloadRequired'}];fixture.reloadError='Generated reload refusal'});
+  await page.getByRole('button',{name:'Reload meeting tab',exact:true}).waitFor();
+  await page.locator('#reload').click();
+  await page.getByText('Generated reload refusal',{exact:true}).waitFor();
   await page.evaluate(()=>fixture.statusError='Generated worker failure');
   await page.getByRole('heading',{name:'Meeting detection is unavailable',exact:true}).waitFor();
   assert.equal(await page.locator('#reload').isVisible(),false);
   assert.equal(await page.locator('#connection').getAttribute('data-connected'),'false');
   assert.match(await page.locator('#recording-note').textContent(),/unavailable/);
+  assert.equal(await page.locator('#action-error').isVisible(),false,'worker failure clears stale action refusal');
   await page.evaluate(()=>{delete fixture.statusError;fixture.status.browserHealth.tabs=[{tabId:7,state:'ready'}]});
   await page.getByRole('heading',{name:'Meeting sources detected',exact:true}).waitFor();
   await page.evaluate(()=>fixture.statusNeverResolves=true);
