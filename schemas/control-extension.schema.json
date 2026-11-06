@@ -28,6 +28,20 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 128
+        },
+        "installType": {
+          "type": "string",
+          "enum": [
+            "admin",
+            "development",
+            "normal",
+            "sideload",
+            "other",
+            "unknown"
+          ]
+        },
+        "filesOk": {
+          "type": "boolean"
         }
       },
       "required": [
@@ -532,6 +546,20 @@
             ],
             "additionalProperties": true
           }
+        },
+        "installType": {
+          "type": "string",
+          "enum": [
+            "admin",
+            "development",
+            "normal",
+            "sideload",
+            "other",
+            "unknown"
+          ]
+        },
+        "filesOk": {
+          "type": "boolean"
         }
       },
       "required": [

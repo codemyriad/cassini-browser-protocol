@@ -14,7 +14,7 @@ async function command(type, mode) {
     document.querySelector("#health").textContent = broken?.message || "";
     document.querySelector("#reload").hidden = !broken;
     document.querySelector("#diagnostics").textContent = health ?
-      `Extension ${health.extensionVersion}\nInstance ${health.extensionInstance}\nWorker: ${health.worker}\nNative connection: ${health.nativeControl}\nMeeting tabs: ${health.state}` +
+      `Extension ${health.extensionVersion}\nInstance ${health.extensionInstance}\nInstall: ${health.installType || "checking"}\nCapture files: ${health.filesOk === undefined ? "checking" : health.filesOk ? "readable" : "unavailable"}\nWorker: ${health.worker}\nNative connection: ${health.nativeControl}\nMeeting tabs: ${health.state}` +
       health.tabs.map(tab => `\nTab ${tab.tabId}: ${tab.state}; hook ${tab.hookSeen ? "seen" : "not seen"}; relay ${tab.relayAlive ? "alive" : "not connected"}`).join("") : "Checking…";
     document.querySelector("#path").textContent = result.path || "";
     document.querySelector("#tracks").hidden = result.recording;

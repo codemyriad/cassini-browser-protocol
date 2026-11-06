@@ -287,3 +287,15 @@ The VM `relay-readiness` tests exercise incompatible hooks, stale instance repli
 invalidated-relay cleanup, restricted injection, per-frame lost readiness and the
 explicit reload action. The control schema/consumer vectors separate native
 connectivity from tab readiness and require idle browsers to remain warning-free.
+
+## Companion diagnostics
+
+The companion-diagnostics unit tests check hello version/install metadata, both
+404 file cases, empty/unreadable files, a controlled startup deadline, reconnect
+caching, each terminal loss cause, first-cause preservation and normal Stops.
+The unpacked-extension browser test checks Chrome's actual development install
+type and resource self-check, then removes the worklet only from its disposable
+copy and checks the degraded diagnostic. Schema vectors retain legacy hellos and
+Stops, and tolerate unknown future cause identifiers. These are extension-side
+checks; app setup wording, fallback persistence and Details rendering belong to
+the consumer implementations.
