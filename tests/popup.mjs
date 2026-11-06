@@ -1,0 +1,77 @@
+// Exercise the shipped popup DOM and module in a disposable browser. Only the
+// Chrome transport is a fixture; this test never connects to a native host.
+import assert from 'node:assert/strict';
+import {createServer} from 'node:http';
+import {readFile, mkdir} from 'node:fs/promises';
+import {fileURLToPath} from 'node:url';
+import path from 'node:path';
+const {chromium} = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const server = createServer(async (request, response) => {
+  const file = request.url?.slice(1);
+  if (!['popup.html', 'popup.js', 'popup-state.mjs'].includes(file)) {response.writeHead(404).end();return;}
+  response.setHeader('Content-Type', file.endsWith('.html') ? 'text/html' : 'text/javascript');
+  response.end(await readFile(path.join(root,'extension',file)));
+});
+await new Promise(resolve => server.listen(0,'127.0.0.1',resolve));
+let browser;
+try {
+  browser = await chromium.launch({headless:true});
+  const context = await browser.newContext({viewport:{width:376,height:800},permissions:['clipboard-read','clipboard-write']});
+  await context.addInitScript(() => {
+    window.fixture = {requests:[], copies:[], tab:{id:7,title:'Generated meeting <script>',url:'https://example.test/call/private'},
+      status:{browserHealth:{extensionVersion:'0.2.19',nativeControl:'connected',worker:'ready',filesOk:true,tabs:[]}}};
+    window.chrome = {
+      tabs:{async query(){return [fixture.tab]}},
+      runtime:{async sendMessage(message){
+        fixture.requests.push(message);
+        if(message.type==='reloadMeetingTab'){
+          if(fixture.reloadError)return {error:fixture.reloadError};
+          fixture.status.browserHealth.tabs=[];
+        }
+        if(fixture.statusError)throw Error(fixture.statusError);
+        return structuredClone(fixture.status);
+      }}
+    };
+  });
+  const page = await context.newPage();
+  const errors=[];page.on('pageerror',error=>errors.push(error.message));
+  await page.goto(`http://127.0.0.1:${server.address().port}/popup.html`);
+  await page.locator('main[aria-busy="false"]').waitFor();
+  assert.equal(await page.locator('#status').textContent(),'No meeting sources detected');
+  assert.equal(await page.locator('#tab-title').textContent(),'Generated meeting <script>');
+  assert.equal(await page.getByRole('button',{name:/record|stop/i}).count(),0);
+  await page.evaluate(()=>fixture.status.browserHealth.tabs=[{tabId:3,state:'reloadRequired'},{tabId:7,state:'ready'}]);
+  await page.getByRole('heading',{name:'Meeting sources detected',exact:true}).waitFor();
+  assert.equal(await page.locator('#reload').isVisible(),false);
+  await page.evaluate(()=>fixture.status.browserHealth.tabs=[{tabId:3,state:'ready'},{tabId:7,state:'reloadRequired'}]);
+  await page.getByRole('button',{name:'Reload meeting tab',exact:true}).waitFor();
+  assert.match(await page.locator('#reload-warning').textContent(),/briefly disconnects/);
+  await page.evaluate(()=>fixture.reloadError='Stop and save the recording before reloading its tab.');
+  await page.locator('#reload').click();
+  await page.getByText('Stop and save the recording before reloading its tab.',{exact:true}).waitFor();
+  assert.equal(await page.locator('#reload').isEnabled(),true);
+  await page.evaluate(()=>{delete fixture.reloadError});
+  await page.locator('#reload').click();
+  await page.getByRole('heading',{name:'No meeting sources detected',exact:true}).waitFor();
+  assert.deepEqual(await page.evaluate(()=>fixture.requests.filter(r=>r.type==='reloadMeetingTab').map(r=>r.tabId)),[7,7]);
+  await page.locator('summary').click();
+  await page.locator('#copy').click();
+  await page.getByText('Diagnostics copied.',{exact:true}).waitFor();
+  const report=JSON.parse(await page.evaluate(()=>navigator.clipboard.readText()));
+  assert.equal(report.currentTabId,7);
+  assert.doesNotMatch(JSON.stringify(report),/private|Generated meeting/);
+  await mkdir(path.join(root,'artifacts'),{recursive:true});
+  await page.screenshot({path:path.join(root,'artifacts/popup-idle.png'),fullPage:true});
+  await page.emulateMedia({colorScheme:'dark'});
+  await page.screenshot({path:path.join(root,'artifacts/popup-dark.png'),fullPage:true});
+  await page.evaluate(()=>fixture.statusError='Generated worker failure');
+  await page.getByRole('heading',{name:'Meeting detection is unavailable',exact:true}).waitFor();
+  assert.equal(await page.locator('#reload').isVisible(),false);
+  assert.equal(await page.locator('#connection').getAttribute('data-connected'),'false');
+  assert.match(await page.locator('#recording-note').textContent(),/unavailable/);
+  assert.equal(await page.evaluate(()=>fixture.requests.some(r=>r.type==='start'||r.type==='stop')),false);
+  assert.deepEqual(errors,[]);
+  await context.close();
+  console.log('PASS popup: no recording controls/RPCs, current-tab health/reload, refused reload, honest recovery, copy without meeting URLs, connection loss, light/dark rendering');
+} finally {await browser?.close();await new Promise(resolve=>server.close(resolve));}

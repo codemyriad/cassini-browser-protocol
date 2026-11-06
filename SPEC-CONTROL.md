@@ -879,3 +879,25 @@ diagnostic. This extension change does not implement app-side persistence or UI.
 `conformance/control/companion-diagnostics-vectors.json` contains current and
 legacy hellos plus lost/normal Stop examples. Their optional keys remain valid
 under the older schemas' unknown-field policy.
+
+## Status popup (extension 0.2.19)
+
+The browser companion popup displays active-tab source readiness independently
+from the native app-control connection. It has no recording Start/Stop or mode
+controls. Apps continue using the existing control commands; the trusted popup
+RPC remains available to isolated browser fixtures. This is a presentation
+change, with no wire-version, capability, audio, or recording-policy change.
+
+Only a health row for the browser-owned current tab may provide that tab’s
+readiness or reload action. A missing row means no reported detected meeting,
+not proof of successful page injection, unsupported audio, or missing permission.
+A source is not a participant identity. A native connection, page readiness, or
+track count does not prove saved audio. The packaged-file self-check is displayed
+as diagnostic information and never overrides the current-tab readiness state.
+
+A user reload warns about leaving the call, uses the existing guarded
+`reloadMeetingTab` action, and awaits new evidence rather than claiming detection
+or recording succeeded. Connection details may be copied without meeting titles,
+URLs, or recording paths. Confirmed app recording state, app auto-record policy,
+and launching the native app require additional explicit app-backed interfaces;
+the popup does not infer or fabricate them.

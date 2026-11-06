@@ -75,12 +75,12 @@ try {
     })),id);
     const page = await context.newPage();
     await page.goto(`chrome-extension://${id}/popup.html`);
-    await page.locator('#status').filter({hasText:/Ready/}).waitFor();
+    await page.locator('main[aria-busy="false"]').waitFor();
     return page;
   }
   const popup = await context.newPage();
   await popup.goto(`chrome-extension://${id}/popup.html`);
-  await popup.locator('#status').filter({hasText:/Ready/}).waitFor();
+  await popup.locator('main[aria-busy="false"]').waitFor();
   // Playwright retains the Worker object across an MV3 context restart.
   // Observe the new JS realm rather than waiting for a second worker event.
   const deadline = Date.now() + 15000;
