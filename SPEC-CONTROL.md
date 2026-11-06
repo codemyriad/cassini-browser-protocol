@@ -880,6 +880,52 @@ diagnostic. This extension change does not implement app-side persistence or UI.
 legacy hellos plus lost/normal Stop examples. Their optional keys remain valid
 under the older schemas' unknown-field policy.
 
+
+## Tab-scoped trusted popup status (extension 0.2.19)
+
+The extension's private runtime RPC supports a browser-owned active-tab ID:
+
+```js
+const [tab] = await chrome.tabs.query({active:true, currentWindow:true});
+const status = await chrome.runtime.sendMessage({target:"background", type:"status", tabId:tab.id});
+```
+
+Only a sender from this extension's exact `popup.html` URL may read this status.
+Content scripts, offscreen pages, other extension pages and other extensions gain
+no status access. The popup obtains the ID from Chrome, not page-provided data.
+A present `tabId` must be a nonnegative safe integer; invalid values return
+`{error:"Choose a valid browser tab.", code:"invalid"}`, without another tab's
+status or health payload. A well-formed ID with no known capture returns idle;
+this lookup does not establish whether that tab still exists or supports capture.
+
+A valid scoped reply always echoes `tabId` and includes `starting`, `recording`,
+and the unchanged global `browserHealth` snapshot. The scalar capture fields
+belong only to that tab:
+
+- A reserved Start, including a pending explicit-tab lookup, reports
+  `starting:true, recording:false`. An untargeted legacy popup Start becomes
+  attributable once Chrome resolves its actual tab. An unresolved active-tab
+  lookup cannot yet be attributed to a tab.
+- A session whose capture setup is not ready, or whose Start is still pending,
+  also reports `starting:true, recording:false`. This covers native-start
+  acknowledgement, persistence and the remaining capture setup. Consumers must
+  suppress reload while starting and must not treat it as confirmed capture.
+- Once Start has completed and the session is ready, replies report
+  `starting:false, recording:true`, with that session's existing captureId,
+  timelineOriginMs, tracks, stopping, failedSources and other status fields.
+  Zero tracks means waiting for browser audio; this status does not prove audio
+  delivery, app-side recording confirmation or saved audio. `stopping:true`
+  remains an in-flight finalization state until the session is removed.
+- No current session or pending Start reports
+  `starting:false, recording:false, tabId:<requested ID>, path:null, tracks:0,
+  stopping:false, failedSources:[]`. It does not substitute the first session or
+  a saved path/problem from another or earlier capture. Health remains separate.
+
+For compatibility, omitting `tabId` preserves the legacy `status()` scalar,
+including first-session selection and its in-flight `recording` behavior, and
+adds no `starting` field. Native app-control status, inventory, capture admission,
+reload refusals, relay policy, wire version and capabilities are unchanged.
+
 ## Status popup (extension 0.2.20)
 
 The browser companion popup displays active-tab source readiness independently
