@@ -92,9 +92,18 @@ try{
  assert.equal(final.state,'completed');assert.ok(!final.tracks.some(t=>t.kind==='local'||t.kind==='microphone'));
  const remoteTracks=final.tracks.filter(t=>t.kind==='remote');
  assert.equal(remoteTracks.length,2,'each of the two incoming peers must have its own track');
+ assert.equal(new Set(remoteTracks.map(t=>t.sourceTrackId)).size,2,'incoming peers must have distinct source identities');
  const peaks=[];
  for(const track of remoteTracks){
-  const pcm=await readFile(path.join(directory,track.file));const frames=Math.min(12000,Math.floor((pcm.length-44)/2));assert.ok(frames>=4000);
+  assert.ok(track.sourceTrackId);assert.equal(track.sampleRate,48000);assert.equal(track.channels,1);
+  assert.equal(track.captureOutcome,'captured');assert.deepEqual(track.gaps,[]);assert.equal(track.droppedFrames,0);
+  assert.equal(track.receivedFrames,track.frames);assert.ok(track.frames>=track.sampleRate*2);
+  const pcm=await readFile(path.join(directory,track.file));
+  assert.equal(pcm.toString('ascii',0,4),'RIFF');assert.equal(pcm.toString('ascii',8,12),'WAVE');
+  assert.equal(pcm.readUInt16LE(20),1);assert.equal(pcm.readUInt16LE(22),1);
+  assert.equal(pcm.readUInt32LE(24),48000);assert.equal(pcm.readUInt16LE(34),16);
+  assert.equal(pcm.length-44,track.frames*2);
+  const frames=Math.min(12000,Math.floor((pcm.length-44)/2));assert.ok(frames>=4000);
   function power(f){let re=0,im=0;for(let i=0;i<frames;i++){const sample=pcm.readInt16LE(pcm.length-frames*2+i*2)/32768;re+=sample*Math.cos(2*Math.PI*f*i/track.sampleRate);im+=sample*Math.sin(2*Math.PI*f*i/track.sampleRate);}return(re*re+im*im)/(frames*frames);}
   const a=power(440),b=power(880);
   assert.ok(Math.max(a,b)>1e-7&&Math.max(a,b)>Math.min(a,b)*10,'every remote track must contain one isolated test tone');
