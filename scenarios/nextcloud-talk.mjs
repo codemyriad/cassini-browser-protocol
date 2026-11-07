@@ -9,18 +9,19 @@ export async function joinNextcloudTalk(page, {url, name, muted=false}) {
   // Talk renders its call button before the asynchronous guest welcome dialog.
   await submit.waitFor({state:'visible',timeout:5000}).catch(error=>{if(error.name!=='TimeoutError')throw error;});
   let joined=false;
-  for(let phase=0;phase<12;phase++){
+  const deadline=Date.now()+45000;
+  while(Date.now()<deadline){
     // Let Vue finish replacing wizard dialogs before choosing a control.
     await page.waitForTimeout(300);
     const dialog=page.getByRole('dialog').filter({visible:true}).last();
     if(await dialog.count()){
       for(const label of ['Enter your name','Display name (required)']){
         const input=dialog.getByRole('textbox',{name:label,exact:true});
-        if(await input.isVisible())await input.fill(name);
+        if(await input.isVisible()&&await input.inputValue()!==name)await input.fill(name);
       }
       // Current Talk guest wizard exposes its name through the Guest placeholder.
       const guestName=dialog.getByPlaceholder('Guest',{exact:true});
-      if(await guestName.isVisible())await guestName.fill(name);
+      if(await guestName.isVisible()&&await guestName.inputValue()!==name)await guestName.fill(name);
       const audioToggle=dialog.getByRole('button',{name:muted?'Mute audio':'Unmute audio',exact:true});if(await audioToggle.isVisible())await audioToggle.click();
       const video=dialog.getByRole('button',{name:'Disable video',exact:true});if(await video.isVisible())await video.click();
       const join=dialog.locator('button.join-call');
@@ -36,7 +37,8 @@ export async function joinNextcloudTalk(page, {url, name, muted=false}) {
         },before,{timeout:15000});
         continue;
       }
-      throw Error('Unrecognized Nextcloud guest dialog: '+(await dialog.innerText()).slice(0,300));
+      // Talk can temporarily replace its footer while device settings settle.
+      continue;
     }
     if(await leave.isVisible()){joined=true;break;}
     await call.click();

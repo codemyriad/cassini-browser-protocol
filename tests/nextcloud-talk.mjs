@@ -102,6 +102,10 @@ try{
 }finally{
  report.browserEvents=await worker?.evaluate(()=>nextcloudBrowserEvents).catch(error=>({error:error.message}));
  report.events=events;report.pageErrors=pageErrors;
+ if(meeting&&!meeting.isClosed()){
+  report.dialogs=await meeting.getByRole('dialog').evaluateAll(nodes=>nodes.map(d=>({text:d.innerText,buttons:[...d.querySelectorAll('button')].map(b=>({text:b.innerText,label:b.getAttribute('aria-label'),classes:b.className,disabled:b.disabled})),inputs:[...d.querySelectorAll('input')].map(i=>({label:i.getAttribute('aria-label'),placeholder:i.placeholder,value:i.value}))}))).catch(()=>[]);
+  if(!success)await meeting.screenshot({path:path.join(root,'artifacts/nextcloud-failure.png')}).catch(()=>{});
+ }
  if(meeting&&!meeting.isClosed())report.media=await talkMediaState(meeting).catch(error=>({error:error.message}));
  await writeFile(path.join(root,'artifacts/nextcloud-talk.json'),JSON.stringify(report,null,2));
  await Promise.allSettled(participants.map(browser=>browser.close()));await observer?.close();control?.destroy();await new Promise(resolve=>server.close(resolve));
