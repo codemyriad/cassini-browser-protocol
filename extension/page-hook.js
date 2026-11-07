@@ -58,11 +58,13 @@
     };
   }
   const original = window.RTCPeerConnection;
-  const remember = pc => {
+  const remember = (pc, created = false) => {
     refreshCall();
     if (peers.has(pc)) return;
     peers.add(pc);
-    peerGenerations.set(pc, callGeneration);
+    // Read-only observation cannot prove an unknown peer belongs to a later
+    // in-page call. A new constructor or fresh applied remote description can.
+    peerGenerations.set(pc, created || callGeneration === 0 ? callGeneration : null);
     pc.addEventListener("connectionstatechange", () => {
       if (pc.connectionState === "closed") { rememberReceivers(pc); peers.delete(pc); }
       discover();
@@ -70,7 +72,7 @@
     pc.addEventListener("iceconnectionstatechange", () => discover());
   };
   window.RTCPeerConnection = new Proxy(original, {
-    construct(target, args, newTarget) { const pc = Reflect.construct(target, args, newTarget); remember(pc); return pc; }
+    construct(target, args, newTarget) { const pc = Reflect.construct(target, args, newTarget); remember(pc, true); return pc; }
   });
   if (window.webkitRTCPeerConnection === original) window.webkitRTCPeerConnection = window.RTCPeerConnection;
   const close = original.prototype.close;
@@ -82,7 +84,7 @@
     return value;
   };
   // Recovery for connections created by a cached constructor or before the extension loaded.
-  for (const name of ["getStats", "createOffer", "createAnswer", "setLocalDescription", "setRemoteDescription", "addTrack", "addTransceiver"]) {
+  for (const name of ["getStats", "getReceivers", "getSenders", "getTransceivers", "createOffer", "createAnswer", "setLocalDescription", "setRemoteDescription", "addTrack", "addTransceiver"]) {
     const method = original.prototype[name];
     original.prototype[name] = function (...args) {
       remember(this);
