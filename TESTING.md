@@ -366,3 +366,38 @@ before fresh source inventory returns. They reject old/forged/missing metadata,
 stale epochs, closed/disconnected frames and hung checks; recovery of an existing
 capture must not create a duplicate native Start. The independent real Talk HPB
 harness owns the final inventory-before-Start and separate-input WAV proof.
+
+## Real Nextcloud Talk gate
+
+`tests/nextcloud-talk.mjs` drives three independent browser guests through real
+Nextcloud Talk and its Janus/signaling backend. The join flow follows the
+bookmarklet-waveforms Talk harness, including the guest/device wizard. The
+observer loads the shipped extension into a fresh profile with a disposable
+extension identity and private native framing/writer fixtures. Peer browsers
+use distinct generated 440/880 Hz audio files; no real device is opened and audio
+output is disabled. Automated runs reject non-loopback room URLs.
+
+The test first independently observes Talk's remote media, then requires the
+extension's native-control inventory to report both received sources with RTP
+evidence. Only that real report triggers Start. It checks two separate remote
+WAV tracks, absence of a captured microphone, separate tone content, and normal
+Stop/finalization. It does not synthesize peers, page discovery, meeting inventory,
+or PCM messages. A graph or a connected control host alone cannot pass.
+
+CI's required `nextcloud-talk` job checks out a fixed Gocassini harness commit
+and its digest/app-checksum-locked NC34 baseline, creates a public room in a
+disposable full stack, runs the test, and preserves service logs, browser-owned
+navigation/relay events, page discovery, native messages and synthetic recording
+evidence on failure. It never joins the public manual-debug room or an installed
+app/broker. The job is bounded and tears down only its own project.
+
+For an existing disposable local stack (the full Talk media topology):
+
+```sh
+NEXTCLOUD_TEST_CALL_URL=http://127.0.0.1:28080/call/TEST_ROOM \
+  timeout 240 node tests/nextcloud-talk.mjs
+```
+
+This real-product gate complements the synthetic topology vectors; those vectors
+alone do not establish that current Nextcloud navigation, adapters and media
+elements work with the extension.
