@@ -1029,3 +1029,20 @@ proposed provenance contract. Ambiguous/missing mappings keep browser-origin lab
 DOM names do not change call/RTP/admission gates or any control/status/health fields.
 Product hosts must adopt provenance persistence with the bundled extension; the
 private browser-test writer does not establish Swift/Python product adoption.
+
+
+### Frame-port disconnect diagnostics (extension 0.2.24)
+
+The background frame-port onDisconnect callback reads runtime.lastError before
+its existing cleanup/loss handling. Chrome closes extension ports when pages enter
+back/forward cache; reading the callback error avoids an unchecked API warning.
+This does not classify errors by message text or waive failures: frame removal,
+retained-session navigation, ordinary capture loss and fresh relay readiness
+continue through their existing paths. No control or native wire fields change.
+
+
+On a persisted pageshow, the relay replaces any stale cached port through the
+same disconnect/drain routine before opening a fresh connection. The content
+realm can thaw before its queued disconnect callback; that late callback cannot
+stop or retire the replacement port. Pending capture requests still fail/drain,
+and a new Start still waits for the old hook's stopped/flush acknowledgement.
