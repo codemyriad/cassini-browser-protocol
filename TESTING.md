@@ -462,3 +462,31 @@ Chrome's primary guidance: https://developer.chrome.com/blog/bfcache-extension-m
 and https://developer.chrome.com/docs/extensions/reference/api/runtime#property-lastError.
 Graph capture/admission and WhatsApp remain separate follow-ups; this change adds
 no new call evidence, source kind or automatic recording policy.
+
+## D74 call-signal contract (SPEC/schema only)
+
+`tests/test_call_signals_contract.py` validates literal message shapes and routing/
+lifecycle expectations in conformance/control/call-signals-vectors.json. State
+unknown/inactive/active is independent of remoteAudio separated/mixed/unknown.
+Mixed active calls route ONLY to app-owned system audio under auto-record opt-in;
+separated streams retain existing RTP evidence, while passive media never causes
+an automatic meeting/Start. Positive end stops the associated automatic system
+recording even with audio continuing. Generation/peer/sequence/reconnect and
+opt-out literals guard against stale or unrelated lifecycle actions.
+
+This replaces PR76's superseded graph transport and format proposal. No graph tap,
+AudioNode hooks, page-audio-mix capture/native endpoint/probe, graph format fields
+or capture code. D74.1 app-owned recordingDetails routing provenance is separate. Native/session schemas and RTP vectors remain unchanged; PR75 is
+untouched and remains real-browser negative-only. Fixtures are contract checks,
+not actual WhatsApp markers, graph recording or app system-capture implementation.
+WhatsApp stays unknown until coordinator authorizes disposable-account evidence.
+
+
+D74.1 literals extend the contract checks: browserInstance is a stable profile key,
+not hello.extensionInstance or a connection incarnation; same-call replacement
+reconciles an existing owner and superseded connection/generation ends are ignored.
+The120s loss grace, fixed-at-start route, shared system owner/reference counts,
+manual Stop suppression and durable open othersRoute metadata are APP policy,
+not extension timers or capture code. These are literal/schema checks; consumer
+adoption still needs actual held-start, reconnect, monotonic deadline, overlapping
+calls, route suppression and cache/export/import E1 tests through app code.
