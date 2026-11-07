@@ -484,9 +484,10 @@ or shift timestamps. After asynchronous lookup it checks the selected generation
 `resumeCapture.lostAtMs` (R94): the host MUST send it, a finite nonnegative
 number, the `atMs` of the committed othersSource seam it asks to resume: the newest
 system/lost (D52.4), or the system/missing stand-in (D49, D58 #2) when that is what
-it resumes (`0` in the example above). After the durable checkpoint completes,
+it resumes (`0` in the example above). At send time, after the durable checkpoint completes,
 the host MUST copy the value exactly from its committed session state while
-holding the capture lock (or equivalent serialization with Stop and transitions).
+holding the capture lock (or equivalent serialization of dispatch with Stop and
+capture transitions).
 It MUST NOT round it, recompute it from a request/transport timestamp, or guess
 an event that is not yet committed. A host without that commit does not ask.
 

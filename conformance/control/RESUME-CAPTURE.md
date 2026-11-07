@@ -52,8 +52,8 @@ real retained microphone/system capture (private generated audio):
   that connection. The ask names the commit it follows: `resumeCapture.lostAtMs`, the
   `atMs` of that system/lost (or of the system/missing stand-in) as the app wrote it
   (R94, SPEC-CONTROL.md); the live-folder oracle's O3.resumeAt checks it exactly.
-  Copy it only after the durable checkpoint, while serialized with capture transitions
-  and Stop; equality identifies the loss but does not prove durable-write order.
+  At dispatch, copy it only after the durable checkpoint, while serialized with
+  capture transitions and Stop; equality identifies the loss but does not prove durable-write order.
   Each product host must test at its real writer boundary that a held or failed
   checkpoint sends no ask and that release sends exactly the committed float.
   `D52.5-ask-waits-for-the-committed-fallback` and
