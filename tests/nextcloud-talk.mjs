@@ -90,11 +90,15 @@ try{
  const stopped=await until(()=>events.find(e=>e.type==='result'&&e.requestId===stopId),'native Stop result');assert.equal(stopped.ok,true,JSON.stringify(stopped));
  const final=JSON.parse(await readFile(path.join(directory,'session.json'),'utf8'));
  assert.equal(final.state,'completed');assert.ok(!final.tracks.some(t=>t.kind==='local'||t.kind==='microphone'));
+ const remoteTracks=final.tracks.filter(t=>t.kind==='remote');
+ assert.equal(remoteTracks.length,2,'each of the two incoming peers must have its own track');
  const peaks=[];
- for(const track of final.tracks.filter(t=>t.kind==='remote')){
+ for(const track of remoteTracks){
   const pcm=await readFile(path.join(directory,track.file));const frames=Math.min(12000,Math.floor((pcm.length-44)/2));assert.ok(frames>=4000);
   function power(f){let re=0,im=0;for(let i=0;i<frames;i++){const sample=pcm.readInt16LE(pcm.length-frames*2+i*2)/32768;re+=sample*Math.cos(2*Math.PI*f*i/track.sampleRate);im+=sample*Math.sin(2*Math.PI*f*i/track.sampleRate);}return(re*re+im*im)/(frames*frames);}
-  const a=power(440),b=power(880);if(Math.max(a,b)>1e-7&&Math.max(a,b)>Math.min(a,b)*10)peaks.push(a>b?440:880);
+  const a=power(440),b=power(880);
+  assert.ok(Math.max(a,b)>1e-7&&Math.max(a,b)>Math.min(a,b)*10,'every remote track must contain one isolated test tone');
+  peaks.push(a>b?440:880);
  }
  assert.deepEqual([...new Set(peaks)].sort((a,b)=>a-b),[440,880],'remote tracks must carry separate known peer tones without cross-mixing');
  assert.deepEqual(pageErrors,[]);report.cases.push('separate remote PCM captured, no microphone, no tone cross-mixing');report.manifest=final;
