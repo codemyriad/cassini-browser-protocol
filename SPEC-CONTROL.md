@@ -1056,8 +1056,9 @@ records Others from system audio and its own independently selected microphone.
 Sites exposing separate remote streams keep the existing browser RTP capture and
 packet/heard policy. No AudioNode hooks, graph observation/tap, mixed browser
 capture, new native endpoint/probe or persisted-format amendment is introduced.
-D73.12's general open-file-value rule is not reversed; these are control fields,
-not new file fields. Existing native and session schemas remain unchanged.
+D73.12's general open-file-value rule is not reversed. Signal fields are control
+metadata; D74.1's app-owned recordingDetails provenance is separate below.
+Existing native and session schemas remain unchanged.
 
 ### Capability and per-connection snapshots
 
@@ -1073,13 +1074,24 @@ never receives a new signal-only row through legacy meetings as a shortcut.
 Configured consumers receive full replacement snapshots, initially possibly empty:
 
 ```json
-{"type":"callSignals","sequence":0,"tabs":[{"tabId":2,"url":"https://web.whatsapp.com/","documentGeneration":"document-A","remoteAudio":"mixed","callEvidence":{"state":"unknown","reason":"unverified","adapter":{"name":"whatsapp-signal","version":"fixture-1"},"callGeneration":null}}]}
+{"type":"callSignals","browserInstance":"profile-A","sequence":0,"tabs":[{"tabId":2,"url":"https://web.whatsapp.com/","documentGeneration":"document-A","remoteAudio":"mixed","callEvidence":{"state":"unknown","reason":"unverified","adapter":{"name":"whatsapp-signal","version":"fixture-1"},"callGeneration":null}}]}
 ```
 
 This example is an UNVERIFIED fixture, not a shipped adapter or WhatsApp support.
 Sequence is a nonnegative safe integer, strictly increasing per configured control
-connection; broker namespaces it with the browser/extension peer. Ignore stale
-snapshots, reject duplicate tab rows, and reset sequence on a fresh connection.
+connection; broker uses that connection only to validate snapshot freshness.
+Ignore stale snapshots/frames from superseded connections, reject duplicate tab
+rows, and reset sequence on a fresh configured connection. Sequence or transport
+incarnation MUST NOT become part of a recording's stable association identity.
+
+`browserInstance` is the stable opaque identity of the browser instance/profile
+that owns the tab, at most200 UTF-8 bytes. It must survive control reconnect,
+extension worker replacement and updates for the same profile. Use an established
+trusted broker profile identity or a profile-local persistent opaque ID, never a
+socket/peer handle, connection counter, worker hello.extensionInstance, filesystem
+path or page-provided value. Missing/unverifiable identity prevents signal-driven
+admission; do not substitute a connection ID. The authenticated current connection
+and its sequence establish freshness separately from this stable ownership key.
 At most100 tab rows. Titles/URLs/tab IDs are browser-owned; URLs at most2048
 characters. Document/call generations are opaque at most200 UTF-8 bytes (schema
 characters are an outer bound). Rows are scoped to current browser-verified
@@ -1145,30 +1157,69 @@ readiness, timeline, loss/gap handling and save confirmation. System audio is a
 computer-output mix, not a remote participant stream; no per-person isolation or
 mic subtraction promise. App Me stays separately selected under existing policy,
 never opened by a browser probe or silently disabled/merged. This draft adds no
-new user page-media action, popup controls, persisted fields or native protocol.
+new user page-media action, popup controls, graph fields or native protocol.
+D74.1 app-owned recordingDetails routing provenance is specified below.
 Recording details will explain system routing in one quiet line; exact shared
 copy is a separate design task, not implementation text in product UI here.
 
 ### Call end, reconnect and app ownership
 
-Bind an automatic system recording to (browser peer, tabId, documentGeneration,
-callGeneration) BEFORE Start dispatch, not to an audio level or source label.
-Positive callEnded for that identity prompts the owning app's normal Stop/finalize
-of that automatic call recording; do not wait for audio silence or let continuing
-media keep the call active. A new generation fences the old association before
-admitting a new call. Do not stop another call, independently owned source or
-unrelated manual recording. Preserve existing app Stop suppression/deduplication.
+**D74.1: stable association, transient transport.** Bind pending and running
+automatic system recording associations to the EXACT tuple
+(browserInstance/profile, tabId, documentGeneration, callGeneration) BEFORE Start
+dispatch and revalidate before opening inputs. The control-connection incarnation
+is NOT part of this identity. A configured replacement connection with fresh
+same-document/same-call evidence reconciles the existing owner; it never creates
+a duplicate Start. Late end/active frames from a superseded connection are ignored
+before association handling. An end for a superseded document/call generation
+cannot end its replacement. Never match by tab alone, title, audio or hostname.
 
-Unknown, removed rows, navigation and connection loss immediately withdraw signal
-eligibility and invalidate cached active state. They are NOT fabricated positive
-callEnded evidence; a recording already owned by an app follows its existing
-bounded call-evidence-loss/page-gone/Stop policy, not indefinite playback-based
-retention. Fresh connection/configure/current-document evidence is required before
-new admission. No graph span or browser resume exists on this path. Existing
-separate-stream RTP recovery/fallback rules remain unchanged for those owners.
-Snapshot coalescing cannot retain a stale active call after an end/generation fence;
-consumer handling must stop the old association even if the next visible snapshot
-already represents another call. No automatic Start from cached reconnect state.
+The extension publishes facts, not app timers or capture commands. **App policy**
+withdraws eligibility immediately on unknown, row removal, control loss or
+navigation, and starts a120-second monotonic evidence-loss grace for each affected
+association. Repeated unknown/removal/loss and system/microphone audio never reset
+or extend that deadline. Fresh affirmative active evidence for that SAME stable
+association before expiry clears the loss grace and reconciles its owner without
+duplicate recording. At expiry the association ends; never resurrect it from
+cached active state. Positive current callEnded ends the matching association
+AT ONCE, even with media continuing and regardless of the grace. Unknown/loss is
+not fabricated positive callEnded. A new call generation fences the old one and
+is evaluated as a different call, not an implicit resume/handoff.
+
+**App policy fixes the recording route at Start.** A remoteAudio change within
+that call generation (including unknown) cannot switch an existing system owner
+to browser capture, create a second automatic recording, or trigger RTP resume/
+takeover. Check the existing stable owner BEFORE either signal or RTP admission,
+so a newly visible RTP row cannot create a second recording of that same call.
+Fresh active same-call evidence can maintain/reconcile the running
+association independently of a changed classification; admission of a NEW call
+still needs active+mixed and the existing auto-record opt-in. Separate-stream RTP
+policy/recovery remains unchanged for RTP owners. The extension never implements
+a120-second timer, decides microphone policy or commands a system capture here.
+
+**Overlapping mixed calls share ONE signal-owned system recording.** The app
+reference-counts stable call associations (including their bounded loss grace).
+Ending/expiring one association cannot stop another; finalize when the LAST
+association ends/expires, or when the user chooses Stop. No second simultaneous
+signal-owned system recording or participant-isolation claim. User Stop suppresses
+automatic restart for those associated call generations across reconnect, not a
+future genuinely new generation. Unrelated manual recordings/sources keep their
+own policies. Existing permission/Stop/shutdown races must cancel pending Starts
+before an ended call can open inputs. This intentional system route is neither a
+browser-rejected fallback nor a browser loss; browser-loss alerts do not apply.
+
+**App-owned Details provenance (D74.1):** write the ACTUAL Start routing decision
+into the recording, not a cache or live-tab inference:
+`recordingDetails.othersRoute = {"source":"system","reason":"mixedSiteSignal","site":"<adapter id>"}`.
+These are additive OPEN, bounded non-empty strings (1–200 Unicode code points);
+preserve unknown values unchanged per D73.12 across cache removal/export/import.
+Producers use the defined source/reason and actual adapter id; unknown values
+must not fabricate a mixed-site/participant/RTP claim. Show stored provenance using
+shared key details.othersRoute.mixedSite as one quiet Details line. Native/session
+schemas stay unchanged; this uses the app-owned recordingDetails extension and
+is not the superseded page-audio-mix amendment. Adoption includes durable routing
+provenance, reference counting, loss grace, fixed route, race handling and shared
+copy; a protocol pin alone does not implement these rules.
 
 ### Conformance and delivery limits
 

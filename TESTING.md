@@ -475,8 +475,18 @@ recording even with audio continuing. Generation/peer/sequence/reconnect and
 opt-out literals guard against stale or unrelated lifecycle actions.
 
 This replaces PR76's superseded graph transport and format proposal. No graph tap,
-AudioNode hooks, page-audio-mix capture/native endpoint/probe, format fields or
-capture code. Native/session schemas and RTP vectors remain unchanged; PR75 is
+AudioNode hooks, page-audio-mix capture/native endpoint/probe, graph format fields
+or capture code. D74.1 app-owned recordingDetails routing provenance is separate. Native/session schemas and RTP vectors remain unchanged; PR75 is
 untouched and remains real-browser negative-only. Fixtures are contract checks,
 not actual WhatsApp markers, graph recording or app system-capture implementation.
 WhatsApp stays unknown until coordinator authorizes disposable-account evidence.
+
+
+D74.1 literals extend the contract checks: browserInstance is a stable profile key,
+not hello.extensionInstance or a connection incarnation; same-call replacement
+reconciles an existing owner and superseded connection/generation ends are ignored.
+The120s loss grace, fixed-at-start route, shared system owner/reference counts,
+manual Stop suppression and durable open othersRoute metadata are APP policy,
+not extension timers or capture code. These are literal/schema checks; consumer
+adoption still needs actual held-start, reconnect, monotonic deadline, overlapping
+calls, route suppression and cache/export/import E1 tests through app code.

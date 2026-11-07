@@ -43,7 +43,8 @@
               "callGeneration": null
             }
           }
-        ]
+        ],
+        "browserInstance": "profile-A"
       }
     },
     {
@@ -68,7 +69,8 @@
               "callGeneration": "call-A"
             }
           }
-        ]
+        ],
+        "browserInstance": "profile-A"
       }
     },
     {
@@ -93,7 +95,8 @@
               "callGeneration": "call-A"
             }
           }
-        ]
+        ],
+        "browserInstance": "profile-A"
       }
     },
     {
@@ -118,7 +121,8 @@
               "callGeneration": "call-A"
             }
           }
-        ]
+        ],
+        "browserInstance": "profile-A"
       }
     },
     {
@@ -143,7 +147,8 @@
               "callGeneration": null
             }
           }
-        ]
+        ],
+        "browserInstance": "profile-A"
       }
     }
   ],
@@ -167,7 +172,8 @@
               "callGeneration": "call-A"
             }
           }
-        ]
+        ],
+        "browserInstance": "profile-A"
       }
     },
     {
@@ -192,7 +198,8 @@
               "callGeneration": null
             }
           }
-        ]
+        ],
+        "browserInstance": "profile-A"
       }
     },
     {
@@ -217,7 +224,8 @@
               "callGeneration": "call-A"
             }
           }
-        ]
+        ],
+        "browserInstance": "profile-A"
       }
     },
     {
@@ -242,7 +250,8 @@
               "callGeneration": "call-A"
             }
           }
-        ]
+        ],
+        "browserInstance": "profile-A"
       }
     },
     {
@@ -267,7 +276,8 @@
               "callGeneration": null
             }
           }
-        ]
+        ],
+        "browserInstance": "profile-A"
       }
     },
     {
@@ -292,7 +302,8 @@
               "callGeneration": "call-A"
             }
           }
-        ]
+        ],
+        "browserInstance": "profile-A"
       }
     },
     {
@@ -317,7 +328,8 @@
               "callGeneration": null
             }
           }
-        ]
+        ],
+        "browserInstance": "profile-A"
       }
     },
     {
@@ -342,7 +354,8 @@
               "callGeneration": null
             }
           }
-        ]
+        ],
+        "browserInstance": "profile-A"
       }
     },
     {
@@ -367,7 +380,8 @@
               "callGeneration": null
             }
           }
-        ]
+        ],
+        "browserInstance": "profile-A"
       }
     },
     {
@@ -392,7 +406,8 @@
               "callGeneration": null
             }
           }
-        ]
+        ],
+        "browserInstance": "profile-A"
       }
     },
     {
@@ -417,7 +432,8 @@
               "callGeneration": null
             }
           }
-        ]
+        ],
+        "browserInstance": "profile-A"
       }
     },
     {
@@ -442,7 +458,8 @@
               "callGeneration": null
             }
           }
-        ]
+        ],
+        "browserInstance": "profile-A"
       }
     },
     {
@@ -461,6 +478,135 @@
         "capabilities": [
           "page-audio-mix-v1"
         ]
+      }
+    },
+    {
+      "name": "missing-stable-profile-identity",
+      "schema": "control-extension",
+      "message": {
+        "type": "callSignals",
+        "sequence": 1,
+        "tabs": [
+          {
+            "tabId": 2,
+            "url": "https://web.whatsapp.com/",
+            "documentGeneration": "document-A",
+            "remoteAudio": "mixed",
+            "callEvidence": {
+              "state": "active",
+              "reason": "activeCall",
+              "adapter": {
+                "name": "synthetic-site-fixture",
+                "version": "1"
+              },
+              "callGeneration": "call-A"
+            }
+          }
+        ]
+      }
+    },
+    {
+      "name": "invalid-stable-profile-15",
+      "schema": "control-extension",
+      "message": {
+        "type": "callSignals",
+        "sequence": 1,
+        "tabs": [
+          {
+            "tabId": 2,
+            "url": "https://web.whatsapp.com/",
+            "documentGeneration": "document-A",
+            "remoteAudio": "mixed",
+            "callEvidence": {
+              "state": "active",
+              "reason": "activeCall",
+              "adapter": {
+                "name": "synthetic-site-fixture",
+                "version": "1"
+              },
+              "callGeneration": "call-A"
+            }
+          }
+        ],
+        "browserInstance": ""
+      }
+    },
+    {
+      "name": "invalid-stable-profile-16",
+      "schema": "control-extension",
+      "message": {
+        "type": "callSignals",
+        "sequence": 1,
+        "tabs": [
+          {
+            "tabId": 2,
+            "url": "https://web.whatsapp.com/",
+            "documentGeneration": "document-A",
+            "remoteAudio": "mixed",
+            "callEvidence": {
+              "state": "active",
+              "reason": "activeCall",
+              "adapter": {
+                "name": "synthetic-site-fixture",
+                "version": "1"
+              },
+              "callGeneration": "call-A"
+            }
+          }
+        ],
+        "browserInstance": false
+      }
+    },
+    {
+      "name": "invalid-stable-profile-17",
+      "schema": "control-extension",
+      "message": {
+        "type": "callSignals",
+        "sequence": 1,
+        "tabs": [
+          {
+            "tabId": 2,
+            "url": "https://web.whatsapp.com/",
+            "documentGeneration": "document-A",
+            "remoteAudio": "mixed",
+            "callEvidence": {
+              "state": "active",
+              "reason": "activeCall",
+              "adapter": {
+                "name": "synthetic-site-fixture",
+                "version": "1"
+              },
+              "callGeneration": "call-A"
+            }
+          }
+        ],
+        "browserInstance": 42
+      }
+    },
+    {
+      "name": "invalid-stable-profile-18",
+      "schema": "control-extension",
+      "message": {
+        "type": "callSignals",
+        "sequence": 1,
+        "tabs": [
+          {
+            "tabId": 2,
+            "url": "https://web.whatsapp.com/",
+            "documentGeneration": "document-A",
+            "remoteAudio": "mixed",
+            "callEvidence": {
+              "state": "active",
+              "reason": "activeCall",
+              "adapter": {
+                "name": "synthetic-site-fixture",
+                "version": "1"
+              },
+              "callGeneration": "call-A"
+            }
+          }
+        ],
+        "browserInstance": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
       }
     }
   ],
@@ -487,7 +633,8 @@
               "callGeneration": null
             }
           }
-        ]
+        ],
+        "browserInstance": "profile-A"
       },
       "autoRecordOptIn": true,
       "expect": {
@@ -520,7 +667,8 @@
               "callGeneration": null
             }
           }
-        ]
+        ],
+        "browserInstance": "profile-A"
       },
       "autoRecordOptIn": true,
       "expect": {
@@ -553,7 +701,8 @@
               "callGeneration": null
             }
           }
-        ]
+        ],
+        "browserInstance": "profile-A"
       },
       "autoRecordOptIn": true,
       "expect": {
@@ -586,7 +735,8 @@
               "callGeneration": null
             }
           }
-        ]
+        ],
+        "browserInstance": "profile-A"
       },
       "autoRecordOptIn": true,
       "expect": {
@@ -619,7 +769,8 @@
               "callGeneration": null
             }
           }
-        ]
+        ],
+        "browserInstance": "profile-A"
       },
       "autoRecordOptIn": true,
       "expect": {
@@ -653,7 +804,8 @@
               "callGeneration": "call-A"
             }
           }
-        ]
+        ],
+        "browserInstance": "profile-A"
       },
       "autoRecordOptIn": true,
       "rtp": {
@@ -688,7 +840,8 @@
               "callGeneration": "call-A"
             }
           }
-        ]
+        ],
+        "browserInstance": "profile-A"
       },
       "autoRecordOptIn": false,
       "rtp": {
@@ -721,7 +874,8 @@
               "callGeneration": "call-A"
             }
           }
-        ]
+        ],
+        "browserInstance": "profile-A"
       },
       "autoRecordOptIn": true,
       "rtp": {
@@ -755,7 +909,8 @@
               "callGeneration": "call-A"
             }
           }
-        ]
+        ],
+        "browserInstance": "profile-A"
       },
       "autoRecordOptIn": true,
       "rtp": {
@@ -789,7 +944,8 @@
               "callGeneration": "call-A"
             }
           }
-        ]
+        ],
+        "browserInstance": "profile-A"
       },
       "autoRecordOptIn": true,
       "rtp": {
@@ -822,7 +978,8 @@
               "callGeneration": "call-A"
             }
           }
-        ]
+        ],
+        "browserInstance": "profile-A"
       },
       "autoRecordOptIn": true,
       "rtp": {
@@ -860,7 +1017,8 @@
                 "callGeneration": "call-A"
               }
             }
-          ]
+          ],
+          "browserInstance": "profile-A"
         },
         "fixtureAudioPlaying": true,
         "expect": {
@@ -889,13 +1047,19 @@
                 "callGeneration": "call-A"
               }
             }
-          ]
+          ],
+          "browserInstance": "profile-A"
         },
         "fixtureAudioPlaying": true,
         "expect": {
           "appSystemStart": false,
           "appStop": true,
-          "stopAssociation": "document-A/call-A",
+          "stopAssociation": {
+            "browserInstance": "profile-A",
+            "tabId": 2,
+            "documentGeneration": "document-A",
+            "callGeneration": "call-A"
+          },
           "afterStop": "completed"
         }
       },
@@ -919,7 +1083,8 @@
                 "callGeneration": null
               }
             }
-          ]
+          ],
+          "browserInstance": "profile-A"
         },
         "fixtureAudioPlaying": true,
         "expect": {
@@ -973,5 +1138,368 @@
         "recordingPolicy": "existing-bounded-loss-policy"
       }
     }
-  ]
+  ],
+  "appPolicy": {
+    "identityFields": [
+      "browserInstance",
+      "tabId",
+      "documentGeneration",
+      "callGeneration"
+    ],
+    "evidenceLossGraceMs": 120000,
+    "ownerReconciliation": {
+      "name": "replacement-control-connection-same-call",
+      "originalConnection": "connection-1",
+      "replacementConnection": "connection-2",
+      "originalAssociation": {
+        "browserInstance": "profile-A",
+        "tabId": 2,
+        "documentGeneration": "document-A",
+        "callGeneration": "call-A"
+      },
+      "replacementAssociation": {
+        "browserInstance": "profile-A",
+        "tabId": 2,
+        "documentGeneration": "document-A",
+        "callGeneration": "call-A"
+      },
+      "sequenceBefore": 40,
+      "sequenceAfter": 0,
+      "expect": {
+        "reconcileExisting": true,
+        "newSystemStart": false,
+        "fixedRoute": "system",
+        "clearEvidenceLossGrace": true
+      }
+    },
+    "lateEnds": [
+      {
+        "name": "superseded-connection",
+        "endConnection": "connection-1",
+        "authoritativeConnection": "connection-2",
+        "endAssociation": {
+          "browserInstance": "profile-A",
+          "tabId": 2,
+          "documentGeneration": "document-A",
+          "callGeneration": "call-A"
+        },
+        "currentAssociation": {
+          "browserInstance": "profile-A",
+          "tabId": 2,
+          "documentGeneration": "document-A",
+          "callGeneration": "call-A"
+        },
+        "expect": {
+          "ignore": true,
+          "systemStop": false
+        }
+      },
+      {
+        "name": "superseded-generation",
+        "endConnection": "connection-2",
+        "authoritativeConnection": "connection-2",
+        "endAssociation": {
+          "browserInstance": "profile-A",
+          "tabId": 2,
+          "documentGeneration": "document-A",
+          "callGeneration": "call-A"
+        },
+        "currentAssociation": {
+          "browserInstance": "profile-A",
+          "tabId": 2,
+          "documentGeneration": "document-A",
+          "callGeneration": "call-B"
+        },
+        "expect": {
+          "ignore": true,
+          "systemStop": false
+        }
+      }
+    ],
+    "lossDeadline": {
+      "name": "audio-never-extends-120s-loss-grace",
+      "association": {
+        "browserInstance": "profile-A",
+        "tabId": 2,
+        "documentGeneration": "document-A",
+        "callGeneration": "call-A"
+      },
+      "steps": [
+        {
+          "atMs": 1000,
+          "event": "evidenceUnknown",
+          "systemAudio": true,
+          "microphoneAudio": true,
+          "expect": {
+            "newEligibility": false,
+            "stop": false,
+            "deadlineMs": 121000
+          }
+        },
+        {
+          "atMs": 60000,
+          "event": "rowRemoved",
+          "systemAudio": true,
+          "microphoneAudio": true,
+          "expect": {
+            "stop": false,
+            "deadlineMs": 121000
+          }
+        },
+        {
+          "atMs": 120999,
+          "event": "controlLost",
+          "systemAudio": true,
+          "microphoneAudio": true,
+          "expect": {
+            "stop": false,
+            "deadlineMs": 121000
+          }
+        },
+        {
+          "atMs": 121000,
+          "event": "deadline",
+          "systemAudio": true,
+          "microphoneAudio": true,
+          "expect": {
+            "stop": true,
+            "deadlineMs": 121000
+          }
+        }
+      ]
+    },
+    "sameCallReturn": {
+      "name": "fresh-same-call-before-deadline",
+      "association": {
+        "browserInstance": "profile-A",
+        "tabId": 2,
+        "documentGeneration": "document-A",
+        "callGeneration": "call-A"
+      },
+      "steps": [
+        {
+          "atMs": 1000,
+          "event": "controlLost",
+          "expect": {
+            "deadlineMs": 121000
+          }
+        },
+        {
+          "atMs": 120999,
+          "event": "freshActiveSameCall",
+          "connection": "connection-2",
+          "association": {
+            "browserInstance": "profile-A",
+            "tabId": 2,
+            "documentGeneration": "document-A",
+            "callGeneration": "call-A"
+          },
+          "expect": {
+            "reconcileExisting": true,
+            "newSystemStart": false,
+            "clearDeadline": true
+          }
+        }
+      ]
+    },
+    "immediateEnd": {
+      "name": "positive-end-bypasses-loss-grace",
+      "association": {
+        "browserInstance": "profile-A",
+        "tabId": 2,
+        "documentGeneration": "document-A",
+        "callGeneration": "call-A"
+      },
+      "priorDeadlineMs": 121000,
+      "atMs": 2000,
+      "fixtureMediaContinues": true,
+      "expect": {
+        "stopNow": true,
+        "waitForSilence": false
+      }
+    },
+    "fixedRoute": {
+      "name": "same-call-classification-change-does-not-handoff",
+      "association": {
+        "browserInstance": "profile-A",
+        "tabId": 2,
+        "documentGeneration": "document-A",
+        "callGeneration": "call-A"
+      },
+      "routeChosenAtStart": "system",
+      "steps": [
+        {
+          "remoteAudio": "mixed",
+          "callState": "active"
+        },
+        {
+          "remoteAudio": "separated",
+          "callState": "active",
+          "rtpReady": true
+        },
+        {
+          "remoteAudio": "unknown",
+          "callState": "active"
+        }
+      ],
+      "expect": {
+        "routeRemains": "system",
+        "browserStart": false,
+        "browserResume": false,
+        "newSystemStart": false,
+        "newRecording": false
+      }
+    },
+    "sharedOwner": {
+      "name": "overlapping-mixed-calls-share-one-system-recording",
+      "steps": [
+        {
+          "event": "active",
+          "association": {
+            "browserInstance": "profile-A",
+            "tabId": 2,
+            "documentGeneration": "document-A",
+            "callGeneration": "call-A"
+          },
+          "expect": {
+            "systemStarts": 1,
+            "associatedCalls": 1,
+            "stop": false
+          }
+        },
+        {
+          "event": "active",
+          "association": {
+            "browserInstance": "profile-A",
+            "tabId": 3,
+            "documentGeneration": "document-B",
+            "callGeneration": "call-B"
+          },
+          "expect": {
+            "systemStarts": 1,
+            "associatedCalls": 2,
+            "stop": false
+          }
+        },
+        {
+          "event": "callEnded",
+          "association": {
+            "browserInstance": "profile-A",
+            "tabId": 2,
+            "documentGeneration": "document-A",
+            "callGeneration": "call-A"
+          },
+          "expect": {
+            "systemStarts": 1,
+            "associatedCalls": 1,
+            "stop": false
+          }
+        },
+        {
+          "event": "callEnded",
+          "association": {
+            "browserInstance": "profile-A",
+            "tabId": 3,
+            "documentGeneration": "document-B",
+            "callGeneration": "call-B"
+          },
+          "expect": {
+            "systemStarts": 1,
+            "associatedCalls": 0,
+            "stop": true
+          }
+        }
+      ]
+    },
+    "manualStop": {
+      "name": "suppression-survives-reconnect-not-new-generation",
+      "suppressedAssociations": [
+        {
+          "browserInstance": "profile-A",
+          "tabId": 2,
+          "documentGeneration": "document-A",
+          "callGeneration": "call-A"
+        },
+        {
+          "browserInstance": "profile-A",
+          "tabId": 3,
+          "documentGeneration": "document-B",
+          "callGeneration": "call-B"
+        }
+      ],
+      "replacementConnection": "connection-2",
+      "freshSameCall": {
+        "browserInstance": "profile-A",
+        "tabId": 2,
+        "documentGeneration": "document-A",
+        "callGeneration": "call-A"
+      },
+      "newCall": {
+        "browserInstance": "profile-A",
+        "tabId": 2,
+        "documentGeneration": "document-A",
+        "callGeneration": "call-C"
+      },
+      "expect": {
+        "sameCallAutoRestart": false,
+        "newGenerationSuppressed": false
+      }
+    },
+    "detailsProvenance": {
+      "before": {
+        "recordingDetails": {
+          "othersRoute": {
+            "source": "system",
+            "reason": "mixedSiteSignal",
+            "site": "synthetic-site-fixture"
+          }
+        }
+      },
+      "afterCacheRemovalAndExportImport": {
+        "recordingDetails": {
+          "othersRoute": {
+            "source": "system",
+            "reason": "mixedSiteSignal",
+            "site": "synthetic-site-fixture"
+          }
+        }
+      },
+      "expect": {
+        "useStoredRoute": true,
+        "inferFromCurrentHostname": false,
+        "browserLossAlert": false
+      },
+      "futureOpenStrings": {
+        "source": "future-output",
+        "reason": "future-routing",
+        "site": "future-adapter"
+      }
+    },
+    "sharedOwnerGrace": {
+      "name": "one-expired-association-does-not-stop-another-call",
+      "steps": [
+        {
+          "event": "first-evidence-loss",
+          "expect": {
+            "associatedCalls": 2,
+            "stop": false
+          }
+        },
+        {
+          "event": "first-120s-grace-expires",
+          "expect": {
+            "associatedCalls": 1,
+            "stop": false
+          }
+        },
+        {
+          "event": "last-positive-end",
+          "expect": {
+            "associatedCalls": 0,
+            "stop": true
+          }
+        }
+      ]
+    }
+  }
 }

@@ -646,12 +646,19 @@
               }
             ]
           }
+        },
+        "browserInstance": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200,
+          "$comment": "Stable opaque browser-profile identity, at most200 UTF-8 bytes; not a control connection or extension worker instance."
         }
       },
       "required": [
         "type",
         "sequence",
-        "tabs"
+        "tabs",
+        "browserInstance"
       ],
       "additionalProperties": false
     }
