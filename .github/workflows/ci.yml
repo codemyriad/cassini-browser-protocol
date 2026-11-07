@@ -80,7 +80,7 @@ jobs:
       - name: Isolated output device for generated tab tone
         run: |
           sudo apt-get update
-          sudo apt-get install -y pulseaudio
+          sudo apt-get install -y pulseaudio xvfb xauth
           private=$(mktemp -d /tmp/cassini-audio-ci-XXXXXXXX)
           mkdir -m 700 "$private/daemon"
           cat > "$private/server.pa" <<EOF

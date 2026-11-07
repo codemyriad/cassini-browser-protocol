@@ -344,6 +344,7 @@ the popup target’s settled viewport and content geometry with a long tab title
 without opening a meeting, using native hosts, or recording audio. The normal
 headless invocation is part of `npm test`; Linux CI also runs the real headed
 Chrome sizing path with `xvfb-run -a env POPUP_HEADED=1 node tests/popup-toolbar.mjs`.
+The headed Linux check requires Xvfb and xauth, installed explicitly by CI.
 The latter reproduces the viewport/preferred-width feedback that a normal
 `popup.html` tab at a preset viewport does not cover. Screenshot:
 `artifacts/popup-toolbar.png`. Linux headed runs explicitly use X11.
