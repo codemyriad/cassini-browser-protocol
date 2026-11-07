@@ -115,7 +115,9 @@ test('publisher deduplicates unchanged snapshots without resetting sequence on r
 });
 
 test('trusted adapter framework produces literal lifecycle transitions, with document/generation fencing',async()=>{
- const fixture=JSON.parse(fs.readFileSync(path.resolve(__dirname,'../../conformance/control/call-signals-vectors.json'))).lifecycle;
+ const root=path.resolve(__dirname,'../..');
+ const contract=fs.existsSync(path.join(root,'conformance/control/call-signals-vectors.json'))?root:path.join(root,'browser-protocol');
+ const fixture=JSON.parse(fs.readFileSync(path.join(contract,'conformance/control/call-signals-vectors.json'))).lifecycle;
  const frame={tabId:2,frameId:0,browserDocumentId:'browser-A',browserUrl:'https://fixture.example/'};
  let facts;
  const adapters=new SiteSignalAdapters([{name:'fixture-only',version:'1',hostname:'fixture.example',remoteAudio:'mixed',evidence:()=>facts}]);
