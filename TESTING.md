@@ -463,31 +463,20 @@ and https://developer.chrome.com/docs/extensions/reference/api/runtime#property-
 Graph capture/admission and WhatsApp remain separate follow-ups; this change adds
 no new call evidence, source kind or automatic recording policy.
 
-## D73 draft SPEC/schema/vector validation (production graph code held)
+## D74 call-signal contract (SPEC/schema only)
 
-`tests/test_webaudio_contract.py` validates conformance/webaudio literal shape,
-negotiation/refusal/lifecycle fixtures and the separate persisted-format draft
-against JSON Schema. It covers paired source metadata through native track,
-sources and stop summaries, unknown/active/inactive evidence constraints, graph
-automaticAdmission:false, test-scope refusal on production control and consistency
-of the proposed stored source/track pair. These are contract checks, not browser
-capture, current-document proof, reliable WhatsApp markers or native writer support.
+`tests/test_call_signals_contract.py` validates literal message shapes and routing/
+lifecycle expectations in conformance/control/call-signals-vectors.json. State
+unknown/inactive/active is independent of remoteAudio separated/mixed/unknown.
+Mixed active calls route ONLY to app-owned system audio under auto-record opt-in;
+separated streams retain existing RTP evidence, while passive media never causes
+an automatic meeting/Start. Positive end stops the associated automatic system
+recording even with audio continuing. Generation/peer/sequence/reconnect and
+opt-out literals guard against stale or unrelated lifecycle actions.
 
-Canonical session.schema.json and all runtime code/manifest remain unchanged.
-The review-only overlay schemas/draft/page-audio-session.schema.json must be
-validated in addition to the canonical schema; Silvio's format gate remains open.
-Later implementation must add real sample-identical inert-observer comparison,
-explicitly authorized AudioWorklet PCM/WAV, microphone isolation/refusal, resource
-caps, lifecycle/BFCache and call-end-with-continued-media proofs. Keep existing RTP
-and real Talk gates green; PR75 remains negative-only until this SPEC PR merges.
-
-
-Mac consumer contract clarification fixtures add10 total D73 contract tests:
-composition-epoch source identity/exclusion boundary; input-free native preflight
-(including old writer/microphone:true/delayed acknowledgement without any Start);
-sticky intent and selectionEnd on revoke/reconnect/transport/evidence loss; portable
-captureRecord v1 tracks/sources with unknown-field/future-version preservation.
-These validate literal/schema consistency, not an implemented host/merger/exporter.
-Native negotiate/negotiated and control owner-status additions remain unadvertised
-until later producer/consumer code. No device or native input is opened by these
-contract tests. D73.11 approves the format fields; user page-media remains undecided.
+This replaces PR76's superseded graph transport and format proposal. No graph tap,
+AudioNode hooks, page-audio-mix capture/native endpoint/probe, format fields or
+capture code. Native/session schemas and RTP vectors remain unchanged; PR75 is
+untouched and remains real-browser negative-only. Fixtures are contract checks,
+not actual WhatsApp markers, graph recording or app system-capture implementation.
+WhatsApp stays unknown until coordinator authorizes disposable-account evidence.

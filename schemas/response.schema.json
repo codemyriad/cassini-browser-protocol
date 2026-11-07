@@ -10,8 +10,7 @@
         "started",
         "ack",
         "stopped",
-        "error",
-        "negotiated"
+        "error"
       ]
     },
     "path": {
@@ -173,39 +172,6 @@
           "scope": {
             "const": "source"
           }
-        }
-      }
-    },
-    {
-      "if": {
-        "properties": {
-          "type": {
-            "const": "negotiated"
-          }
-        }
-      },
-      "then": {
-        "required": [
-          "features"
-        ],
-        "not": {
-          "anyOf": [
-            {
-              "required": [
-                "path"
-              ]
-            },
-            {
-              "required": [
-                "captureId"
-              ]
-            },
-            {
-              "required": [
-                "resumed"
-              ]
-            }
-          ]
         }
       }
     }

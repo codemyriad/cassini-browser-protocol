@@ -139,12 +139,7 @@
           ]
         }
       },
-      "additionalProperties": true,
-      "allOf": [
-        {
-          "$ref": "#/$defs/pageAudioMetadata"
-        }
-      ]
+      "additionalProperties": true
     },
     {
       "type": "object",
@@ -388,63 +383,6 @@
         }
       },
       "additionalProperties": true
-    },
-    {
-      "type": "object",
-      "required": [
-        "type",
-        "features"
-      ],
-      "properties": {
-        "type": {
-          "const": "negotiate"
-        },
-        "version": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "enum": [
-            1,
-            null
-          ]
-        },
-        "features": {
-          "type": "array",
-          "minItems": 1,
-          "maxItems": 8,
-          "uniqueItems": true,
-          "items": {
-            "type": "string",
-            "maxLength": 64
-          }
-        }
-      },
-      "additionalProperties": true,
-      "not": {
-        "anyOf": [
-          {
-            "required": [
-              "microphone"
-            ]
-          },
-          {
-            "required": [
-              "captureLocal"
-            ]
-          },
-          {
-            "required": [
-              "captureId"
-            ]
-          },
-          {
-            "required": [
-              "resumeCapture"
-            ]
-          }
-        ]
-      }
     }
   ],
   "$defs": {
@@ -485,92 +423,7 @@
           ]
         }
       },
-      "additionalProperties": true,
-      "allOf": [
-        {
-          "$ref": "#/$defs/pageAudioMetadata"
-        }
-      ]
-    },
-    "pageAudioMetadata": {
-      "type": "object",
-      "properties": {
-        "sourceClass": {
-          "enum": [
-            "page-audio-mix",
-            null
-          ]
-        },
-        "localAudio": {
-          "enum": [
-            "excluded",
-            "may-contain-local",
-            null
-          ]
-        }
-      },
-      "allOf": [
-        {
-          "if": {
-            "required": [
-              "sourceClass"
-            ],
-            "properties": {
-              "sourceClass": {
-                "const": "page-audio-mix"
-              }
-            }
-          },
-          "then": {
-            "required": [
-              "kind",
-              "localAudio",
-              "sourceTrackId"
-            ],
-            "properties": {
-              "kind": {
-                "const": "media"
-              },
-              "localAudio": {
-                "enum": [
-                  "excluded",
-                  "may-contain-local"
-                ]
-              },
-              "sourceTrackId": {
-                "type": "string",
-                "minLength": 1,
-                "maxLength": 200
-              }
-            }
-          }
-        },
-        {
-          "if": {
-            "required": [
-              "localAudio"
-            ],
-            "properties": {
-              "localAudio": {
-                "enum": [
-                  "excluded",
-                  "may-contain-local"
-                ]
-              }
-            }
-          },
-          "then": {
-            "required": [
-              "sourceClass"
-            ],
-            "properties": {
-              "sourceClass": {
-                "const": "page-audio-mix"
-              }
-            }
-          }
-        }
-      ]
+      "additionalProperties": true
     }
   }
 }
