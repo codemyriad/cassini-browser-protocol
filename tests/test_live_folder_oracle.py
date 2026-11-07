@@ -252,13 +252,20 @@ class LiveFolderOracle(unittest.TestCase):
         folder, evidence = self.copy()
         original = evidence.read_text()
         # A standard JSON exponent can overflow binary64; it remains a request,
-        # and must fail the finite loss reference check rather than disappear.
+        # and must fail the finite reference check rather than disappear. Even
+        # invalid reference objects must not poison the result with Infinity.
         marker = '"lostAtMs": ' + str(make.LOST_MS)
         self.assertEqual(original.count(marker), 1)
-        evidence.write_text(original.replace(marker, '"lostAtMs": 1e999'))
-        process, result = run_check(folder, evidence, evidence.with_name('overflow.result.json'))
-        self.assertEqual(process.returncode, 1, process.stderr)
-        self.assertEqual(failed(result)[1], ['O3.resumeAt'])
+        for literal in ('1e999', '[1e999]', '{"bad":1e999}'):
+            with self.subTest(reference=literal):
+                evidence.write_text(original.replace(marker, '"lostAtMs": ' + literal))
+                output = evidence.with_name('overflow.result.json')
+                process, result = run_check(folder, evidence, output)
+                self.assertEqual(process.returncode, 1, process.stderr)
+                self.assertEqual(failed(result)[1], ['O3.resumeAt'])
+                def reject(token):
+                    raise ValueError('nonfinite result token: ' + token)
+                json.loads(output.read_text(), parse_constant=reject)
 
     def test_an_undelivered_resume_request_still_counts(self):
         # scenario.json resumeObservation.fields.delivered: the relay's forward failed (the browser

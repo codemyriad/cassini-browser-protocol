@@ -79,6 +79,17 @@ def _number(value):
     return type(value) in (int, float) and math.isfinite(value)
 
 
+def reference_fact(value):
+    # Evidence may contain an exponent that overflows binary64, including inside
+    # an invalid reference object. Keep the failed request visible without writing
+    # Infinity/NaN tokens into the oracle's own strict-JSON diagnostics.
+    try:
+        json.dumps(value, allow_nan=False)
+    except ValueError:
+        return repr(value)
+    return value
+
+
 def load_evidence(path):
     value = _strict(Path(path).read_text(encoding='utf-8'), 'evidence')
     problems = []
@@ -596,7 +607,7 @@ class Run:
         seam = self.resume_seam()
         rule('resumeAt', seam is not None and bool(mine) and all(
             _number(r['lostAtMs']) and r['lostAtMs'] == seam[0] and r['atMs'] <= seam[1] for r in mine),
-             dict(atMs=[r['atMs'] for r in mine], lostAtMs=[r['lostAtMs'] for r in mine], lostAndRestoredMs=seam))
+             dict(atMs=[r['atMs'] for r in mine], lostAtMs=[reference_fact(r['lostAtMs']) for r in mine], lostAndRestoredMs=seam))
 
     # O4 remote with no packets ---------------------------------------------------------------
     def o4(self, rule):
