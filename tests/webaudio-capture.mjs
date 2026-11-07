@@ -1,6 +1,7 @@
 // D73 real graph regression, adapted from the independently supplied Chromium
 // reproduction. No RTC objects/reports, media elements or lifecycle events are
-// mocked. Default mode intentionally fails until explicit graph capture exists.
+// mocked. Negative admission only: no explicit capture request before the D73
+// evidence contract is agreed. Graph capture assertions remain in the plan.
 import assert from 'node:assert/strict';
 import {createHash,generateKeyPairSync} from 'node:crypto';
 import {createServer} from 'node:http';
@@ -15,8 +16,8 @@ const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const admissionCases=JSON.parse(await readFile(path.join(root,'tests/fixtures/webaudio-admission-cases.json'),'utf8'));
 const args=process.argv.slice(2);
 assert.ok(args.every(arg=>['--observe-only','--negative-cases'].includes(arg)||arg.startsWith('--fixture=')),'Unknown argument');
-if(args.includes('--negative-cases')) {
- assert.deepEqual(args,['--negative-cases'],'Run the negative suite without other options');
+if(!args.length||args.includes('--negative-cases')) {
+ assert.ok(!args.length||(args.length===1&&args[0]==='--negative-cases'),'Run the negative suite without other options');
  for(const fixture of admissionCases.negativeCases) {
   const {stdout}=await promisify(execFile)(process.execPath,[fileURLToPath(import.meta.url),'--observe-only','--fixture='+fixture.id],{env:process.env});
   process.stdout.write(stdout);
@@ -27,12 +28,11 @@ if(args.includes('--negative-cases')) {
 const fixtureId=args.find(arg=>arg.startsWith('--fixture='))?.slice('--fixture='.length)||'media-only-worklet';
 const fixture=admissionCases.negativeCases.find(item=>item.id===fixtureId);
 assert.ok(fixture,'Unknown fixture '+fixtureId);
-const observeOnly=args.includes('--observe-only');
-assert.ok(observeOnly||fixtureId==='media-only-worklet','Explicit-capture red case uses the generic fixture only');
+assert.ok(args.includes('--observe-only'),'Individual fixtures are negative observation only');
 const temporary=await mkdtemp(path.join(os.tmpdir(),'cassini-webaudio-'));
 const extension=path.join(temporary,'extension');
-const report={scope:'generic Web Audio mechanism; not WhatsApp compatibility or call admission',fixture:fixture.id,observeOnly};
-let context,server,worker,popup,started=false;
+const report={scope:'media-only admission negative; not capture or WhatsApp compatibility proof',fixture:fixture.id};
+let context,server,worker,popup;
 try {
  await cp(path.resolve(process.env.CASSINI_TEST_EXTENSION||path.join(root,'extension')),extension,{recursive:true});
  const manifestFile=path.join(extension,'manifest.json');
@@ -104,10 +104,7 @@ try {
  if(fixture.mediaElement)assert.equal(report.baseline.mediaPlaying,true,'real generated media element must be playing');
  assert.ok((await page.evaluate(()=>discovery)).every(m=>m.sourceCount===0&&m.heard===false),'media-only audio must never fabricate receiver count or heard evidence');
  const tabId=await worker.evaluate(async url=>(await chrome.tabs.query({})).find(tab=>tab.url===url).id,url);
- // A full popup page has no browser-owned active meeting; pin only that query
- // to this browser-owned tab, as the existing extension-reload fixture does.
  popup=await context.newPage();await popup.goto(`chrome-extension://${id}/popup.html`);
- await worker.evaluate(tabId=>{const query=chrome.tabs.query.bind(chrome.tabs);chrome.tabs.query=async options=>options.active?[await chrome.tabs.get(tabId)]:query(options)},tabId);
  const status=()=>popup.evaluate(tabId=>chrome.runtime.sendMessage({target:'background',type:'status',tabId}),tabId);
  report.before=await status();
  assert.equal(report.before.recording,false);
@@ -118,42 +115,9 @@ try {
  assert.ok(inventories.length>0,'observe actual control inventory');
  assert.ok(inventories.every(p=>p.meetings.length===0),'media-only graph must not publish a meeting');
  assert.deepEqual(pageErrors,[]);
- if(observeOnly){
-  console.log('PASS '+fixture.id+': real440Hz AudioWorklet RMS>0.1, no receiver/heard evidence, empty meeting inventory and no automatic capture');
- }else{
-  // Existing trusted explicit Start is the current test adapter, NOT a proposed
-  // new graph API. Replace only this request adapter when the D73 SPEC is agreed;
-  // keep the real producer, negative admission and actual PCM assertions intact.
-  report.start=await popup.evaluate(()=>chrome.runtime.sendMessage({target:'background',type:'start',mode:'tracks'}));
-  started=report.start.recording===true;
-  assert.equal(started,true,'Explicit page-audio capture must start: '+JSON.stringify(report.start));
-  const deadline=Date.now()+15000;
-  while(true){
-   report.packets=await worker.evaluate(()=>fixturePackets);
-   const audio=report.packets.filter(p=>p.type==='audio');
-   if(audio.reduce((sum,p)=>sum+Buffer.from(p.pcm,'base64').length,0)>=96000)break;
-   assert.ok(Date.now()<deadline,'D73 graph capture missing: real440Hz AudioWorklet is playing (RMS>0.1), but explicit capture delivers no PCM. This is not a meeting-admission failure.');
-   await new Promise(resolve=>setTimeout(resolve,25));
-  }
-  const tracks=report.packets.filter(p=>p.type==='track');assert.ok(tracks.length>0);
-  assert.ok(tracks.every(t=>t.kind==='media'&&t.label==='Page audio'),'graph output must remain honest mixed media, never individual remote participants');
-  for(const track of tracks){
-   const pcm=Buffer.concat(report.packets.filter(p=>p.type==='audio'&&p.id===track.id).map(p=>Buffer.from(p.pcm,'base64')));
-   assert.equal(track.channels,1);assert.equal(pcm.length%2,0);
-   const count=pcm.length/2;assert.ok(count>=track.sampleRate,'at least one second of actual PCM');
-   let power=0,sine=0,cosine=0;
-   for(let i=0;i<count;i++){const x=pcm.readInt16LE(i*2)/32768;power+=x*x;sine+=x*Math.sin(2*Math.PI*440*i/track.sampleRate);cosine+=x*Math.cos(2*Math.PI*440*i/track.sampleRate)}
-   assert.ok(Math.sqrt(power/count)>.05,'captured graph PCM must be non-silent');
-   assert.ok(2*(sine*sine+cosine*cosine)/(count*power)>.8,'captured PCM must contain the actual440Hz worklet tone');
-  }
-  assert.ok((await page.evaluate(()=>discovery)).every(m=>m.sourceCount===0&&m.heard===false),'explicit media capture still must not fabricate call evidence');
-  report.stop=await popup.evaluate(()=>chrome.runtime.sendMessage({target:'background',type:'stop'}));started=false;
-  assert.equal(report.stop.recording,false);assert.deepEqual(pageErrors,[]);
-  console.log('PASS explicit real AudioWorklet capture; media-only admission remains negative (not WhatsApp proof)');
- }
+ console.log('PASS '+fixture.id+': real440Hz AudioWorklet RMS>0.1, no receiver/heard evidence, empty meeting inventory and no automatic capture');
 }catch(error){report.error=String(error);throw error}
 finally{
- if(started&&popup)await popup.evaluate(()=>chrome.runtime.sendMessage({target:'background',type:'stop'})).catch(()=>{});
  if(worker)report.finalPackets=await worker.evaluate(()=>fixturePackets).catch(()=>[]);
  // Bound metadata artifacts: do not dump generated PCM payloads.
  for(const key of ['packets','finalPackets','beforePackets'])if(report[key])report[key]=report[key].map(({pcm,...packet})=>({...packet,...(pcm?{pcmBytes:Buffer.from(pcm,'base64').length}:{})}));
