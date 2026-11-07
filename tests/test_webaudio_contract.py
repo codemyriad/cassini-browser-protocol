@@ -192,5 +192,45 @@ class ConsumerClarificationTests(unittest.TestCase):
                 path=None, message='Selected graph side ended.', sourceSelection=case['selectedBeforeFirstWav'],
                 selectionEnd=case['end']))
 
+
+    def test_open_persisted_values_roundtrip_and_keep_wire_strict(self):
+        fixture = json.loads((FIXTURES / 'open-persisted-values.json').read_text())
+        for case in fixture['cases']:
+            with self.subTest(case=case['name']):
+                session = case['session']
+                schema('session').validate(session)
+                schema('draft/page-audio-session').validate(session)
+                self.assertEqual(json.loads(json.dumps(session)), session)
+                if 'portableBefore' not in case:
+                    self.assertFalse(case['expect']['positiveExclusionMetadata'])
+                    continue
+                before, after = case['portableBefore'], case['portableAfter']
+                self.assertEqual(before, after)
+                schema('draft/page-audio-details').validate(before)
+                schema('draft/page-audio-details').validate(after)
+                rows = session['tracks'] + session['captureOutcome']['sources']
+                rows += before['recordingDetails']['captureRecord']['tracks']
+                rows += before['recordingDetails']['captureRecord']['sources']
+                for row in rows:
+                    self.assertEqual(row['sourceClass'], case['expect']['rawSourceClass'])
+                    self.assertEqual(row['localAudio'], case['expect']['rawLocalAudio'])
+                self.assertEqual(case['expect']['positiveExclusionMetadata'], case['expect']['rawLocalAudio'] == 'excluded')
+                self.assertFalse(case['expect']['participantIdentity'])
+                self.assertFalse(case['expect']['rtpClaim'])
+                if case['expect']['rawLocalAudio'] != 'excluded':
+                    self.assertTrue(case['expect']['possibleOwnVoice'])
+                # File openness is not negotiated wire acceptance.
+                declaration = dict(session['tracks'][0], type='track', id='wire')
+                self.assertFalse(schema('request').is_valid(declaration))
+        base = json.loads((FIXTURES / 'draft-format-session.json').read_text())
+        for field in ['sourceClass', 'localAudio']:
+            for value in ['', 'x' * 201, False, 42, [], {}]:
+                invalid = copy.deepcopy(base)
+                invalid['tracks'][0][field] = value
+                self.assertFalse(schema('draft/page-audio-session').is_valid(invalid), (field, value))
+        invalid = copy.deepcopy(fixture['cases'][0]['session'])
+        invalid['tracks'][0]['sampleRate'] = 'invalid'
+        self.assertFalse(schema('session').is_valid(invalid), 'future fields do not relax other types')
+
 if __name__ == '__main__':
     unittest.main()

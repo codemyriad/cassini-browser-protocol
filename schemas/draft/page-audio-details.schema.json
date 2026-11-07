@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "D73 approved paired-field amendment, portable captureRecord v1 overlay",
-  "$comment": "Additional paired metadata validation for recordingDetails.captureRecord version1. Preserve unknown newer records without downgrading. Not a complete portable format schema.",
+  "$comment": "Additional paired metadata validation for recordingDetails.captureRecord version1. Preserve unknown newer records without downgrading. Not a complete portable format schema. D73.12: persisted pair is open raw strings, at most200 Unicode code points; no normalization. Wire enums remain separate.",
   "type": "object",
   "properties": {
     "recordingDetails": {
@@ -38,17 +38,20 @@
       "type": "object",
       "properties": {
         "sourceClass": {
-          "enum": [
-            "page-audio-mix",
-            null
-          ]
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 200
         },
         "localAudio": {
-          "enum": [
-            "excluded",
-            "may-contain-local",
-            null
-          ]
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1,
+          "maxLength": 200
         }
       },
       "allOf": [
@@ -59,27 +62,16 @@
             ],
             "properties": {
               "sourceClass": {
-                "const": "page-audio-mix"
+                "type": "string"
               }
             }
           },
           "then": {
             "required": [
-              "kind",
-              "localAudio",
-              "sourceTrackId"
+              "localAudio"
             ],
             "properties": {
-              "kind": {
-                "const": "media"
-              },
               "localAudio": {
-                "enum": [
-                  "excluded",
-                  "may-contain-local"
-                ]
-              },
-              "sourceTrackId": {
                 "type": "string",
                 "minLength": 1,
                 "maxLength": 200
@@ -94,10 +86,7 @@
             ],
             "properties": {
               "localAudio": {
-                "enum": [
-                  "excluded",
-                  "may-contain-local"
-                ]
+                "type": "string"
               }
             }
           },
@@ -107,7 +96,37 @@
             ],
             "properties": {
               "sourceClass": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "sourceClass"
+            ],
+            "properties": {
+              "sourceClass": {
                 "const": "page-audio-mix"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "kind",
+              "sourceTrackId"
+            ],
+            "properties": {
+              "kind": {
+                "const": "media"
+              },
+              "sourceTrackId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
               }
             }
           }

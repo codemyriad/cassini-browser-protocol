@@ -947,8 +947,23 @@ Proposed additive session.json track and captureOutcome.sources fields:
 
 | Field | Values | Meaning |
 | --- | --- | --- |
-| sourceClass | page-audio-mix | Explicit mixed page output, not a participant/RTP track |
-| localAudio | excluded / may-contain-local | Positive isolation proof / unknown or possible own voice |
+| sourceClass | bounded non-empty raw string; defined: page-audio-mix | Explicit source class, with unknown-class generic non-person presentation |
+| localAudio | bounded non-empty raw string; defined: excluded / may-contain-local | Exact excluded value / conservative possible-own-voice interpretation otherwise |
+
+**D73.12 (Silvio): persisted values are OPEN strings, not wire enums.** Each
+present non-null value is1–200 Unicode code points; accept bounded non-empty
+future strings verbatim, without trimming/case folding/normalization/replacement.
+Both remain paired; null/absent together remains legacy. File readers keep unknown
+values across typed decode/encode, edits, session/source-outcome/portable records,
+raw-session removal and export/import. An unknown sourceClass renders generically
+without person/RTP claims even if kind/label resembles a participant. Unknown
+localAudio (including Excluded or excluded-with-trailing-space) is possibly own
+voice; only EXACT excluded is positive exclusion metadata. Absence/null never
+means exclusion. Preserve raw value separately from derived display. Unknown-value
+acceptance never bypasses unrelated malformed field validation. Producers emit
+only currently defined values until the SPEC defines more. Negotiated control/
+native WIRE schemas remain strict; do not normalize future file strings into
+supported wire values or infer capture/admission permissions from file metadata.
 
 Both are present for a graph source, with kind media and the same sourceTrackId
 and metadata across stored spans and source outcomes (including failed/never-opened
@@ -986,4 +1001,7 @@ existing meeting/record-version contract. These metadata literals are approved
 amendment examples, not product-created recordings or a release.
 The native request schema gains paired fields to review wire acceptance; runtime
 still needs negotiated features, byte bounds, cross-message consistency and
-provenance checks beyond stateless JSON Schema. Actual hosts are unchanged here.
+provenance checks beyond stateless JSON Schema. Actual hosts are unchanged here. Typed session/scanner models, track/source
+projection allowlists (including new-track namespace export), portable writer/
+merge and recording-details display must all preserve/interpret the raw pair;
+accepting playback alone does not establish lossless adoption.

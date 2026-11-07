@@ -55,3 +55,12 @@ composition-epochs.session.json and composition-exclusion-refused.session.json
 retain old excluded metadata under a distinct key. portable-details-roundtrip.json
 covers captureRecord v1 tracks AND sources, unknown fields, and future-record
 non-downgrade expectations; actual app writer/reader/exporter tests remain mandatory.
+
+
+D73.12 file-reader vectors: open-persisted-values.json includes unknown class,
+unknown composition, both unknown, case/whitespace variants, trackless failed
+sources and ordinary absent/null legacy metadata. Both file overlays accept paired
+raw1–200-code-point strings, preserving exact values; native/control enums remain
+strict and producers emit only defined values. Unknown class is generic/non-person,
+unknown composition possibly own voice. Actual app typed/portable/export/import
+adoption must preserve these values, not only accept original playable audio.
