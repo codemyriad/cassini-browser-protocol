@@ -374,3 +374,10 @@ Closed peers remain terminal even with stale connected ICE; listener counts cann
 and capture spans stop without reopening through DOM aliases or delayed negotiation.
 Internal discovery, negotiation, scan and sender-enabled reads use the original captured
 peer methods rather than the library-facing observation wrappers.
+
+
+Current-document recovery also defers relay replies and the native Start acknowledgement
+independently. Matching hello/ready/unavailable state is retained during browser verification;
+wrong instance/protocol/document metadata cannot admit a frame. Both completion orders attach
+once only after document proof, handshake readiness and native setup, reusing the same capture.
+Tests wait on those states and deferred promises rather than the handshake deadline.

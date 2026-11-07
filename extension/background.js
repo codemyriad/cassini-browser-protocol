@@ -51,6 +51,16 @@ const identityReady = (async () => {
 const lostMeetings = new Map();
 const tabRepairs = new Map();
 const relayReady = frame => frame.relayAlive === true && frame.hookReady === true && !frame.obsolete;
+// Handshake and browser-document verification may finish in either order.
+// Neither can attach before the other, or attach twice to the same session.
+function attachFrame(frame) {
+  if (!frames.has(frame) || !relayReady(frame)) return;
+  const current = sessions.get(frame.tabId);
+  if (current?.ready && current.mode === "tracks" && !current.stopping && !current.frames.has(frame)) {
+    current.frames.add(frame);
+    frame.port.postMessage({type:"start",token:current.token,origin:current.origin,captureLocal:current.captureLocal,sourceOutcomes:current.sourceOutcomes});
+  }
+}
 // One decision for health, idle inventory and new track captures. Undetected
 // idle frames do not create a warning or change popup admission by themselves.
 function tabReadiness(tabId) {
@@ -100,6 +110,7 @@ function verifyCurrentFrame(frame) {
       try { frame.port.postMessage({type:"discover"}); }
       catch { frame.obsolete = true; return false; }
       if (frame.frameId === 0) setPageState(frame.tabId, "present");
+      attachFrame(frame);
       notifyControl();
       return true;
     } catch { return false; }
@@ -548,11 +559,7 @@ async function start(mode, tabId = null, options = {}) {
       checkStarting();
       session.ready = true;
       if (mode === "tracks") {
-        for (const frame of frames) {
-          if (frame.tabId !== tab.id || !relayReady(frame) || session.frames.has(frame)) continue;
-          session.frames.add(frame);
-          frame.port.postMessage({ type: "start", token: session.token, origin: session.origin, captureLocal: session.captureLocal, sourceOutcomes: session.sourceOutcomes });
-        }
+        for (const frame of frames) if (frame.tabId === tab.id) attachFrame(frame);
       } else {
         if (session.sourceOutcomes) {
           session.tabSourceId = crypto.randomUUID();
@@ -652,20 +659,16 @@ chrome.runtime.onConnect.addListener(port => {
     if (!identitiesHydrated) await recovery;
     if (!frames.has(frame)) return;
     if (message.type === "relayHello" || message.type === "relayReady" || message.type === "relayUnavailable") {
-      if (message.protocol !== relayProtocol || message.instanceId !== extensionInstance || frame.obsolete) return;
+      if (message.protocol !== relayProtocol || message.instanceId !== extensionInstance) return;
       frame.relayAlive = true;
       if (message.type !== "relayHello") {
         frame.checking = false; clearTimeout(frame.handshakeDeadline); frame.hookReady = message.type === "relayReady";
         frame.hookSeen ||= frame.hookReady;
-        if (frame.hookReady) {
-          const current = sessions.get(frame.tabId);
-          if (current?.ready && current.mode === "tracks" && !current.stopping && !current.frames.has(frame)) {
-            current.frames.add(frame);
-            port.postMessage({type:"start",token:current.token,origin:current.origin,captureLocal:current.captureLocal,sourceOutcomes:current.sourceOutcomes});
-          }
-        }
       }
-      notifyControl(); return;
+      // Cache matching readiness during verification, but do not publish or
+      // admit an obsolete frame until Chrome proves its document identity.
+      if (!frame.obsolete) { attachFrame(frame); notifyControl(); }
+      return;
     }
     if (message.type === "pageState") {
       if (!frame.obsolete && frame.frameId === 0 && ["present", "navigating"].includes(message.state)) {

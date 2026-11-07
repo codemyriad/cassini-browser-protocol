@@ -1,5 +1,5 @@
 const {test}=require('node:test');const assert=require('node:assert/strict');
-const {setup,until}=require('./support/app-control-harness.cjs');
+const {setup,until,event}=require('./support/app-control-harness.cjs');
 function currentFrame(app){
  const port=app.frame(2,2,0,'browser-current'),post=port.postMessage;
  port.postMessage=function(message){post.call(this,message);if(message.type==='discover')queueMicrotask(()=>this.onMessage.emit({type:'discovery',sourceCount:2,heard:true,documentGeneration:'page-current',callGeneration:'0'}))};
@@ -106,4 +106,90 @@ test('same-document loading recovers inventory without duplicating an existing c
   assert.equal(app.audio[0].sent.filter(m=>m.type==='start').length,1);assert.equal(app.audio[0].sent.some(m=>m.type==='stop'),false);
   await app.api.stop();
  } finally {while(app.api.status().recording)await app.api.stop();app.close()}
+});
+
+
+// Unlike the default fixture, this port deliberately does not echo the worker's
+// hello from postMessage: real Chrome delivers the relay handshake asynchronously.
+async function delayedFrame(app) {
+ const port={name:'cassini-frame',sender:{id:'extension',tab:{id:2},frameId:0,documentId:'browser-current'},
+  onMessage:event(),onDisconnect:event(),sent:[],postMessage(message){
+   this.sent.push(message);
+   if(message.type==='discover')queueMicrotask(()=>this.onMessage.emit({type:'discovery',sourceCount:2,heard:true,documentGeneration:'page-current',callGeneration:'0'}));
+   if(message.type==='stop')queueMicrotask(()=>this.onMessage.emit({type:'stopped'}));
+  }};
+ app.chrome.runtime.onConnect.emit(port);
+ await until(()=>port.sent.some(m=>m.type==='relayHello'));
+ const hello=port.sent.find(m=>m.type==='relayHello');
+ return {port,frame:[...app.api.frames].find(f=>f.port===port),
+  handshake(type,changes={}){port.onMessage.emit({...hello,type,...changes});}};
+}
+
+for(const readiness of ['relayReady','relayUnavailable'])
+test('matching asynchronous '+readiness+' is retained during current-document proof',async()=>{
+ const app=await setup(0);let release;
+ try {
+  app.pages[0].onDisconnect.emit();
+  const {port,frame,handshake}=await delayedFrame(app);
+  app.chrome.scripting={executeScript:()=>new Promise(resolve=>release=resolve)};
+  app.chrome.tabs.onUpdated.emit(2,{status:'loading'});
+  handshake('relayReady',{instanceId:'another-worker'});handshake('relayReady',{protocol:99});
+  assert.equal(frame.relayAlive,false,'obsolete frames still validate handshake identity');
+  handshake('relayHello');assert.equal(frame.relayAlive,true);assert.equal(frame.checking,true);
+  handshake(readiness);assert.equal(frame.checking,false,'handshake completes before the deadline without a timer sleep');
+  assert.equal(frame.hookReady,readiness==='relayReady');assert.equal(frame.hookSeen===true,readiness==='relayReady');
+  assert.equal(frame.obsolete,true);
+  assert.equal((await app.api.meetings()).meetings.length,0,'cached readiness is not browser document proof');
+  assert.equal(port.sent.filter(m=>m.type==='start').length,0);assert.equal(app.audio.length,0);
+  release(proof());await until(()=>!frame.obsolete&&frame.sourceCount===2);
+  assert.equal(app.api.browserHealth().tabs[0].state,readiness==='relayReady'?'ready':'reloadRequired');
+  assert.equal((await app.api.meetings()).meetings.length,readiness==='relayReady'?1:0);
+  if(readiness==='relayReady') {
+   const started=await app.command({type:'command',requestId:'after-proof',action:'start',mode:'tracks',tabId:2,independent:true,keepOnNavigation:true});
+   assert.equal(started.ok,true);handshake('relayReady');
+   assert.equal(port.sent.filter(m=>m.type==='start').length,1,'repeated readiness cannot duplicate attachment');
+  }
+ } finally {release?.([]);while(app.api.status().recording)await app.api.stop();app.close()}
+});
+
+for(const order of ['native ready first','browser proof first','wrong document'])
+test('tracks session attaches exactly once after pending native Start and document proof: '+order,async()=>{
+ const held=[];
+ const app=await setup(0,{},[],()=>({sent:[],closed:false,onMessage:event(),onDisconnect:event(),
+  postMessage(packet){
+   this.sent.push(packet);
+   const reply=()=>this.onMessage.emit(packet.type==='start'?{type:'started',path:'/test/Recording-example',features:['source-outcomes-v1']}:
+    packet.type==='stop'?{type:'stopped',path:'/test/Recording-example'}:{type:'ack'});
+   if(packet.type==='start')held.push(reply);else queueMicrotask(reply);
+  },disconnect(){if(!this.closed){this.closed=true;this.onDisconnect.emit();}}
+ }));
+ let release;
+ try {
+  const {port,frame}=currentFrame(app);
+  app.chrome.scripting={executeScript:()=>new Promise(resolve=>release=resolve)};
+  const started=app.command({type:'command',requestId:'held-start',action:'start',mode:'tracks',tabId:2,independent:true,captureLocal:false,keepOnNavigation:true});
+  await until(()=>held.length===1);
+  app.chrome.tabs.onUpdated.emit(2,{status:'loading'});assert.equal(frame.obsolete,true);
+  assert.equal(port.sent.filter(m=>m.type==='start').length,0);
+  if(order==='browser proof first') {
+   release(proof());await until(()=>!frame.obsolete);
+   assert.equal(port.sent.filter(m=>m.type==='start').length,0,'verification cannot attach an unready session');
+  }
+  held.shift()();assert.equal((await started).ok,true);
+  if(order!=='browser proof first') {
+   assert.equal(port.sent.filter(m=>m.type==='start').length,0,'native ready cannot attach an unverified document');
+   release(order==='wrong document'?[{frameId:0,documentId:'another-document',result:null}]:proof());
+   await until(()=>!frame.documentCheck);
+  }
+  const starts=port.sent.filter(m=>m.type==='start');
+  assert.equal(starts.length,order==='wrong document'?0:1);
+  if(starts.length) {
+   assert.equal(starts[0].token,app.api.controlStatus().captureId);assert.equal(starts[0].captureLocal,false);assert.equal(starts[0].sourceOutcomes,true);
+   port.onMessage.emit({type:'relayReady',protocol:1,instanceId:app.api.browserHealth().extensionInstance});
+   app.chrome.tabs.onUpdated.emit(2,{status:'complete'});
+   assert.equal(port.sent.filter(m=>m.type==='start').length,1,'both entry points share idempotent attachment');
+  }
+  assert.equal(app.audio.length,1,'recovery reuses the current native session');
+  assert.equal(app.audio[0].sent.filter(m=>m.type==='start').length,1);
+ } finally {release?.([]);for(const reply of held)reply();while(app.api.status().recording)await app.api.stop();app.close()}
 });
