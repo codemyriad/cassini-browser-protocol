@@ -1,0 +1,71 @@
+{
+  "purpose": "D73.9 proposed acceptance fixtures, not a shipped evidence or wire schema",
+  "negativeCases": [
+    {
+      "id": "media-only-worklet",
+      "origin": "http://127.0.0.1",
+      "title": "Generated page audio, no call",
+      "description": "A real AudioWorklet tone with no independent call evidence",
+      "mediaElement": null
+    },
+    {
+      "id": "youtube-playback",
+      "origin": "https://www.youtube.com",
+      "title": "Music video playback",
+      "description": "Passive music or video playback; no active call",
+      "mediaElement": "video"
+    },
+    {
+      "id": "whatsapp-voice-message",
+      "origin": "https://web.whatsapp.com",
+      "title": "Voice message playback",
+      "description": "Listening to a voice message; no active call",
+      "mediaElement": "audio"
+    },
+    {
+      "id": "whatsapp-status",
+      "origin": "https://web.whatsapp.com",
+      "title": "Status playback",
+      "description": "Watching a status update; no active call",
+      "mediaElement": "video"
+    },
+    {
+      "id": "whatsapp-video",
+      "origin": "https://web.whatsapp.com",
+      "title": "Video playback",
+      "description": "Watching a shared video; no active call",
+      "mediaElement": "video"
+    }
+  ],
+  "pendingAdapterSequence": {
+    "status": "not executable until coordinator agrees independent active-call evidence contract and adapter markers",
+    "audio": "The same real graph tone continues throughout; it never supplies call evidence",
+    "steps": [
+      {
+        "independentCallState": "unknown",
+        "callAdmissible": false
+      },
+      {
+        "independentCallState": "active",
+        "callAdmissible": true
+      },
+      {
+        "independentCallState": "ended",
+        "callAdmissible": false
+      },
+      {
+        "independentCallState": "unknown",
+        "callAdmissible": false
+      }
+    ],
+    "requirements": [
+      "Active state comes only from independently validated site-specific lifecycle evidence, not fixture text, hostname, graph presence or energy",
+      "After call end, continued media does not retain or recreate a meeting and the call-bound capture span stops",
+      "Unknown is not reported as inactive or healthy",
+      "Capture capability and call evidence remain separate contract fields",
+      "Graph source is an honest mix, never a fabricated remote RTP source",
+      "Existing remote-RTP automatic policy is unchanged",
+      "Call admissibility does not itself approve a new graph automatic-Start policy"
+    ]
+  }
+}

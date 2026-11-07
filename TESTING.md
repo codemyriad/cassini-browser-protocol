@@ -459,3 +459,22 @@ SPEC/capability/mixed-source/microphone contract is reviewed. New sourceClass an
 writer/WAV assertions belong to that implementation and consumer adoption work.
 The written proposal is in coordination's
 REPLIES-EXTENSION-webaudio-capture-2026-11-07.md; no capture code is added here.
+
+
+D73.9 adds `npm run test:webaudio -- --negative-cases`: real AudioWorklet playback
+under generic, YouTube-like and WhatsApp voice-message/status/video fixture pages.
+Passive-media variants also play an actual audio/video element fed by a generated
+MediaStreamDestination (no RTC or microphone); the original media-only worklet
+fixture retains zero media elements. Each asserts RMS>0.1 while sourceCount/heard
+stay0/false, actual meeting inventory
+stays empty and no automatic Start/PCM occurs. Vendor origins are fulfilled
+entirely by Playwright in the private browser: no real vendor traffic, account,
+UI equivalence or WhatsApp support is claimed. This tests media plus hostname
+being insufficient; independent lifecycle adapter behavior remains a separate gate.
+The fixture cases and required positive-call -> end -> continued-media sequence
+are in tests/fixtures/webaudio-admission-cases.json. That positive sequence remains
+explicitly PENDING the agreed evidence contract/validated site markers, rather
+than using a fabricated selector or testing a duplicate admission implementation.
+Unknown must remain unknown/non-admissible in the new contract; current legacy
+RTP0/false is not a claim that the unimplemented call-state field already exists.
+No graph admission/capture implementation or RTP automatic-policy changes here.
