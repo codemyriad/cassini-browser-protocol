@@ -875,3 +875,70 @@ relay that keeps the transport open but silent. Times are monotonic.
 - `WRITE_DEADLINE = 10 s` (SHOULD): bound every socket/pipe write to the browser,
   on both the audio and control connections, to 10 seconds. A peer that stops
   reading is closed, and the close must not wait behind the stuck write.
+
+## D73 draft native-wire amendment: page-audio-mix-v1 (not implemented)
+
+Direction approved in D73.10; companion capability advertisement and graph code
+remain absent until the SPEC PR merges and later implementations are reviewed.
+Wire/session versions stay1. SPEC-CONTROL's negotiated graph selection/evidence
+contract applies independently of native feature negotiation.
+
+For native Start, request `features:["source-outcomes-v1","page-audio-mix-v1"]`;
+require both in started.features before sending graph sources/track/audio or
+creating a tap. An unaccepted feature never permits a downgrade to unlabeled
+media, remote RTP, whole-tab/system or microphone capture. Track-level refusals
+retain existing source-scoped error handling; the existing writer/clock/flush,
+sequence, frame, gap, outcome, selection and loss rules remain authoritative.
+
+A negotiated graph source carries **kind:"media", sourceClass:"page-audio-mix"**
+and **localAudio:"excluded"|"may-contain-local"** consistently in source ledgers,
+track declarations and stop.discoveredSources. The pair is inseparable: a non-null
+class requires a non-null composition and vice versa; omission/null together is
+legacy metadata, not an allowed downgrade of a graph source. A mixed declaration
+requires a sourceTrackId: opaque browser document/context root, never a fabricated
+MediaStreamTrack/RTP/participant identity. Replacement spans get fresh wire id
+and retain their graph root only while that context/generation lives. Different
+contexts/call generations cannot inherit it. At most200 UTF-8 bytes; never derive
+identity from labels or node order. Overlapping spans of one root remain refused.
+
+One graph output is a mix, not an individual remote person. Generic label Page
+audio (number suffix for multiple contexts), browser labelSource; no participant
+name or per-speaker claim. Page notifications may share it. Keep contexts distinct,
+deduplicate destination edges, preserve actual output/channels and honor local
+exclusion/refusal before capture. No RTP reports/counters/heard evidence is added.
+Class/composition must be identical through declaration/source ledger and retry
+spans; changing composition retires the old source span before further samples.
+Sources that fail before opening a WAV retain both facts in the outcome ledger.
+
+### DRAFT PERSISTED-FORMAT AMENDMENT — pending Silvio, not filed/published
+
+This section is deliberately separate from the native/control proposal. Coordinator
+will show it to Silvio BEFORE filing the additive format change. Merging this
+protocol draft does not publish a change to Cassini Format or authorize shipping
+persisted metadata before that approval and GNOME/Mac adoption.
+
+Proposed additive session.json track and captureOutcome.sources fields:
+
+| Field | Values | Meaning |
+| --- | --- | --- |
+| sourceClass | page-audio-mix | Explicit mixed page output, not a participant/RTP track |
+| localAudio | excluded / may-contain-local | Positive isolation proof / unknown or possible own voice |
+
+Both are present for a graph source, with kind media and the same sourceTrackId
+and metadata across stored spans and source outcomes (including failed/never-opened
+sources). Ordinary legacy tracks/sources omit the pair or use null/absent as usual;
+readers MUST NOT infer localAudio excluded from omission. Old files stay valid.
+Adopting writers preserve both; adopting apps show the mix in Others with truthful
+possible-own-voice semantics, without converting counts to people or merging it
+with a separate local microphone copy. No user UI/manual page-media action is
+approved here. Loss/gap/outcome/file version, WAV layout and original clock stay
+unchanged. Exports/readers must preserve the class/composition; old consumers
+cannot be used as negotiated graph writers merely because they ignore extras.
+
+Review-only schema overlay: schemas/draft/page-audio-session.schema.json, validated
+IN ADDITION TO canonical session.schema.json (unchanged). Draft saved example:
+conformance/webaudio/draft-format-session.json. These are a format amendment
+proposal, not a filed/published format revision or a product-created recording.
+The native request schema gains paired fields to review wire acceptance; runtime
+still needs negotiated features, byte bounds, cross-message consistency and
+provenance checks beyond stateless JSON Schema. Actual hosts are unchanged here.

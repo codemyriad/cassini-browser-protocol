@@ -1,0 +1,7 @@
+{
+  "sourceClass": "page-audio-mix",
+  "scope": "page-media-test",
+  "sourceTrackIds": [
+    "document-A:graph:1"
+  ]
+}

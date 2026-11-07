@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "DRAFT D73 persisted-format amendment; pending Silvio review, not filed",
+  "$comment": "DRAFT FORMAT AMENDMENT, pending Silvio review; validate together with canonical session.schema.json, which remains unchanged. This overlay alone is not a complete session validator.",
+  "type": "object",
+  "properties": {
+    "tracks": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/pageAudioMetadata"
+      }
+    },
+    "captureOutcome": {
+      "type": "object",
+      "properties": {
+        "sources": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/pageAudioMetadata"
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "pageAudioMetadata": {
+      "type": "object",
+      "properties": {
+        "sourceClass": {
+          "enum": [
+            "page-audio-mix",
+            null
+          ]
+        },
+        "localAudio": {
+          "enum": [
+            "excluded",
+            "may-contain-local",
+            null
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "sourceClass"
+            ],
+            "properties": {
+              "sourceClass": {
+                "const": "page-audio-mix"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "kind",
+              "localAudio",
+              "sourceTrackId"
+            ],
+            "properties": {
+              "kind": {
+                "const": "media"
+              },
+              "localAudio": {
+                "enum": [
+                  "excluded",
+                  "may-contain-local"
+                ]
+              },
+              "sourceTrackId": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "localAudio"
+            ],
+            "properties": {
+              "localAudio": {
+                "enum": [
+                  "excluded",
+                  "may-contain-local"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "sourceClass"
+            ],
+            "properties": {
+              "sourceClass": {
+                "const": "page-audio-mix"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}

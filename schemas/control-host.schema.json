@@ -21,6 +21,27 @@
       ],
       "additionalProperties": true,
       "$comment": "heartbeat-v1: sent only to a peer whose hello lists heartbeat-v1, after its first status."
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "const": "configure"
+        },
+        "capabilities": {
+          "type": "array",
+          "maxItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "const": "page-audio-mix-v1"
+          }
+        }
+      },
+      "required": [
+        "type",
+        "capabilities"
+      ],
+      "additionalProperties": false
     }
   ],
   "$defs": {
@@ -116,6 +137,41 @@
             }
           },
           "additionalProperties": true
+        },
+        "sourceSelection": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "sourceClass": {
+                  "const": "page-audio-mix"
+                },
+                "scope": {
+                  "const": "call"
+                },
+                "sourceTrackIds": {
+                  "type": "array",
+                  "minItems": 1,
+                  "maxItems": 32,
+                  "uniqueItems": true,
+                  "items": {
+                    "type": "string",
+                    "minLength": 1,
+                    "maxLength": 200
+                  }
+                }
+              },
+              "required": [
+                "sourceClass",
+                "scope",
+                "sourceTrackIds"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -202,6 +258,49 @@
               "action": {
                 "const": "start"
               }
+            }
+          }
+        },
+        {
+          "if": {
+            "required": [
+              "sourceSelection"
+            ],
+            "properties": {
+              "sourceSelection": {
+                "type": "object"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "independent",
+              "callGeneration",
+              "captureLocal"
+            ],
+            "properties": {
+              "action": {
+                "const": "start"
+              },
+              "mode": {
+                "const": "tracks"
+              },
+              "independent": {
+                "const": true
+              },
+              "callGeneration": {
+                "type": "string",
+                "minLength": 1,
+                "maxLength": 200
+              },
+              "captureLocal": {
+                "type": "boolean"
+              }
+            },
+            "not": {
+              "required": [
+                "resumeCapture"
+              ]
             }
           }
         }

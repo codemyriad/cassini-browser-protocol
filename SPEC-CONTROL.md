@@ -1046,3 +1046,165 @@ same disconnect/drain routine before opening a fresh connection. The content
 realm can thaw before its queued disconnect callback; that late callback cannot
 stop or retire the replacement port. Pending capture requests still fail/drain,
 and a new Start still waits for the old hook's stopped/flush acknowledgement.
+
+## D73 draft contract: negotiated mixed page audio (not implemented)
+
+Status: direction approved under D73.10; this SPEC/schema/vector PR must merge before
+production graph code. First implementation allowlist is **https://web.whatsapp.com/**
+(browser-parsed exact hostname, HTTPS/default port). No other site is added by this
+capability. #75 remains admission-negative only until this contract merges. Actual
+WhatsApp call markers stay **unknown** until coordinator authorizes a disposable
+account/profile study; no use of Silvio's browser/account or automatic reload.
+
+### Negotiation and isolated diagnostics
+
+The extension may advertise `page-audio-mix-v1` only after implementation. It does
+not advertise that capability merely because this draft schema is present. After
+extension hello, an adopting control consumer sends:
+
+```json
+{"type":"configure","capabilities":["page-audio-mix-v1"]}
+```
+
+Extension replies `{"type":"configured","capabilities":["page-audio-mix-v1"]}`
+only if supported; otherwise the accepted list is empty. An empty configure revokes
+that connection's opt-in. Configuration is per authenticated native-control
+connection; reconnect starts unconfigured. Commands/snapshots stay FIFO. Only after
+the acknowledgement may that consumer receive the new complete-replacement snapshot
+`{"type":"graphStatus","tabs":[...]}`; configured consumers receive an initial
+snapshot (possibly empty) and subsequent changes. At most100 rows, browser-owned
+per-tab identity/URL, no PCM or raw DOM evidence. Empty graph snapshots are idle,
+not warnings. The trusted popup may query the same separate diagnostics by a
+future authenticated extension-owned API; this draft creates no UI control.
+
+Each row contains `tabId`, `url`, `documentGeneration`, and three separate fields:
+
+- `callEvidence`: `state` unknown/inactive/active, bounded `reason`, nullable
+  `adapter:{name,version}` and `callGeneration`. Active requires a named/versioned
+  adapter and positive site-specific active-call/lifecycle evidence independent
+  of graph energy, playback and hostname. Inactive requires affirmative callEnded
+  or nonCall evidence. Otherwise unknown (unverified/unsupported/evidenceConflict).
+  Unknown is non-admissible and must never be displayed as inactive/healthy.
+- `graphCapture`: `state` observing/available/reloadBeforeCall/unavailable,
+  `coverage` complete/incomplete/unknown, bounded `reason` and up to32 `sources`.
+  Available means observed output with complete coverage, not a call or saved
+  audio. Each source has a graph-root sourceTrackId, kind media, sourceClass
+  page-audio-mix, localAudio excluded/may-contain-local, generic Page audio label
+  and browser labelSource. IDs must be distinct within a snapshot.
+- `automaticAdmission`: **false, unconditionally in this first delivery**. New
+  graph automatic policy requires a later explicit DECISIONS-UX decision. Positive
+  call evidence permits an explicitly selected call capture, not automatic Start.
+
+The schemas define enum/bound/type constraints; authorization, uniqueness of source
+keys and current browser document/call association also require runtime checks.
+The draft allowlisted page interface extends the legacy counts-only hints with
+these explicitly bounded graph/call hints; it never extends page management
+authority. Other pages retain the original interface.
+Document/call/source IDs are at most200 UTF-8 bytes (schema character bounds are
+only an outer limit). Future page hints are bounded/advisory and cannot supply
+browser URLs/tab identity or management commands; new fields must be explicitly
+validated/allowlisted at the relay. No direct trust in page-submitted call claims.
+
+Legacy `meetings`, `sourceCount` and `heard` retain EXACT existing RTP meanings.
+Never create a graph-only legacy meeting row, receiver, RTP counter or heard vote.
+The existing RTP remote-audio automatic policy is unchanged. Page audio/energy and
+WhatsApp hostname, alone or together, never qualify a call. A pre-existing explicit
+recording row may remain under the existing session rules; it conveys no new RTP
+proof. Worker/native readiness stays separate from call state/capture capability.
+An older/unconfigured consumer sees only its existing inventory/status surface.
+
+### Explicit call selection and refusal semantics
+
+A negotiated consumer may deliberately select a current graph source with:
+
+```json
+{"type":"command","requestId":"explicit-mix","action":"start","tabId":2,"mode":"tracks","independent":true,"callGeneration":"call-A","captureLocal":false,"sourceSelection":{"sourceClass":"page-audio-mix","scope":"call","sourceTrackIds":["document-A:graph:1"]}}
+```
+
+This never changes the meaning of an omitted sourceSelection: legacy RTP selection
+continues unchanged. An adopting app MUST check the extension hello capability
+before sending a new selection; old extensions may ignore unknown optional fields.
+A new extension MUST also require configure acknowledgement and independently
+validate the selection. Graph selection requires current ready browser document,
+positive active call with matching generation, complete graph coverage, distinct
+selected IDs from that same document/call, supported site and microphone choice.
+At most32 IDs. New graph selections cannot use resumeCapture in first delivery;
+existing RTP resume behavior remains unchanged. Do not silently choose a different
+graph, RTP capture, whole tab, system or microphone on refusal.
+
+Native Start requests page-audio-mix-v1 AND source-outcomes-v1, and must receive
+both echoed accepted features before creating any tap or sending graph sources,
+track/audio. Control acceptance does not substitute for writer acceptance. Missing
+features => unsupported selection, no tap/graph track/audio; finalize any empty
+private native session through existing cleanup rules. Never retry with metadata
+removed or classify a mix as remote to satisfy an older writer.
+
+Explicit refusals use existing result envelope/requestId with ok:false and a
+bounded code: unsupported (site/capability), observationIncomplete (missed history
+or limit), callEvidenceUnknown, callNotActive, localAudioNotSeparable, gone
+(stale document/call/source), invalid (scope/shape). Scope/transport errors retain
+existing handling. No graph audio is admitted on a refused request.
+
+`captureLocal:false` excludes page-local audio. `microphone:false` retains its
+existing native microphone meaning and does not prove a page mix is local-free.
+localAudio excluded requires affirmative routing/provenance proof, never absence
+of a detected microphone, subtraction or echo-cancellation claims. Otherwise use
+may-contain-local. Excluding page-local audio refuses an inseparable/unknown mix.
+When inclusion is chosen, preserve the possible-own-voice fact in diagnostics and
+files. A later local-input/provenance change stops an exclusion-selected span
+before admitting affected samples; composition never silently changes mid-span.
+No new getUserMedia request, page-track mutation, or duplicated microphone source.
+
+Call end, unknown/lost lifecycle evidence or a document/call fence immediately
+revokes call-bound eligibility and disconnects/retires its graph span. Queued
+samples retain the existing token/generation fence and flush rules; no sample
+captured after the evidence boundary is admitted. Continued media cannot preserve
+or recreate a meeting/call span. Apps own whole-session/microphone/final-save
+lifecycle; a graph source ending is not proof that a file was saved.
+
+### Test-controller-only page-media scope
+
+`scope:"page-media-test"` is NOT a production control-host command and is refused
+there, even if it is labelled a test by a message field. Its selection schema is
+separate under schemas/draft/. Only a privately authorized isolated test controller
+may exercise explicit media capture without call evidence after this contract
+merges; authorization derives from that harness boundary, not page content or an
+IPC flag. A test page on the WhatsApp origin is fully fulfilled locally in a private
+profile; no live-site/account access is implied. Production allowlist remains
+web.whatsapp.com only. User-facing manual page-media capture and popup wording
+require Silvio's separate decision. No automatic or implicit whole-page capture.
+
+### Observation, coverage and lifecycle requirements for later code PRs
+
+Install the allowlisted MAIN-world observer at document_start. Before an authorized
+Start it records metadata ONLY: no analyser/worklet/tap/extra AudioContext, energy
+sampling, PCM, native recording, context resume or device access. Hard per-document
+ceilings:32 contexts,256 retained nodes/edges TOTAL,64 provenance records. Use
+bounded weak ownership/indexes, retire closed objects deterministically, and never
+resurrect them on teardown calls. Overflow => incomplete coverage and refusal of
+affected capture, never silent eviction presented as completeness. No periodic
+full graph/PCM scan or unbounded work per mutation.
+
+Wrap only required APIs with original receivers/arguments, preserving return
+values, overloads/exceptions and page-observable identities/instanceof/prototypes
+where possible. Internal operations use saved originals and exclude own nodes.
+The hooked page's own generated output MUST be **sample-identical** with and
+without the inert observer in a real browser regression, using aligned deterministic
+samples/events. No page graph rerouting, closing/suspending/resuming a page-owned
+context or destination disconnect. Capture adds/removes only its non-audible branch.
+Repeated connect edges cannot double gain; contexts remain separate honest mixes.
+
+Late injection, extension reload with lost history, unsupported routing and caps
+cannot prove pre-existing graph access. Positive call evidence plus missed graph
+history => reloadBeforeCall/graphPredatesObservation, not silent No sources.
+Unknown call evidence remains unknown with incomplete/unknown coverage. Tell users
+to reload before a NEXT call only through reviewed popup copy; never reload or
+restart an active call. Fresh browser document proof/readiness and call evidence
+are required after BFCache/navigation; no stale call replay or unauthorized tap.
+
+Conformance/webaudio contains draft shape/refusal/lifecycle/negotiation literals,
+not a live WhatsApp adapter or implemented state machine. Actual lifecycle markers
+remain unknown. Later code PRs must make #75's passive-media negatives, sample
+identity, real explicitly started AudioWorklet PCM/WAV, mic isolation/refusal,
+call-end-with-continued-media and bounded-resource/lifecycle tests pass with E1
+state/event waits. Existing RTP vectors and real Talk CI must remain green.

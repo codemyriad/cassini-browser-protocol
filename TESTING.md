@@ -462,3 +462,21 @@ Chrome's primary guidance: https://developer.chrome.com/blog/bfcache-extension-m
 and https://developer.chrome.com/docs/extensions/reference/api/runtime#property-lastError.
 Graph capture/admission and WhatsApp remain separate follow-ups; this change adds
 no new call evidence, source kind or automatic recording policy.
+
+## D73 draft SPEC/schema/vector validation (production graph code held)
+
+`tests/test_webaudio_contract.py` validates conformance/webaudio literal shape,
+negotiation/refusal/lifecycle fixtures and the separate persisted-format draft
+against JSON Schema. It covers paired source metadata through native track,
+sources and stop summaries, unknown/active/inactive evidence constraints, graph
+automaticAdmission:false, test-scope refusal on production control and consistency
+of the proposed stored source/track pair. These are contract checks, not browser
+capture, current-document proof, reliable WhatsApp markers or native writer support.
+
+Canonical session.schema.json and all runtime code/manifest remain unchanged.
+The review-only overlay schemas/draft/page-audio-session.schema.json must be
+validated in addition to the canonical schema; Silvio's format gate remains open.
+Later implementation must add real sample-identical inert-observer comparison,
+explicitly authorized AudioWorklet PCM/WAV, microphone isolation/refusal, resource
+caps, lifecycle/BFCache and call-end-with-continued-media proofs. Keep existing RTP
+and real Talk gates green; PR75 remains negative-only until this SPEC PR merges.
