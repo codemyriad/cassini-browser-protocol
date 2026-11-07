@@ -427,3 +427,35 @@ is refused. Real Talk CI requires the Hypatia label on the isolated440Hz source 
 Ibn al-Haytham on880Hz, with dom provenance on both tracks and source outcomes. It uses
 #70's locked Nextcloud34/fullHPB disposable-VM harness and private browser/native fixtures;
 it does not establish either product app's host adoption or verified speaker identity.
+
+
+## D73 pending real Web Audio capture regression
+
+`npm run test:webaudio` runs `tests/webaudio-capture.mjs`, derived from the
+independent real-Chromium440Hz AudioWorklet reproducer. It is **intentionally red**
+on main055ed5e/companion0.2.23: an explicit trusted Start delivers no graph PCM.
+It is kept outside default `npm test` until the reviewed D73 implementation makes
+it green; no expected-failure catch or inverted missing-feature assertion hides it.
+`npm run test:webaudio -- --observe-only` checks the independently useful baseline:
+real graph RMS>0.1, no media elements, sourceCount0/heardfalse and no automatic
+Start/PCM. The full test must retain those negative admission checks when fixed.
+
+Both modes use a disposable profile/random extension identity, disabled physical
+audio output, generated audio and an in-memory native sink; no installed native
+host, user microphone, browser restart or user worktree is involved. Real graph
+objects/worklet processing run unmodified. The sink only acknowledges production
+native packets and cannot create graph capture. Analyser data establishes the
+fixture's actual page output; it is not extension evidence or a call classifier.
+Actual captured PCM must be non-silent, contain440Hz and retain a generic mixed
+media label, rather than merely returning a successful Start. Artifact:
+`artifacts/webaudio-capture.json` (bounded metadata, no PCM payload).
+
+`PLAYWRIGHT_MODULE` and `CASSINI_TEST_EXTENSION` support explicit isolated test
+inputs. This portable adaptation removes the supplied reproduction's laptop/live
+worktree paths. It proves **generic graph capture only**, never WhatsApp live
+support or automatic meeting classification. The existing trusted popup Start is
+a provisional test adapter, not a new API: update that adapter only after the D73
+SPEC/capability/mixed-source/microphone contract is reviewed. New sourceClass and
+writer/WAV assertions belong to that implementation and consumer adoption work.
+The written proposal is in coordination's
+REPLIES-EXTENSION-webaudio-capture-2026-11-07.md; no capture code is added here.
