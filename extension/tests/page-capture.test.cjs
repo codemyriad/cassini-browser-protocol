@@ -182,3 +182,13 @@ test('duplicate stops during a flush cannot close the shared context or announce
   return {async stop(){stopCount++;if(ending)return;ending=true;entered();await flushing}};
  }});
 });
+
+
+test('a cached-constructor receiver observed through its getter is captured once after inbound progress',()=>fixture(async f=>{
+ const pc=f.cachedPeer(),remote=f.remote('Remote source',pc);f.render(remote.receiver.track);
+ pc.getReceivers();await f.tick();await f.start('getter-recovery');
+ assert.equal(f.captures.length,0,'a live rendered receiver without inbound progress is not admitted');
+ remote.packets=10;await f.tick();await f.scan();
+ assert.equal(f.captures.length,1);assert.equal(f.captures[0].kind,'remote');
+ await f.scan();assert.equal(f.captures.length,1,'DOM alias does not duplicate the receiver span');
+}));

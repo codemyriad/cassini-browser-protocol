@@ -356,3 +356,13 @@ for settled geometry. Default zoom must prefer 376px; 300% must exercise a small
 viewport and let body/content fit it without horizontal overflow. It saves the
 high-zoom screenshot as `artifacts/popup-toolbar-300.png`. No live profile,
 installed extension worktree or foreground user browser is modified.
+
+Nextcloud investigation regressions cover a receiving peer created through a
+cached constructor and observed through getters, while preserving prejoin/RTP
+and call-change exclusions; a rendered receiver is captured once only after
+packet progress. Browser-document tests reproduce a late status-only loading
+edge after a ready frame, then require Chrome-owned injection document metadata
+before fresh source inventory returns. They reject old/forged/missing metadata,
+stale epochs, closed/disconnected frames and hung checks; recovery of an existing
+capture must not create a duplicate native Start. The independent real Talk HPB
+harness owns the final inventory-before-Start and separate-input WAV proof.

@@ -79,11 +79,47 @@ function browserHealth() {
   return {worker:"ready", nativeControl:appControl.port ? "connected" : "disconnected",
     extensionVersion, extensionInstance, ...companionDiagnostics, state, tabs};
 }
+// A status-only loading event can occur without a document replacement. Only
+// Chrome's current injection metadata may restore an obsolete port; a page's
+// discovery generation is never proof of browser document identity.
+function verifyCurrentFrame(frame) {
+  if (!frame.obsolete || !frame.browserDocumentId || !chrome.scripting?.executeScript) return Promise.resolve(false);
+  const epoch = frame.obsoleteEpoch;
+  if (frame.documentCheck?.epoch === epoch) return frame.documentCheck.promise;
+  const check = {epoch}; frame.documentCheck = check;
+  check.promise = (async () => {
+    let deadline;
+    try {
+      const results = await Promise.race([
+        chrome.scripting.executeScript({target:{tabId:frame.tabId,frameIds:[frame.frameId]},world:"ISOLATED",func:()=>null}),
+        new Promise(resolve => { deadline = relayTimers.later(() => resolve(null), TAB_READY_DEADLINE_MS); })
+      ]);
+      if (!frames.has(frame) || frame.obsoleteEpoch !== epoch || pageState(frame.tabId) === "closed" ||
+          !results?.some(result => result.frameId === frame.frameId && result.documentId === frame.browserDocumentId)) return false;
+      frame.obsolete = false;
+      try { frame.port.postMessage({type:"discover"}); }
+      catch { frame.obsolete = true; return false; }
+      if (frame.frameId === 0) setPageState(frame.tabId, "present");
+      notifyControl();
+      return true;
+    } catch { return false; }
+    finally {
+      relayTimers.cancel(deadline);
+      if (frame.documentCheck === check) delete frame.documentCheck;
+    }
+  })();
+  return check.promise;
+}
+function verifyCurrentFrames(tabId, frameId = null) {
+  return Promise.all([...frames].filter(frame => frame.tabId === tabId && (frameId === null || frame.frameId === frameId))
+    .map(verifyCurrentFrame));
+}
 async function repairTab(tabId, frameId = null) {
   const key = frameId === null ? tabId : `${tabId}:${frameId}`;
   if (tabRepairs.has(key)) return tabRepairs.get(key);
   const repair = (async () => {
     await identityReady;
+    await verifyCurrentFrames(tabId, frameId);
     const probe = async () => {
       let deadline;
       try {
@@ -94,6 +130,7 @@ async function repairTab(tabId, frameId = null) {
       } finally { relayTimers.cancel(deadline); }
     };
     const current = await probe();
+    await verifyCurrentFrames(tabId, frameId);
     if ((current?.connected || current?.needsReload) && current.protocol === relayProtocol && current.instanceId === extensionInstance) return;
     // Never wrap RTCPeerConnection again on an already-running page. A fresh
     // isolated relay can reuse a compatible MAIN hook; older hooks require reload.
@@ -603,7 +640,7 @@ async function forwardPacket(session, packet, documentGeneration) {
 
 chrome.runtime.onConnect.addListener(port => {
   if (port.name !== "cassini-frame" || port.sender?.id !== chrome.runtime.id || !port.sender.tab) return;
-  const frame = { port, tabId: port.sender.tab.id, frameId: port.sender.frameId ?? 0, sourceCount: 0, heard: false, checking:true, relayAlive:false, hookReady:false, fencedGenerations: new Set() };
+  const frame = { port, tabId: port.sender.tab.id, frameId: port.sender.frameId ?? 0, browserDocumentId:typeof port.sender.documentId === "string" ? port.sender.documentId : null, obsoleteEpoch:0, sourceCount: 0, heard: false, checking:true, relayAlive:false, hookReady:false, fencedGenerations: new Set() };
   if (pageState(frame.tabId) === "closed") return;
   if (frame.frameId === 0) setPageState(frame.tabId, "present");
   frames.add(frame);
@@ -810,8 +847,9 @@ function tabUpdated(id, change) {
   if (change.status === "loading") {
     for (const [key, value] of lostMeetings) if (value.tabId === id) lostMeetings.delete(key);
     if (sessions.has(id) || [...frames].some(f => f.tabId === id)) setPageState(id, "navigating");
-    for (const frame of frames) if (frame.tabId === id) { frame.sourceCount = 0; frame.heard = false; frame.obsolete = true; }
-  }
+    for (const frame of frames) if (frame.tabId === id) { frame.sourceCount = 0; frame.heard = false; frame.obsolete = true; frame.obsoleteEpoch++; }
+    void verifyCurrentFrames(id);
+  } else if (change.status === "complete") void verifyCurrentFrames(id);
   if (change.status || change.title !== undefined || change.url !== undefined) notifyControl();
 }
 chrome.tabs.onUpdated.addListener(tabUpdated);
