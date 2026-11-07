@@ -1,0 +1,187 @@
+{
+  "status": "literal v1 expected round-trip metadata; not an executed app exporter",
+  "before": {
+    "title": "Generated mixed page audio",
+    "recordingDetails": {
+      "captureRecord": {
+        "version": 1,
+        "tracks": [
+          {
+            "id": "span-excluded",
+            "label": "Page audio",
+            "kind": "media",
+            "sampleRate": 48000,
+            "channels": 1,
+            "startOffsetMs": 0,
+            "frames": 48000,
+            "endOffsetMs": 1000,
+            "ended": true,
+            "labelSource": "browser",
+            "sourceTrackId": "document-A:context-1:epoch-1",
+            "sourceClass": "page-audio-mix",
+            "localAudio": "excluded",
+            "captureOutcome": "captured",
+            "receivedFrames": 48000,
+            "futureTrackField": {
+              "keep": true
+            },
+            "gaps": [],
+            "droppedFrames": 0
+          },
+          {
+            "id": "span-may-contain-local",
+            "label": "Page audio",
+            "kind": "media",
+            "sampleRate": 48000,
+            "channels": 1,
+            "startOffsetMs": 1000,
+            "frames": 48000,
+            "endOffsetMs": 2000,
+            "ended": true,
+            "labelSource": "browser",
+            "sourceTrackId": "document-A:context-1:epoch-2",
+            "sourceClass": "page-audio-mix",
+            "localAudio": "may-contain-local",
+            "captureOutcome": "captured",
+            "receivedFrames": 48000,
+            "gaps": [],
+            "droppedFrames": 0
+          }
+        ],
+        "sources": [
+          {
+            "sourceTrackId": "document-A:context-1:epoch-1",
+            "kind": "media",
+            "sourceClass": "page-audio-mix",
+            "localAudio": "excluded",
+            "label": "Page audio",
+            "labelSource": "browser",
+            "captureOutcome": "captured",
+            "audioMs": 1000,
+            "trackIds": [
+              "span-excluded"
+            ],
+            "futureSourceField": {
+              "keep": true
+            }
+          },
+          {
+            "sourceTrackId": "document-A:context-1:epoch-2",
+            "kind": "media",
+            "sourceClass": "page-audio-mix",
+            "localAudio": "may-contain-local",
+            "label": "Page audio",
+            "labelSource": "browser",
+            "captureOutcome": "captured",
+            "audioMs": 1000,
+            "trackIds": [
+              "span-may-contain-local"
+            ]
+          }
+        ],
+        "events": [],
+        "futureRecordField": {
+          "keep": true
+        }
+      }
+    },
+    "futureMeetingField": {
+      "keep": true
+    }
+  },
+  "after": {
+    "title": "Generated mixed page audio",
+    "recordingDetails": {
+      "captureRecord": {
+        "version": 1,
+        "tracks": [
+          {
+            "id": "span-excluded",
+            "label": "Page audio",
+            "kind": "media",
+            "sampleRate": 48000,
+            "channels": 1,
+            "startOffsetMs": 0,
+            "frames": 48000,
+            "endOffsetMs": 1000,
+            "ended": true,
+            "labelSource": "browser",
+            "sourceTrackId": "document-A:context-1:epoch-1",
+            "sourceClass": "page-audio-mix",
+            "localAudio": "excluded",
+            "captureOutcome": "captured",
+            "receivedFrames": 48000,
+            "futureTrackField": {
+              "keep": true
+            },
+            "gaps": [],
+            "droppedFrames": 0
+          },
+          {
+            "id": "span-may-contain-local",
+            "label": "Page audio",
+            "kind": "media",
+            "sampleRate": 48000,
+            "channels": 1,
+            "startOffsetMs": 1000,
+            "frames": 48000,
+            "endOffsetMs": 2000,
+            "ended": true,
+            "labelSource": "browser",
+            "sourceTrackId": "document-A:context-1:epoch-2",
+            "sourceClass": "page-audio-mix",
+            "localAudio": "may-contain-local",
+            "captureOutcome": "captured",
+            "receivedFrames": 48000,
+            "gaps": [],
+            "droppedFrames": 0
+          }
+        ],
+        "sources": [
+          {
+            "sourceTrackId": "document-A:context-1:epoch-1",
+            "kind": "media",
+            "sourceClass": "page-audio-mix",
+            "localAudio": "excluded",
+            "label": "Page audio",
+            "labelSource": "browser",
+            "captureOutcome": "captured",
+            "audioMs": 1000,
+            "trackIds": [
+              "span-excluded"
+            ],
+            "futureSourceField": {
+              "keep": true
+            }
+          },
+          {
+            "sourceTrackId": "document-A:context-1:epoch-2",
+            "kind": "media",
+            "sourceClass": "page-audio-mix",
+            "localAudio": "may-contain-local",
+            "label": "Page audio",
+            "labelSource": "browser",
+            "captureOutcome": "captured",
+            "audioMs": 1000,
+            "trackIds": [
+              "span-may-contain-local"
+            ]
+          }
+        ],
+        "events": [],
+        "futureRecordField": {
+          "keep": true
+        }
+      }
+    },
+    "futureMeetingField": {
+      "keep": true
+    }
+  },
+  "futureVersionRecord": {
+    "version": 2,
+    "futureRecordField": {
+      "keep": true
+    }
+  }
+}

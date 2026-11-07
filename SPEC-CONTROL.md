@@ -1132,12 +1132,15 @@ At most32 IDs. New graph selections cannot use resumeCapture in first delivery;
 existing RTP resume behavior remains unchanged. Do not silently choose a different
 graph, RTP capture, whole tab, system or microphone on refusal.
 
-Native Start requests page-audio-mix-v1 AND source-outcomes-v1, and must receive
-both echoed accepted features before creating any tap or sending graph sources,
-track/audio. Control acceptance does not substitute for writer acceptance. Missing
-features => unsupported selection, no tap/graph track/audio; finalize any empty
-private native session through existing cleanup rules. Never retry with metadata
-removed or classify a mix as remote to satisfy an older writer.
+Perform SPEC.md's input-free native negotiate/negotiated exchange before ANY
+Start, including a Start with microphone:true. Old/missing/delayed capability
+acceptance must not create a folder, visible capture or native Me input. On missing
+support, close the probe with unsupported and send no Start; never assume that a
+mic-enabled Start creates an empty private session. Only after preflight may a
+freshly validated explicit Start request both features and the microphone choice
+on the SAME native connection. Require both echoed again in started.features
+before any tap/graph packets. Control acceptance does not substitute for native
+acceptance. Never retry with metadata removed or classify a mix as remote.
 
 Explicit refusals use existing result envelope/requestId with ok:false and a
 bounded code: unsupported (site/capability), observationIncomplete (missed history
@@ -1208,3 +1211,50 @@ remain unknown. Later code PRs must make #75's passive-media negatives, sample
 identity, real explicitly started AudioWorklet PCM/WAV, mic isolation/refusal,
 call-end-with-continued-media and bounded-resource/lifecycle tests pass with E1
 state/event waits. Existing RTP vectors and real Talk CI must remain green.
+
+
+### D73 consumer clarification: sticky selection and mid-capture ends
+
+The capture owner MUST store sourceSelection on explicit intent BEFORE negotiation,
+Start or the first WAV/source row. It is immutable selection provenance, not
+inferred from existing tracks. For a graph selection it remains on owner status
+and session entries through pending, active, ended, reconnect and loss. Selected
+IDs identify the initial context/epoch snapshot; allowed composition changes in
+that already-selected context use fresh epoch IDs as SPEC.md requires, never a
+new context/call. No ordinary Start/resume with omitted sourceSelection may act
+as implicit recovery of that owner, including on mixed RTP+graph pages.
+
+Configure revocation or control disconnection terminates that connection's graph
+authorization, including pending Starts. Stop admitting/retire its graph span;
+control reconnect starts unconfigured and never automatically reopens it. A
+separately explicitly authorized native microphone may remain in its existing
+recording under app ownership while graph capture ends; no new input is opened.
+If the shared native transport itself is lost, its own microphone cannot survive
+that connection: existing EOF/finalization/loss rules apply; only an independently
+owned authorized app microphone may continue. There is no implicit new native
+session, RTP resume, system stand-in or whole-tab fallback. A fresh graph capture
+requires fresh explicit intent, configuration, preflight and all current gates;
+first delivery has no graph resumeCapture. Never reuse another RTP source merely
+because it is present. Existing RTP-only owner policies remain unchanged.
+
+Native mid-capture source ends use existing `trackEnd`: reason callChanged for
+call end/document-call fence, failed for unknown evidence/composition exclusion,
+stopped for control revocation/disconnect. At native loss it may be undeliverable;
+existing transport EOF is authoritative, never a fabricated acknowledged trackEnd.
+Old admitted samples/outcome retain their facts; affected new composition epoch is
+failed/never-opened if excluded. Start refusals apply only before opening a capture,
+not as a rewrite of an already-recorded source.
+
+Existing control status envelope gains optional selectionEnd {reason,atMs}, on
+both tab status and session entries, bound to preserved sourceSelection. Reasons:
+revoked, controlLost, nativeLost, callEnded, callEvidenceUnknown,
+localAudioNotSeparable, documentChanged. atMs is the source admission boundary on
+the recording clock, not a claim of delivered flush/final save. Report it when a
+running graph side ends; retain through reconnect/while its owner is observable,
+even before its first graph chunk. A pending rejected Start uses existing result
+ok:false/code; a running selection end uses status + native source-end/loss rules.
+Do not convert selectionEnd to a new failed WAV, rewrite unrelated Me/RTP outcomes,
+or broaden selection. Stopping the graph source is distinct from whole-session
+Stop, which remains app/user owned; without another authorized source, normal
+Stop/finalization applies (no new empty-session exception). Call/mic/source failure
+copy stays honest and uses separately approved shared presentation.

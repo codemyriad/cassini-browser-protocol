@@ -883,9 +883,26 @@ remain absent until the SPEC PR merges and later implementations are reviewed.
 Wire/session versions stay1. SPEC-CONTROL's negotiated graph selection/evidence
 contract applies independently of native feature negotiation.
 
-For native Start, request `features:["source-outcomes-v1","page-audio-mix-v1"]`;
-require both in started.features before sending graph sources/track/audio or
-creating a tap. An unaccepted feature never permits a downgrade to unlabeled
+Before any Start, send `{"type":"negotiate","version":1,"features":["source-outcomes-v1","page-audio-mix-v1"]}`
+on the SAME native connection that would later own the recording. A supporting
+host replies `{"type":"negotiated","features":["source-outcomes-v1","page-audio-mix-v1"]}`.
+This request is input-free: no folder, capture identity, visible recording, created
+callback, device, microphone/system input, graph tap or audio. It contains no
+microphone/captureLocal/resume/captureId. Missing features, timeout or an old host's
+unknown-request/version error closes that probe connection and refuses unsupported;
+NO Start is sent. Delayed acknowledgement grants no input authority. Thus an old
+writer is never probed with microphone:true or a capture-producing Start.
+
+After BOTH accepted features and fresh control/call/selection validation, explicit
+Start on that same connection requests BOTH features and the authorized microphone
+choice. The host MUST verify the previously negotiated feature set before Start
+side effects; changed/missing support refuses before begin/created/input. A replaced
+native connection must repeat input-free negotiation. Require both echoed again
+in started.features before sending graph sources/track/audio or creating a tap.
+Legacy RTP clients may continue starting directly; this new probe is mandatory
+only for graph selection. Schemas describe the new message/response, not evidence
+that existing hosts implement it. Existing unknown-type errors remain safe because
+no session/input has begun. An unaccepted feature never permits a downgrade to unlabeled
 media, remote RTP, whole-tab/system or microphone capture. Track-level refusals
 retain existing source-scoped error handling; the existing writer/clock/flush,
 sequence, frame, gap, outcome, selection and loss rules remain authoritative.
@@ -897,8 +914,10 @@ class requires a non-null composition and vice versa; omission/null together is
 legacy metadata, not an allowed downgrade of a graph source. A mixed declaration
 requires a sourceTrackId: opaque browser document/context root, never a fabricated
 MediaStreamTrack/RTP/participant identity. Replacement spans get fresh wire id
-and retain their graph root only while that context/generation lives. Different
-contexts/call generations cannot inherit it. At most200 UTF-8 bytes; never derive
+and retain the root only while its context/generation AND composition/provenance
+epoch lives. A composition/provenance change ALWAYS allocates a fresh, non-reused
+sourceTrackId even within the same context/document. Different contexts, calls or
+epochs cannot inherit it; old source outcomes and metadata remain immutable. At most200 UTF-8 bytes; never derive
 identity from labels or node order. Overlapping spans of one root remain refused.
 
 One graph output is a mix, not an individual remote person. Generic label Page
@@ -907,15 +926,22 @@ name or per-speaker claim. Page notifications may share it. Keep contexts distin
 deduplicate destination edges, preserve actual output/channels and honor local
 exclusion/refusal before capture. No RTP reports/counters/heard evidence is added.
 Class/composition must be identical through declaration/source ledger and retry
-spans; changing composition retires the old source span before further samples.
+spans of one epoch key. Retire its old physical span BEFORE further samples, then
+record the new epoch under a new source/outcome key. If page-local audio inclusion
+was explicitly permitted, the already-selected context may reopen a fresh epoch
+span (not a different context or a new call). An exclusion-selected capture must
+refuse the tainted epoch: old excluded span ends at the boundary, new may-contain-local
+source is failed/never opened with no WAV/audio, prior excluded outcome stays intact.
+No overwritten old metadata or falsely excluded samples. A late taint is a source
+end, not a retroactive Start refusal. See consumer lifecycle literals.
 Sources that fail before opening a WAV retain both facts in the outcome ledger.
 
-### DRAFT PERSISTED-FORMAT AMENDMENT — pending Silvio, not filed/published
+### SEPARATE PERSISTED-FORMAT AMENDMENT — approved by Silvio (D73.11)
 
-This section is deliberately separate from the native/control proposal. Coordinator
-will show it to Silvio BEFORE filing the additive format change. Merging this
-protocol draft does not publish a change to Cassini Format or authorize shipping
-persisted metadata before that approval and GNOME/Mac adoption.
+This additive paired-field amendment is approved by Silvio in D73.11 and may land.
+It stays clearly separate from the native/control contract. This PR implements
+neither app writers/readers nor a release; GNOME/Mac adoption must preserve it on
+all surfaces below. User-facing page-media capture/copy is still undecided.
 
 Proposed additive session.json track and captureOutcome.sources fields:
 
@@ -935,10 +961,29 @@ approved here. Loss/gap/outcome/file version, WAV layout and original clock stay
 unchanged. Exports/readers must preserve the class/composition; old consumers
 cannot be used as negotiated graph writers merely because they ignore extras.
 
-Review-only schema overlay: schemas/draft/page-audio-session.schema.json, validated
+Portable `recordingDetails.captureRecord` version1 MUST preserve the same paired
+fields on BOTH `.tracks[]` and `.sources[]`, with the matching epoch key, through
+session -> meeting.json -> .cassini export/import and after raw session/audio
+removal. Track-field allowlists and typed scanners/loaders MUST carry them, along
+with source-outcome/failed/never-opened paths. Same-version merges preserve unknown
+record/track/source fields; a future record version is preserved untouched, never
+downgraded. No record version bump. Source/track epoch identities remain distinct.
+Adoption tests must exercise actual writer/exporter/importer code, not only JSON
+re-encoding. Contract round-trip literals include unknown fields and future version.
+
+Carry source class through scanner/transcript/speaker-row rendering: a mixed lane
+is never a named/isolated participant or a DOM-name candidate. No source-to-person
+mapping or diarization claim follows from kind media or a generated lane ID.
+If captureLocal:true and separately authorized native microphone:true are both
+selected AFTER preflight, keep separate mix/Me lanes with possible own voice in
+both. Never silently disable Me, subtract it, merge sources or imply isolation.
+Presentation requires approved shared copy; this adds no user-facing capture option.
+
+Amendment schema overlay: schemas/draft/page-audio-session.schema.json, validated
 IN ADDITION TO canonical session.schema.json (unchanged). Draft saved example:
-conformance/webaudio/draft-format-session.json. These are a format amendment
-proposal, not a filed/published format revision or a product-created recording.
+conformance/webaudio/draft-format-session.json. Portable overlay: schemas/draft/page-audio-details.schema.json, used with the
+existing meeting/record-version contract. These metadata literals are approved
+amendment examples, not product-created recordings or a release.
 The native request schema gains paired fields to review wire acceptance; runtime
 still needs negotiated features, byte bounds, cross-message consistency and
 provenance checks beyond stateless JSON Schema. Actual hosts are unchanged here.

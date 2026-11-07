@@ -388,6 +388,63 @@
         }
       },
       "additionalProperties": true
+    },
+    {
+      "type": "object",
+      "required": [
+        "type",
+        "features"
+      ],
+      "properties": {
+        "type": {
+          "const": "negotiate"
+        },
+        "version": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "enum": [
+            1,
+            null
+          ]
+        },
+        "features": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 64
+          }
+        }
+      },
+      "additionalProperties": true,
+      "not": {
+        "anyOf": [
+          {
+            "required": [
+              "microphone"
+            ]
+          },
+          {
+            "required": [
+              "captureLocal"
+            ]
+          },
+          {
+            "required": [
+              "captureId"
+            ]
+          },
+          {
+            "required": [
+              "resumeCapture"
+            ]
+          }
+        ]
+      }
     }
   ],
   "$defs": {

@@ -233,6 +233,26 @@
                 "type": "integer",
                 "minimum": 0,
                 "maximum": 253402300799000
+              },
+              "sourceSelection": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/graphSelection"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "selectionEnd": {
+                "oneOf": [
+                  {
+                    "$ref": "#/$defs/graphSelectionEnd"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
               }
             },
             "required": [
@@ -241,7 +261,31 @@
               "path",
               "message"
             ],
-            "additionalProperties": true
+            "additionalProperties": true,
+            "allOf": [
+              {
+                "if": {
+                  "required": [
+                    "selectionEnd"
+                  ],
+                  "properties": {
+                    "selectionEnd": {
+                      "type": "object"
+                    }
+                  }
+                },
+                "then": {
+                  "required": [
+                    "sourceSelection"
+                  ],
+                  "properties": {
+                    "sourceSelection": {
+                      "$ref": "#/$defs/graphSelection"
+                    }
+                  }
+                }
+              }
+            ]
           }
         },
         "pageState": {
@@ -283,6 +327,26 @@
         },
         "browserHealth": {
           "$ref": "#/$defs/browserHealth"
+        },
+        "sourceSelection": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/graphSelection"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "selectionEnd": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/graphSelectionEnd"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -292,7 +356,31 @@
         "path",
         "message"
       ],
-      "additionalProperties": true
+      "additionalProperties": true,
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "selectionEnd"
+            ],
+            "properties": {
+              "selectionEnd": {
+                "type": "object"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "sourceSelection"
+            ],
+            "properties": {
+              "sourceSelection": {
+                "$ref": "#/$defs/graphSelection"
+              }
+            }
+          }
+        }
+      ]
     },
     {
       "type": "object",
@@ -874,6 +962,26 @@
         },
         "browserHealth": {
           "$ref": "#/$defs/browserHealth"
+        },
+        "sourceSelection": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/graphSelection"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "selectionEnd": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/graphSelectionEnd"
+            },
+            {
+              "type": "null"
+            }
+          ]
         }
       },
       "required": [
@@ -883,7 +991,31 @@
         "path",
         "message"
       ],
-      "additionalProperties": true
+      "additionalProperties": true,
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "selectionEnd"
+            ],
+            "properties": {
+              "selectionEnd": {
+                "type": "object"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "sourceSelection"
+            ],
+            "properties": {
+              "sourceSelection": {
+                "$ref": "#/$defs/graphSelection"
+              }
+            }
+          }
+        }
+      ]
     },
     "browserHealth": {
       "type": "object",
@@ -980,6 +1112,60 @@
         "tabs"
       ],
       "additionalProperties": true
+    },
+    "graphSelection": {
+      "type": "object",
+      "properties": {
+        "sourceClass": {
+          "const": "page-audio-mix"
+        },
+        "scope": {
+          "const": "call"
+        },
+        "sourceTrackIds": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200
+          }
+        }
+      },
+      "required": [
+        "sourceClass",
+        "scope",
+        "sourceTrackIds"
+      ],
+      "additionalProperties": false
+    },
+    "graphSelectionEnd": {
+      "type": "object",
+      "required": [
+        "reason",
+        "atMs"
+      ],
+      "properties": {
+        "reason": {
+          "enum": [
+            "revoked",
+            "controlLost",
+            "nativeLost",
+            "callEnded",
+            "callEvidenceUnknown",
+            "localAudioNotSeparable",
+            "documentChanged"
+          ]
+        },
+        "atMs": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 86460000
+        }
+      },
+      "additionalProperties": false
     }
   },
   "$schema": "https://json-schema.org/draft/2020-12/schema"

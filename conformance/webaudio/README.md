@@ -39,8 +39,19 @@ local-containing mixes, with no broader fallback. Page-media scope is only for
 the trusted test controller; no user-facing option/popup action is approved.
 
 The native/control draft changes and the DRAFT PERSISTED-FORMAT AMENDMENT in SPEC.md
-have separate approval gates. Coordinator must show Silvio the latter before
-filing a format amendment. The canonical session schema remains unchanged; the
+have separate approval gates. Silvio approved the paired-field amendment in D73.11. The canonical session schema remains unchanged; the
 overlay is explicitly not a complete validator. No format publication/release,
 app adoption/pin, extension advertisement or browser installation occurs here.
 agy reviews code; Mac and GNOME provide consumer comments; coordinator merges.
+
+
+Mac consumer follow-up literals: consumer-lifecycle-vectors.json covers fresh
+composition epoch identities (including exclusion refusal), no-input native
+preflight with microphone:true/delayed acknowledgement, and sticky graph selection
+through revoke/reconnect/transport loss before first chunk or with another RTP
+source present. These remain declarative contract expectations, not a duplicate
+state-machine implementation or proof that current hosts support negotiation.
+composition-epochs.session.json and composition-exclusion-refused.session.json
+retain old excluded metadata under a distinct key. portable-details-roundtrip.json
+covers captureRecord v1 tracks AND sources, unknown fields, and future-record
+non-downgrade expectations; actual app writer/reader/exporter tests remain mandatory.

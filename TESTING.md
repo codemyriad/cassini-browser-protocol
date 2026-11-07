@@ -480,3 +480,14 @@ Later implementation must add real sample-identical inert-observer comparison,
 explicitly authorized AudioWorklet PCM/WAV, microphone isolation/refusal, resource
 caps, lifecycle/BFCache and call-end-with-continued-media proofs. Keep existing RTP
 and real Talk gates green; PR75 remains negative-only until this SPEC PR merges.
+
+
+Mac consumer contract clarification fixtures add10 total D73 contract tests:
+composition-epoch source identity/exclusion boundary; input-free native preflight
+(including old writer/microphone:true/delayed acknowledgement without any Start);
+sticky intent and selectionEnd on revoke/reconnect/transport/evidence loss; portable
+captureRecord v1 tracks/sources with unknown-field/future-version preservation.
+These validate literal/schema consistency, not an implemented host/merger/exporter.
+Native negotiate/negotiated and control owner-status additions remain unadvertised
+until later producer/consumer code. No device or native input is opened by these
+contract tests. D73.11 approves the format fields; user page-media remains undecided.

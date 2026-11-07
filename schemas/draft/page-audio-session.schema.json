@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "DRAFT D73 persisted-format amendment; pending Silvio review, not filed",
-  "$comment": "DRAFT FORMAT AMENDMENT, pending Silvio review; validate together with canonical session.schema.json, which remains unchanged. This overlay alone is not a complete session validator.",
+  "title": "D73.11 approved paired-field amendment; session overlay",
+  "$comment": "Approved additive format metadata, not a complete validator; validate together with canonical session.schema.json. Host/app implementation and release remain separate.",
   "type": "object",
   "properties": {
     "tracks": {

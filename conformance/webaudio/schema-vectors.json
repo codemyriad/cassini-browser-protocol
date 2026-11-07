@@ -191,6 +191,60 @@
         "label": "Page audio",
         "labelSource": "browser"
       }
+    },
+    {
+      "name": "preflight-before-start",
+      "schema": "request",
+      "message": {
+        "type": "negotiate",
+        "version": 1,
+        "features": [
+          "page-audio-mix-v1",
+          "source-outcomes-v1"
+        ]
+      }
+    },
+    {
+      "name": "preflight-accepted",
+      "schema": "response",
+      "message": {
+        "type": "negotiated",
+        "features": [
+          "page-audio-mix-v1",
+          "source-outcomes-v1"
+        ]
+      }
+    },
+    {
+      "name": "preflight-unsupported",
+      "schema": "response",
+      "message": {
+        "type": "negotiated",
+        "features": []
+      }
+    },
+    {
+      "name": "ended-graph-owner-retains-selection",
+      "schema": "control-extension",
+      "message": {
+        "type": "status",
+        "recording": true,
+        "tabId": 2,
+        "path": "/fixture/Recording-A",
+        "message": "Page audio ended; separately authorized microphone continues.",
+        "tracks": 1,
+        "sourceSelection": {
+          "sourceClass": "page-audio-mix",
+          "scope": "call",
+          "sourceTrackIds": [
+            "document-A:graph:1"
+          ]
+        },
+        "selectionEnd": {
+          "reason": "revoked",
+          "atMs": 500
+        }
+      }
     }
   ],
   "invalid": [
@@ -874,6 +928,55 @@
             "automaticAdmission": false
           }
         ]
+      }
+    },
+    {
+      "name": "preflight-no-microphone",
+      "schema": "request",
+      "message": {
+        "type": "negotiate",
+        "features": [
+          "page-audio-mix-v1"
+        ],
+        "microphone": true
+      }
+    },
+    {
+      "name": "preflight-no-captureLocal",
+      "schema": "request",
+      "message": {
+        "type": "negotiate",
+        "features": [
+          "page-audio-mix-v1"
+        ],
+        "captureLocal": false
+      }
+    },
+    {
+      "name": "preflight-does-not-create-recording",
+      "schema": "response",
+      "message": {
+        "type": "negotiated",
+        "features": [
+          "page-audio-mix-v1"
+        ],
+        "path": "/should-not-exist"
+      }
+    },
+    {
+      "name": "mid-capture-end-needs-owner-intent",
+      "schema": "control-extension",
+      "message": {
+        "type": "status",
+        "recording": true,
+        "tabId": 2,
+        "path": "/fixture/Recording-A",
+        "message": "Page audio ended; separately authorized microphone continues.",
+        "tracks": 1,
+        "selectionEnd": {
+          "reason": "revoked",
+          "atMs": 500
+        }
       }
     }
   ]
