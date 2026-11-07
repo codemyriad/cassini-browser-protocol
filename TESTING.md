@@ -427,3 +427,38 @@ is refused. Real Talk CI requires the Hypatia label on the isolated440Hz source 
 Ibn al-Haytham on880Hz, with dom provenance on both tracks and source outcomes. It uses
 #70's locked Nextcloud34/fullHPB disposable-VM harness and private browser/native fixtures;
 it does not establish either product app's host adoption or verified speaker identity.
+
+
+## BFCache port lifecycle
+
+`tests/bfcache.mjs` runs the shipped extension under a disposable ID/profile,
+removes Playwright's --disable-back-forward-cache default, and navigates a real
+local page away and back. It requires actual pageshow.persisted=true, identical
+page/browser document identity and hook constructor, a browser-observed closed
+old port, and a new handshaken relay BEFORE making a readiness probe. No fake
+lifecycle events, RTC/discovery mocks, native user host or real devices are used. Worker CDP diagnostics must contain no unchecked lastError;
+the observer does not consume that property. A negative control with only the
+background read removed restores successfully but emits the exact BFCache warning.
+The portable case verifies an idle cached document. On Linux, a second case uses
+profile-scoped private native hosts and an explicit retained Start on a real
+connected receive slot. It closes page WebRTC before caching, preserves the same
+normalized call URL through a POST/COOP document transition, and requires a real
+persisted restore. No cache safety reason or call-change fence is bypassed. The
+capture ID, origin, call generation, folder, one native connection and one native
+Start survive while cached, with no Stop/lost packet. After restore, actual
+generated WebRTC PCM reaches the same recording; explicit Stop finalizes it.
+This proves retained native-session continuity and post-restore PCM, not
+uninterrupted page PCM while JavaScript is frozen. The case runs automatically
+on Linux; Mac retains the idle browser proof plus lifecycle/drain VM coverage.
+
+Focused VM getter tests check synchronous callback consumption, frame cleanup,
+retained session/navigation and genuine frameClosed capture-loss handling for
+BFCache, unrelated errors and no-error disconnects. Relay tests cover both queued
+disconnect/pageshow orders, stale-port replacement and one old-token flush before
+new Start. The real browser uses commit/state waits because BFCache emits no new
+load event. Existing reload/active-PCM cases remain separate required coverage.
+
+Chrome's primary guidance: https://developer.chrome.com/blog/bfcache-extension-messaging-changes
+and https://developer.chrome.com/docs/extensions/reference/api/runtime#property-lastError.
+Graph capture/admission and WhatsApp remain separate follow-ups; this change adds
+no new call evidence, source kind or automatic recording policy.
