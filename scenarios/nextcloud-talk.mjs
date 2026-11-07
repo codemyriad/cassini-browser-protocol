@@ -8,19 +8,25 @@ export async function joinNextcloudTalk(page, {url, name, muted=false}) {
   const submit=page.getByRole('button',{name:'Submit name and join',exact:true});
   // Talk renders its call button before the asynchronous guest welcome dialog.
   await submit.waitFor({state:'visible',timeout:5000}).catch(error=>{if(error.name!=='TimeoutError')throw error;});
-  for(let phase=0;phase<8;phase++){
+  let joined=false;
+  for(let phase=0;phase<12;phase++){
+    // Let Vue finish replacing wizard dialogs before choosing a control.
+    await page.waitForTimeout(300);
     const dialog=page.getByRole('dialog').filter({visible:true}).last();
     if(await dialog.count()){
       for(const label of ['Enter your name','Display name (required)']){
         const input=dialog.getByRole('textbox',{name:label,exact:true});
         if(await input.isVisible())await input.fill(name);
       }
+      // Current Talk guest wizard exposes its name through the Guest placeholder.
+      const guestName=dialog.getByPlaceholder('Guest',{exact:true});
+      if(await guestName.isVisible())await guestName.fill(name);
       const audioToggle=dialog.getByRole('button',{name:muted?'Mute audio':'Unmute audio',exact:true});if(await audioToggle.isVisible())await audioToggle.click();
       const video=dialog.getByRole('button',{name:'Disable video',exact:true});if(await video.isVisible())await video.click();
       const join=dialog.locator('button.join-call');
       const next=dialog.getByRole('button',{name:'Next',exact:true});
       if(await submit.isVisible()){await submit.click();await submit.waitFor({state:'hidden'});continue;}
-      if(await join.isVisible()){await join.click();await leave.waitFor({timeout:30000});break;}
+      if(await join.isVisible()){await join.click();await leave.waitFor({timeout:30000});continue;}
       if(await next.isVisible()){
         const before=await dialog.innerText();
         await next.click();
@@ -32,10 +38,11 @@ export async function joinNextcloudTalk(page, {url, name, muted=false}) {
       }
       throw Error('Unrecognized Nextcloud guest dialog: '+(await dialog.innerText()).slice(0,300));
     }
-    if(await leave.isVisible())break;
+    if(await leave.isVisible()){joined=true;break;}
     await call.click();
     await page.getByRole('dialog').filter({visible:true}).or(leave).first().waitFor({timeout:30000});
   }
+  if(!joined)throw Error('Nextcloud guest wizard did not finish: '+(await page.getByRole('dialog').filter({visible:true}).last().innerText().catch(()=>'')));
   await leave.waitFor({timeout:30000});
   if(muted){
     const mute=page.getByRole('button',{name:/^Mute(?: audio)?(?: \(.*\))?$/i}).first();

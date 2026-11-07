@@ -142,6 +142,9 @@ jobs:
           python3 talk-harness/scripts/nextcloud_compatibility.py prepare --baseline nc34 --out "$RUNNER_TEMP/nextcloud-lock"
           source "$RUNNER_TEMP/nextcloud-lock/env.sh"
           timeout 900 talk-harness/bin/cassini dev stack up --services full --recording-backend none --cassini none --debug-skip-storage-scaffold --reset
+          # Cassini mode none skips AppAPI setup; verify/enable its locked bundled bytes
+          # explicitly so the stack observation validates every locked app.
+          python3 talk-harness/scripts/nextcloud_compatibility.py install-app --stack "$RUNNER_TEMP/nextcloud-lock/stack.json" --project "$PROJECT_NAME" app_api
           mkdir -p protocol/artifacts
           python3 talk-harness/scripts/nextcloud_compatibility.py observe --stack "$RUNNER_TEMP/nextcloud-lock/stack.json" --project "$PROJECT_NAME" --image "$NEXTCLOUD_IMAGE" --out protocol/artifacts/nextcloud-stack.json
           call_url=$(talk-harness/bin/cassini dev room create --name 'Cassini extension regression' | tail -n1)
