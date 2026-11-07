@@ -98,7 +98,7 @@ try{
  }
  assert.deepEqual([...new Set(peaks)].sort((a,b)=>a-b),[440,880],'remote tracks must carry separate known peer tones without cross-mixing');
  assert.deepEqual(pageErrors,[]);report.cases.push('separate remote PCM captured, no microphone, no tone cross-mixing');report.manifest=final;
- console.log('PASS real Nextcloud Talk: discovery/RTP, native automatic-start path, separate 440/880 Hz remote WAVs and finalization');success=true;
+ console.log('PASS real Nextcloud Talk: discovery/RTP, native control Start, separate 440/880 Hz remote WAVs and finalization');success=true;
 }finally{
  report.browserEvents=await worker?.evaluate(()=>nextcloudBrowserEvents).catch(error=>({error:error.message}));
  report.events=events;report.pageErrors=pageErrors;
