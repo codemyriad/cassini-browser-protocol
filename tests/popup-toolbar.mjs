@@ -34,7 +34,7 @@ try {
   const browserSession=await context.browser().newBrowserCDPSession();
   await worker.evaluate(async()=>{
     const window=await chrome.windows.getLastFocused();
-    console.log('Opening action popup in window',window.id);
+    await chrome.windows.update(window.id,{focused:true});
     await chrome.action.openPopup({windowId:window.id});
   });
   const targets=(await browserSession.send('Target.getTargets')).targetInfos;
