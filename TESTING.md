@@ -336,3 +336,23 @@ clear it on fresh evidence, and clear stale reload refusals on recovery or a
 worker error. The real DOM test checks the dark installation warning's computed
 foreground/background contrast, with a 4.5:1 floor. Poll-count and UI state waits
 are event/state-based; there are no fixed settling sleeps.
+
+
+`tests/popup-toolbar.mjs` opens the actual toolbar action through
+`chrome.action.openPopup` in a disposable extension identity/profile. It checks
+the popup target’s settled viewport and content geometry with a long tab title,
+without opening a meeting, using native hosts, or recording audio. The normal
+headless invocation is part of `npm test`; Linux CI also runs the real headed
+Chrome sizing path with `xvfb-run -a env POPUP_HEADED=1 node tests/popup-toolbar.mjs`.
+The headed Linux check requires Xvfb and xauth, installed explicitly by CI.
+The latter reproduces the viewport/preferred-width feedback that a normal
+`popup.html` tab at a preset viewport does not cover. Screenshot:
+`artifacts/popup-toolbar.png`. Linux headed runs explicitly use X11.
+
+The headed toolbar gate also runs with `POPUP_ZOOM=3`. It sets Chrome's actual
+default zoom through Settings only inside the disposable profile (per-tab zoom
+does not apply to action popups), verifies the popup device-pixel ratio, and waits
+for settled geometry. Default zoom must prefer 376px; 300% must exercise a smaller
+viewport and let body/content fit it without horizontal overflow. It saves the
+high-zoom screenshot as `artifacts/popup-toolbar-300.png`. No live profile,
+installed extension worktree or foreground user browser is modified.
