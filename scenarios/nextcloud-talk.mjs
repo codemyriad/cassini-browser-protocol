@@ -11,8 +11,20 @@ export async function joinNextcloudTalk(page, {url, name, muted=false}) {
   let joined=false;
   const deadline=Date.now()+45000;
   while(Date.now()<deadline){
-    // Let Vue finish replacing wizard dialogs before choosing a control.
-    await page.waitForTimeout(300);
+    // Wait for a usable wizard footer or a joined call, not a settling delay.
+    await page.waitForFunction(()=>{
+      const visible=e=>!!(e&&e.getBoundingClientRect().width&&e.getBoundingClientRect().height);
+      const dialogs=[...document.querySelectorAll('[role=dialog]')].filter(visible);
+      const buttons=[...document.querySelectorAll('button')].filter(visible);
+      const name=b=>b.getAttribute('aria-label')||b.innerText.trim();
+      const leave=buttons.some(b=>name(b)==='Leave call');
+      const dialog=dialogs.at(-1);
+      if(!dialog)return leave||buttons.some(b=>/^(Start|Join) call$/.test(name(b)));
+      return [...dialog.querySelectorAll('button')].filter(visible).some(b=>
+        b.getAttribute('aria-label')==='Next'||b.classList.contains('join-call')||
+        b.getAttribute('aria-label')==='Submit name and join'||b.textContent.trim()==='Submit name and join'||
+        (leave&&b.getAttribute('aria-label')==='Close'));
+    },null,{timeout:15000});
     const dialog=page.getByRole('dialog').filter({visible:true}).last();
     if(await dialog.count()){
       for(const label of ['Enter your name','Display name (required)']){
@@ -35,6 +47,16 @@ export async function joinNextcloudTalk(page, {url, name, muted=false}) {
           const visible=[...document.querySelectorAll('[role=dialog]')].filter(e=>e.getBoundingClientRect().width&&e.getBoundingClientRect().height);
           return !visible.length||visible.at(-1).innerText!==text;
         },before,{timeout:15000});
+        continue;
+      }
+      // Some Talk versions leave the device-settings modal open after joining;
+      // its hidden wizard Next button must not be mistaken for an active step.
+      const close=dialog.getByRole('button',{name:'Close',exact:true});
+      if(await leave.isVisible()&&await close.isVisible()){
+        await close.click({timeout:3000}).catch(async error=>{
+          // The wizard can dismiss itself as the call connects during the click.
+          if(await dialog.isVisible()||!await leave.isVisible())throw error;
+        });
         continue;
       }
       // Talk can temporarily replace its footer while device settings settle.
