@@ -956,3 +956,10 @@ may be copied without meeting titles,
 URLs, or recording paths. Confirmed app recording state, app auto-record policy,
 and launching the native app require additional explicit app-backed interfaces;
 the popup does not infer or fabricate them.
+
+### Toolbar popup sizing (extension 0.2.21)
+
+The action popup has an explicit 376 CSS-pixel minimum width. Its preferred
+content width is not capped by the popup viewport that Chrome is still choosing;
+that circular constraint can otherwise produce a narrow, heavily wrapped popup.
+There are no protocol or capture-policy changes.

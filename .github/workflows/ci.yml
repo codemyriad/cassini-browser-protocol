@@ -95,6 +95,8 @@ jobs:
           echo "CASSINI_ISOLATED_AUDIO=1" >> "$GITHUB_ENV"
           echo "PULSE_SERVER=unix:$private/pulse.sock" >> "$GITHUB_ENV"
       - run: npm test
+      - name: Real toolbar popup keeps its intended width
+        run: xvfb-run -a env POPUP_HEADED=1 node tests/popup-toolbar.mjs
       - uses: actions/upload-artifact@v5
         if: always()
         with:
