@@ -200,12 +200,13 @@ class LiveFolderOracle(unittest.TestCase):
                 process, result = self.evidence_case(second(connection))
                 self.assertEqual(failed(result)[1], rules, process.stdout)
 
-    def test_the_ask_names_the_committed_loss_and_stamps_across_clocks_are_not_compared(self):
+    def test_ask_identifies_committed_loss_without_comparing_request_to_placed_loss(self):
         # R94, live-folder run 42045085356: GNOME asked only after its durable commit, yet the relay
         # stamped the ask 13.29 ms before system/lost's atMs (96013.86 against 96027.15): the writer
         # places the loss at its change time, after A's frames, whose output-time stamps lead the
         # session clock (D61). The ask's lostAtMs, copied from the app's own session.json, names
-        # the committed loss exactly: that proves the order, with no band on the stamps.
+        # the committed loss exactly, with no timestamp tolerance band. Host writer tests must
+        # separately prove commit-before-send; a reference alone cannot prove durable ordering.
         lost = make.LOST_MS
         self.assertEqual(json.loads((self.root / 'base/evidence.json').read_text())['resumeRequests'][0]['lostAtMs'], lost)
 
@@ -226,7 +227,7 @@ class LiveFolderOracle(unittest.TestCase):
                 process, result = self.evidence_case(ask(lostAtMs=value))
                 self.assertEqual(failed(result)[1], ['O3.resumeAt'], process.stdout)
         # Missing (the frame had none: the driver writes null) or not a number: still a request, failed.
-        for value in (None, str(lost), True, [lost], dict(atMs=lost)):
+        for value in (None, str(lost), True, False, [lost], dict(atMs=lost)):
             with self.subTest(lostAtMs=value):
                 process, result = self.evidence_case(ask(lostAtMs=value))
                 self.assertEqual(failed(result)[1], ['O3.resumeAt'], process.stdout)
@@ -246,6 +247,18 @@ class LiveFolderOracle(unittest.TestCase):
                 evidence.write_text(json.dumps(document))
                 process, result = run_check(folder, evidence, evidence.with_name('mac.result.json'))
                 self.assertEqual(failed(result)[1], rules, process.stdout)
+
+    def test_nonfinite_loss_reference_is_not_dropped_or_accepted(self):
+        folder, evidence = self.copy()
+        original = evidence.read_text()
+        # A standard JSON exponent can overflow binary64; it remains a request,
+        # and must fail the finite loss reference check rather than disappear.
+        marker = '"lostAtMs": ' + str(make.LOST_MS)
+        self.assertEqual(original.count(marker), 1)
+        evidence.write_text(original.replace(marker, '"lostAtMs": 1e999'))
+        process, result = run_check(folder, evidence, evidence.with_name('overflow.result.json'))
+        self.assertEqual(process.returncode, 1, process.stderr)
+        self.assertEqual(failed(result)[1], ['O3.resumeAt'])
 
     def test_an_undelivered_resume_request_still_counts(self):
         # scenario.json resumeObservation.fields.delivered: the relay's forward failed (the browser

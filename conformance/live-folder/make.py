@@ -350,7 +350,7 @@ def wrong_capture_resume(session, tracks, evidence):
 def early_resume(session, tracks, evidence):
     # Asked after the kill and before the fallback committed system/lost (D52.5: wait for the commit):
     # no seam was written yet, so the ask names none (resumeCapture without lostAtMs, R94). Its pipe
-    # time alone would not show it: the relay and the writer stamp on different clocks.
+    # time alone would not show it: the writer places the loss after accepted media frames.
     evidence['resumeRequests'] = [resume_request(95600, 'resume-1', lost_at=None)]
 
 

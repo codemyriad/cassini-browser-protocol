@@ -124,11 +124,14 @@ per loss and control connection (a reconnect asks once more). The identity a req
 the one the extension's service worker holds for the recording, read at record. `lostAtMs`
 is the frame's `resumeCapture.lostAtMs` as written, `null` when the frame has none: the
 `atMs` of the committed loss the host asks to resume, copied from its own `session.json`
-(SPEC-CONTROL R94). It is on the folder's clock and is never compared with `atMs`, which is
-the relay's: the writer places system/lost at its own change time, and browser frames carry
-output-time stamps that lead the session clock (D61), so a correct ask can be stamped on the
-pipe before the system/lost it follows (live-folder run 42045085356: 13.3 ms). The exact
-`lostAtMs` is what proves the order: a host knows that `atMs` only once it has written it.
+(SPEC-CONTROL R94). It names the placed seam and is not compared with the request's
+`atMs`: the writer places system/lost after accepted output-time frames, whose timestamps
+can lead the session clock (D61), so a correct request can appear on the pipe before
+its committed loss's placed time (run42045085356:13.3ms). This is a placement difference,
+even when both clocks map to the same session timeline. Exact `lostAtMs` equality
+identifies the referenced loss; it does not independently prove fsync-before-send.
+Hosts must test durable commit before copying/sending under their capture lock;
+the oracle cannot distinguish a truthful reference from a guessed future value.
 A request without a finite `lostAtMs` is still recorded (the host asked), and O3.resumeAt
 fails it. This is
 independent of the app under test: they are the bytes its control host wrote, copied by a
@@ -182,7 +185,7 @@ O3.resumeOnce too: the host asked. Any other `delivered` value makes the evidenc
 | O3.system | exactly one placed system track (a system track with no start is left out); it starts at lost (SPEC S-6) and ends within EDGE_MS of restored |
 | O3.refusals | no `startRejected` refusal and no `resumeRefused` detail |
 | O3.resumeOnce | the evidence shows at least one resume request, every one names this recording (its `captureId` and `timelineOriginMs` equal the evidence's), and no two come from the same control connection (D52.5: once per loss and control connection; the scenario has one loss) |
-| O3.resumeAt | every request naming this recording names the committed loss (the last system/lost before the first browser/restored): its `lostAtMs` is a number exactly equal to that system/lost's `atMs`; and it is at or before that browser/restored; there is at least one (R94: the lower bound is the exact `lostAtMs`, causal order with no pipe-to-folder stamp comparison; the upper bound still compares the relay's `atMs` with the folder's restored `atMs` across clocks, safe only because the D61 lead moves restored later and restored trails the ask by the extension Start, native resume and first PCM, hundreds of ms) |
+| O3.resumeAt | at least one request names this recording; every such request carries a finite numeric `lostAtMs` exactly equal to the last system/lost before the first browser/restored, and its request `atMs` is at or before that restoration. R94 removes request-stamp vs placed-loss comparison, with no tolerance band. The remaining upper bound is a scenario-specific sanity check: restoration follows native resume/first PCM and output-time lead moves its placement later. Matching the loss reference does not independently prove durable-write ordering; host tests must prove commit-before-send. |
 | O4.keys | every remote track has a `sourceTrackId`, and there are exactly 2 |
 | O4.outcomeRows | exactly 2 `captureOutcome.sources` rows, one per key, each listing exactly that key's placed track ids, both `captured` (so no `neverAudio`); strict: a row that also lists a track with no start fails |
 | O4.evidence | `maxSourceCount` 3, slot C `connected` with 0 packets received |

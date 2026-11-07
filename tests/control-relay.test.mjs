@@ -348,11 +348,11 @@ test('a resume request without a finite lostAtMs is still recorded, lostAtMs as 
   await writeFile(path.join(observe, '1', 'host'), `999999 ${process.pid}\n`);
   const r = (frame, requestId, capture) => ({ frame, atWall: 1000 + frame, atMono: 1000 + frame, bytes: 9, type: 'command', action: 'start', requestId,
     resumeCapture: { captureId: 'c', timelineOriginMs: 1, ...capture } });
-  const frames = [r(0, 'a', { lostAtMs: LOST }), r(1, 'b', { lostAtMs: null }), r(2, 'c', {}), r(3, 'd', { lostAtMs: '96027.15' }), r(4, 'e', { lostAtMs: 0 })];
-  await writeFile(path.join(observe, '1', 'frames.jsonl'), [{ relay: 999998, startedWall: 1 }, ...frames, { end: true, bytes: 45, frames: 5 }].map(e => JSON.stringify(e) + '\n').join(''));
+  const frames = [r(0, 'a', { lostAtMs: LOST }), r(1, 'b', { lostAtMs: null }), r(2, 'c', {}), r(3, 'd', { lostAtMs: '96027.15' }), r(4, 'e', { lostAtMs: 0 }), r(5, 'f', { lostAtMs: false }), r(6, 'g', { lostAtMs: -1 })];
+  await writeFile(path.join(observe, '1', 'frames.jsonl'), [{ relay: 999998, startedWall: 1 }, ...frames, { end: true, bytes: 63, frames: 7 }].map(e => JSON.stringify(e) + '\n').join(''));
   const connections = await verifyControlPipe(host, process.pid, 'stop');
   assert.deepEqual(resumeRequests(connections, 1000, 2000).map(q => [q.atMs, q.requestId, q.lostAtMs]),
-    [[0, 'a', LOST], [1, 'b', null], [2, 'c', null], [3, 'd', '96027.15'], [4, 'e', 0]]);
+    [[0, 'a', LOST], [1, 'b', null], [2, 'c', null], [3, 'd', '96027.15'], [4, 'e', 0], [5, 'f', false], [6, 'g', -1]]);
 });
 
 test('an input error fails the run; a resume request a failed forward never delivered is kept, marked undelivered', async () => {

@@ -481,18 +481,24 @@ uses its captureId and exact origin from session construction, including status
 before the native ACK and every scoped Stop. It does not invent an alias token
 or shift timestamps. After asynchronous lookup it checks the selected generation.
 
-`resumeCapture.lostAtMs` (R94): the host MUST send it, a number, the `atMs` of the
-committed othersSource seam it asks to resume, copied at send time from the
-recording's session.json exactly as the host wrote it there: the newest system/lost
-(D52.4), or the system/missing stand-in (D49, D58 #2) when that is what it resumes
-(`0` in the example above). It names which committed loss the ask answers, on the
-recording's own clock, so evidence checks that the ask followed the commit by this
-exact value and never by comparing stamps taken on different clocks (the live-folder
-oracle's O3.resumeAt). A host that has not written that seam has nothing to name and
-does not ask (D52.5, below). The extension does not read it: it neither requires nor
+`resumeCapture.lostAtMs` (R94): the host MUST send it, a finite nonnegative
+number, the `atMs` of the committed othersSource seam it asks to resume: the newest
+system/lost (D52.4), or the system/missing stand-in (D49, D58 #2) when that is what
+it resumes (`0` in the example above). After the durable checkpoint completes,
+the host MUST copy the value exactly from its committed session state while
+holding the capture lock (or equivalent serialization with Stop and transitions).
+It MUST NOT round it, recompute it from a request/transport timestamp, or guess
+an event that is not yet committed. A host without that commit does not ask.
+
+The value identifies which committed loss the ask answers. The live-folder
+oracle's O3.resumeAt checks exact reference equality without comparing the request
+stamp with the placed loss timestamp: accepted output-time frames can place that
+seam later than the commit instant. Equality alone does not independently prove
+fsync-before-send ordering; both hosts must test that ordering at their actual
+writer boundary (D52.5). The extension does not read it: it neither requires nor
 validates `lostAtMs`, ignores it like any unknown member and does not forward it in
 the native `resume` packet. Extension 0.2.13 already behaves so; no companion
-version changes.
+version change is required by R94.
 
 The first native packet is deliberately a distinct `type:"resume"`, version1,
 with independent:true, captureId, timelineOriginMs, callGeneration and features

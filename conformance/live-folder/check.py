@@ -585,16 +585,14 @@ class Run:
         connections = [r['connection'] for r in every]
         rule('resumeOnce', bool(every) and len(mine) == len(every) and len(set(connections)) == len(connections),
              dict(requests=observed, recording=[self.e['captureId'], self.e['timelineOriginMs']]))
-        # R94: the lower bound is causal, not a stamp comparison. The host names the committed loss it
-        # asks to resume (resumeCapture.lostAtMs, copied from its own session.json), which it can know
-        # only once that system/lost is written, so an exact match proves the ask followed the commit.
-        # The relay's atMs and the writer's lost atMs are on different clocks (browser frames carry
-        # output-time stamps that lead the session clock, D61): no lower bound, no tolerance band.
-        # The upper bound, atMs <= browser/restored's atMs, IS still a cross-clock comparison (relay
-        # monotonic vs folder). It is kept because it is safe here and only here: the D61 lead pushes
-        # restored later on the folder clock, not earlier, and restored follows the ask through the
-        # extension's Start, the native resume and the first PCM, hundreds of ms. Do not copy this
-        # reasoning onto a bound without that margin.
+        # R94 identifies the committed loss, not the commit instant. The host must copy its
+        # exact placed atMs only after the durable checkpoint, under the capture lock. Matching
+        # that reference alone is not independent fsync-order proof; host writer tests cover it.
+        # A request's monotonic stamp can precede the loss's placed time because accepted frames
+        # carry output-time lead (D61), even when both clocks map to the same session timeline.
+        # Keep the scenario's upper-bound sanity check: restoration follows the ask through
+        # native resume/first PCM, and output-time lead moves its placement later, not earlier.
+        # This is not a general proof for comparing timestamps from independent producers.
         seam = self.resume_seam()
         rule('resumeAt', seam is not None and bool(mine) and all(
             _number(r['lostAtMs']) and r['lostAtMs'] == seam[0] and r['atMs'] <= seam[1] for r in mine),
