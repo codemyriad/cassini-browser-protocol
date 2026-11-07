@@ -1138,7 +1138,7 @@ Routing and admission are separate from recording state:
 | Evidence/classification | App behavior |
 | --- | --- |
 | active + mixed | Signal-only candidate; app may automatically start system-audio Others ONLY under its existing auto-record opt-in, permission/readiness and duplicate/Stop suppression rules |
-| inactive or unknown + mixed | No new automatic recording; positive callEnded stops the associated automatic call recording, even if media still plays |
+| inactive or unknown + mixed | No new automatic recording; positive callEnded ends that association and stops the shared automatic recording when its last association ends, even if media still plays |
 | separated | Browser capture remains the existing RTP sourceCount/heard/readiness/auto-opt-in path; a call signal alone cannot supply RTP proof or start browser capture |
 | unknown classification | No signal-driven route or automatic Start; never guess browser or system from page audio |
 
@@ -1176,9 +1176,11 @@ cannot end its replacement. Never match by tab alone, title, audio or hostname.
 
 The extension publishes facts, not app timers or capture commands. **App policy**
 withdraws eligibility immediately on unknown, row removal, control loss or
-navigation, and starts a120-second monotonic evidence-loss grace for each affected
-association. Repeated unknown/removal/loss and system/microphone audio never reset
-or extend that deadline. Fresh affirmative active evidence for that SAME stable
+navigation, and starts a 120-second monotonic evidence-loss grace for each affected
+association whose recording is already running. The grace never authorizes a pending Start after eligibility
+is lost: held permission/input completion must revalidate active same-call evidence
+and Stop intent before opening inputs. Repeated unknown/removal/loss and
+system/microphone audio never reset or extend that deadline. Fresh affirmative active evidence for that SAME stable
 association before expiry clears the loss grace and reconciles its owner without
 duplicate recording. At expiry the association ends; never resurrect it from
 cached active state. Positive current callEnded ends the matching association
@@ -1195,7 +1197,7 @@ Fresh active same-call evidence can maintain/reconcile the running
 association independently of a changed classification; admission of a NEW call
 still needs active+mixed and the existing auto-record opt-in. Separate-stream RTP
 policy/recovery remains unchanged for RTP owners. The extension never implements
-a120-second timer, decides microphone policy or commands a system capture here.
+a 120-second timer, decides microphone policy or commands a system capture here.
 
 **Overlapping mixed calls share ONE signal-owned system recording.** The app
 reference-counts stable call associations (including their bounded loss grace).
@@ -1225,8 +1227,8 @@ copy; a protocol pin alone does not implement these rules.
 
 conformance/control/call-signals-vectors.json contains shape acceptance/refusal,
 remote-audio routing, passive-media and synthetic independent call lifecycle
-literals. Call end with continued media expects system Stop for the associated
-automatic recording; opt-out never starts. These are SPEC/schema fixtures, not a
+literals. Call end with continued media expects system Stop when the LAST
+association ends; opt-out never starts. These are SPEC/schema fixtures, not a
 site detector, live WhatsApp claim or implemented app policy. PR75 retains its
 real Chromium passive-media negatives unchanged. Future adapter/app PRs need E1
 state/event proofs of actual start/end, generation/reconnect/Stop suppression,
