@@ -436,11 +436,20 @@ removes Playwright's --disable-back-forward-cache default, and navigates a real
 local page away and back. It requires actual pageshow.persisted=true, identical
 page/browser document identity and hook constructor, a browser-observed closed
 old port, and a new handshaken relay BEFORE making a readiness probe. No fake
-lifecycle events, RTC/discovery mocks, capture commands, native user host or
-devices are used. Worker CDP diagnostics must contain no unchecked lastError;
+lifecycle events, RTC/discovery mocks, native user host or real devices are used. Worker CDP diagnostics must contain no unchecked lastError;
 the observer does not consume that property. A negative control with only the
 background read removed restores successfully but emits the exact BFCache warning.
-The browser case is an idle cached-document proof, not active-WebRTC BFCache proof.
+The portable case verifies an idle cached document. On Linux, a second case uses
+profile-scoped private native hosts and an explicit retained Start on a real
+connected receive slot. It closes page WebRTC before caching, preserves the same
+normalized call URL through a POST/COOP document transition, and requires a real
+persisted restore. No cache safety reason or call-change fence is bypassed. The
+capture ID, origin, call generation, folder, one native connection and one native
+Start survive while cached, with no Stop/lost packet. After restore, actual
+generated WebRTC PCM reaches the same recording; explicit Stop finalizes it.
+This proves retained native-session continuity and post-restore PCM, not
+uninterrupted page PCM while JavaScript is frozen. The case runs automatically
+on Linux; Mac retains the idle browser proof plus lifecycle/drain VM coverage.
 
 Focused VM getter tests check synchronous callback consumption, frame cleanup,
 retained session/navigation and genuine frameClosed capture-loss handling for
