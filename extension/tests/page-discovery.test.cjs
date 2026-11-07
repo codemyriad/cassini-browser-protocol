@@ -10,8 +10,9 @@ const cases=JSON.parse(fs.readFileSync(path.join(contract,'conformance/control/c
 
 function fixture() {
   class Peer {
-    constructor() { this.connectionState='new';this.iceConnectionState='new';this.signalingState='stable';this.senders=[];this.receivers=[]; }
-    addEventListener() {}
+    constructor() { this.connectionState='new';this.iceConnectionState='new';this.signalingState='stable';this.senders=[];this.receivers=[];this.listeners=new Map(); }
+    addEventListener(name,fn) { const list=this.listeners.get(name)||[];list.push(fn);this.listeners.set(name,list); }
+    emit(name){for(const fn of this.listeners.get(name)||[])fn();}
     getTransceivers(){return this.receivers;}
     getSenders(){return this.senders;}
     getReceivers(){return this.receivers.map(slot=>slot.receiver);}
@@ -173,4 +174,47 @@ for(const observe of ['getStats','getReceivers','getSenders','getTransceivers'])
  await f.tick();assert.equal(f.state().sourceCount,1);assert.equal(f.state().heard,false);
  old.receivers[0].reports=[report(210)];await f.tick();assert.equal(f.state().heard,false);
  old.receivers[0].reports=[report(220)];await f.tick();assert.equal(f.state().heard,true);
+});
+
+for(const how of ['close','connection event','connection prune','signaling prune'])
+test('closed peer remains absent through library teardown: '+how,async()=>{
+ const f=fixture();f.window.location={href:'https://meeting.test/A'};f.discover();
+ f.window.location.href='https://meeting.test/B';f.discover();
+ const pc=f.peer();pc.iceConnectionState='connected';
+ pc.receivers[0].reports=[report(0)];await f.tick();
+ pc.receivers[0].reports=[report(10)];await f.tick();pc.receivers[0].reports=[report(20)];await f.tick();
+ assert.equal(f.state().heard,true);
+ const counts=[...pc.listeners.values()].map(list=>list.length);
+ if(how==='close')pc.close();
+ else if(how==='signaling prune')pc.signalingState='closed';
+ else {pc.connectionState='closed';if(how==='connection event')pc.emit('connectionstatechange');}
+ f.discover();assert.equal(f.state().sourceCount,0,'closed connection cannot use stale connected ICE');
+ for(const name of ['getReceivers','getSenders','getTransceivers','getStats','close']){
+  pc[name]();f.discover();await f.tick();
+  assert.equal(f.state().sourceCount,0,name+' cannot resurrect the source');
+  assert.equal(f.state().heard,false);
+  assert.deepEqual([...pc.listeners.values()].map(list=>list.length),counts,'no new listeners after '+name);
+ }
+ // Even a late negotiation or misleading later state cannot undo the tombstone.
+ pc.connectionState='connected';pc.signalingState='stable';
+ await pc.setRemoteDescription({type:'answer',sdp:'late teardown'});pc.getReceivers();
+ pc.receivers[0].reports=[report(100)];await f.tick();
+ assert.equal(f.state().sourceCount,0);assert.equal(f.state().heard,false);
+ assert.deepEqual([...pc.listeners.values()].map(list=>list.length),counts);
+});
+
+test('a closed cached-constructor peer is never registered',async()=>{
+ const f=fixture(),pc=f.cachedPeer();pc.receivers=[receiver()];pc.connectionState='closed';pc.iceConnectionState='connected';
+ for(const name of ['getReceivers','getSenders','getTransceivers','getStats','close'])pc[name]();
+ await f.tick();assert.equal(f.state().sourceCount,0);assert.equal(pc.listeners.size,0);
+});
+
+test('internal discovery and remote-description adoption use original getters',async()=>{
+ const f=fixture();f.window.location={href:'https://meeting.test/A'};f.discover();
+ f.window.location.href='https://meeting.test/B';f.discover();
+ const pc=f.cachedPeer();pc.connectionState='connected';pc.receivers=[receiver()];pc.getReceivers();
+ pc.getTransceivers=()=>{throw Error('library getter must not be called internally');};
+ await pc.setRemoteDescription({type:'answer',sdp:'B'});await f.tick();
+ assert.equal(f.state().sourceCount,1,'fresh B negotiation adopts the receiver through original getter');
+ pc.close();await f.tick();assert.equal(f.state().sourceCount,0);
 });

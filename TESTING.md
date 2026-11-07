@@ -366,3 +366,11 @@ before fresh source inventory returns. They reject old/forged/missing metadata,
 stale epochs, closed/disconnected frames and hung checks; recovery of an existing
 capture must not create a duplicate native Start. The independent real Talk HPB
 harness owns the final inventory-before-Start and separate-input WAV proof.
+
+
+Closed-peer recovery regressions exercise post-close library getters, stats and repeated
+close calls after explicit close, a connection-state event, or state-based pruning.
+Closed peers remain terminal even with stale connected ICE; listener counts cannot grow,
+and capture spans stop without reopening through DOM aliases or delayed negotiation.
+Internal discovery, negotiation, scan and sender-enabled reads use the original captured
+peer methods rather than the library-facing observation wrappers.
