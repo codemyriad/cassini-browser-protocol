@@ -21,6 +21,8 @@ const id=[...createHash('sha256').update(key).digest('hex').slice(0,32)].map(c=>
 assert.notEqual(id,'pcafdaahfhjiolfpfnlhmljfgoabbaij');
 const server=createServer((_request,response)=>response.end('<!doctype html><title>Generated meeting with a long title to check the companion toolbar popup layout</title>Meeting fixture'));
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
+const zoom=Number(process.env.POPUP_ZOOM || 1);
+assert.ok([1,3].includes(zoom),'fixture supports default or 300% browser zoom');
 let context;
 try {
   context=await chromium.launchPersistentContext(path.join(temporary,'profile'),{
@@ -31,6 +33,22 @@ try {
   const meeting=await context.newPage();
   await meeting.goto(`http://127.0.0.1:${server.address().port}/`);
   await meeting.bringToFront();
+  const unzoomedDpr=await meeting.evaluate(()=>devicePixelRatio);
+  // Action popups use Chrome's default zoom, not a tab's per-origin zoom.
+  // Change it only through Settings in this disposable browser profile.
+  if(zoom!==1){
+    const settings=await context.newPage();
+    await settings.goto('chrome://settings/appearance');
+    const applied=await settings.evaluate(async factor=>{
+      await new Promise((resolve,reject)=>chrome.settingsPrivate.setDefaultZoom(factor,()=>{
+        chrome.runtime.lastError?reject(Error(chrome.runtime.lastError.message)):resolve();
+      }));
+      return new Promise(resolve=>chrome.settingsPrivate.getDefaultZoom(resolve));
+    },zoom);
+    assert.equal(applied,zoom,'Chrome must apply actual default browser zoom');
+    await settings.close();
+    await meeting.bringToFront();
+  }
   const browserSession=await context.browser().newBrowserCDPSession();
   await worker.evaluate(async()=>{
     const window=await chrome.windows.getLastFocused();
@@ -58,18 +76,19 @@ try {
     await browserSession.send('Target.sendMessageToTarget',{sessionId,message:JSON.stringify({id:requestId,method,params})});
     return reply;
   }
-  await popupCall('Runtime.evaluate',{expression:`new Promise((resolve,reject)=>{
+  const ready=await popupCall('Runtime.evaluate',{expression:`new Promise((resolve,reject)=>{
     const done=()=>document.querySelector('main[aria-busy="false"]');
     if(done()){resolve();return;}
     const observer=new MutationObserver(()=>{if(done()){observer.disconnect();clearTimeout(timer);resolve();}});
     const timer=setTimeout(()=>{observer.disconnect();reject(Error('Popup did not finish checking'));},8000);
     observer.observe(document.documentElement,{subtree:true,attributes:true});
   })`,awaitPromise:true});
+  assert.ok(!ready.exceptionDetails,JSON.stringify(ready));
   const geometry=await popupCall('Runtime.evaluate',{expression:`new Promise((resolve,reject)=>{
     let previous=null,unchanged=0;const deadline=performance.now()+3000;
     function measure(){
       const size={viewport:innerWidth,body:document.body.getBoundingClientRect().width,
-        content:document.documentElement.scrollWidth,title:document.getElementById('tab-title').getBoundingClientRect().height};
+        content:document.documentElement.scrollWidth,devicePixelRatio,zoom:${zoom},title:document.getElementById('tab-title').getBoundingClientRect().height};
       const signature=JSON.stringify(size);
       unchanged=signature===previous?unchanged+1:0;previous=signature;
       if(unchanged>=3){resolve(size);return;}
@@ -80,12 +99,15 @@ try {
   })`,awaitPromise:true,returnByValue:true});
   assert.ok(!geometry.exceptionDetails,JSON.stringify(geometry));
   const size=geometry.result.value;
+  assert.ok(Math.abs(size.devicePixelRatio/unzoomedDpr-zoom)<0.01,'actual popup must use the requested browser zoom');
   console.log('Toolbar popup geometry:',JSON.stringify(size));
   await mkdir(path.join(root,'artifacts'),{recursive:true});
   const screenshot=await popupCall('Page.captureScreenshot');
-  await writeFile(path.join(root,'artifacts/popup-toolbar.png'),Buffer.from(screenshot.data,'base64'));
-  assert.ok(size.viewport>=376,`toolbar popup collapsed to ${size.viewport}px instead of 376px`);
-  assert.equal(size.body,376);
+  await writeFile(path.join(root,zoom===1?'artifacts/popup-toolbar.png':'artifacts/popup-toolbar-300.png'),Buffer.from(screenshot.data,'base64'));
+  if(zoom===1)assert.ok(size.viewport>=376,`toolbar popup collapsed to ${size.viewport}px instead of 376px`);
+  if(zoom===1)assert.equal(size.body,376);
+  else assert.ok(size.viewport<376,'high zoom must constrain the real action popup');
+  assert.ok(size.body<=size.viewport,'popup body must shrink to Chrome’s constrained viewport');
   assert.ok(size.content<=size.viewport,'popup content must not overflow horizontally');
-  console.log('PASS real toolbar popup: intended width with long current-tab title, no horizontal overflow');
+  console.log(`PASS real toolbar popup at ${zoom*100}%: preferred or constrained width, no horizontal overflow`);
 } finally {await context?.close();await new Promise(resolve=>server.close(resolve));await rm(temporary,{recursive:true,force:true});}

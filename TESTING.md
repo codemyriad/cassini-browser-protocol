@@ -348,3 +348,11 @@ The headed Linux check requires Xvfb and xauth, installed explicitly by CI.
 The latter reproduces the viewport/preferred-width feedback that a normal
 `popup.html` tab at a preset viewport does not cover. Screenshot:
 `artifacts/popup-toolbar.png`. Linux headed runs explicitly use X11.
+
+The headed toolbar gate also runs with `POPUP_ZOOM=3`. It sets Chrome's actual
+default zoom through Settings only inside the disposable profile (per-tab zoom
+does not apply to action popups), verifies the popup device-pixel ratio, and waits
+for settled geometry. Default zoom must prefer 376px; 300% must exercise a smaller
+viewport and let body/content fit it without horizontal overflow. It saves the
+high-zoom screenshot as `artifacts/popup-toolbar-300.png`. No live profile,
+installed extension worktree or foreground user browser is modified.

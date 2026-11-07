@@ -959,7 +959,9 @@ the popup does not infer or fabricate them.
 
 ### Toolbar popup sizing (extension 0.2.21)
 
-The action popup has an explicit 376 CSS-pixel minimum width. Its preferred
-content width is not capped by the popup viewport that Chrome is still choosing;
-that circular constraint can otherwise produce a narrow, heavily wrapped popup.
+The action popup prefers 376 CSS pixels during intrinsic sizing. The root's
+percentage maximum and the body's inherited width let it shrink to Chrome's
+final containing block, including the smaller CSS viewport at high browser zoom.
+It uses no viewport-unit cap that feeds Chrome's provisional viewport back into
+its preferred-size calculation, and no hard minimum that overflows at 300% zoom.
 There are no protocol or capture-policy changes.
