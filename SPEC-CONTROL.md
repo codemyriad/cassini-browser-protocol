@@ -1262,7 +1262,10 @@ this amendment does not claim to fix old binaries through an ignored new field.
 
 Generic positive evidence requires live remote media on a connected RTC session
 AND a live local audio-capture track actually sent by the page in that bound
-session. Track provenance must come from the page's getUserMedia result or a
+session. Fresh received-media and captured-sender media progress must both be
+observed; connected state, a live/enabled track or an accumulated stats counter
+without fresh progress is insufficient. Track provenance must come from the
+page's getUserMedia result or a
 proven clone, not a permission grant, preview, allocated sendonly slot or synthetic
 MediaStreamDestination. No hostname, label, graph, energy, playback or RTP count
 can supply the missing capture-sender proof. Observation must not open a microphone.
