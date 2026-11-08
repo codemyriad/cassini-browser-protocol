@@ -96,9 +96,13 @@ export class AppControl {
     this.publishing = (async () => {
       while (this.dirty && this.port && !this.connecting) {
         this.dirty = false;
-        const port = this.port;
+        const port = this.port, epoch = this.signalEpoch;
         try {
-          for (const message of await this.snapshot()) this.send(port, message);
+          const messages = await this.snapshot({verified:this.verifiedConfigured});
+          // A configure/revoke crossing an asynchronous inventory lookup must
+          // not publish aliases belonging to the previous negotiated shape.
+          if (epoch !== this.signalEpoch) { this.dirty = true; continue; }
+          for (const message of messages) this.send(port, message);
           if (port === this.port) this.ready = true;
         }
         catch { /* A failed metadata refresh must never stop audio capture. */ }
@@ -107,6 +111,7 @@ export class AppControl {
   }
   resetSignals() {
     this.signalsConfigured = false;
+    this.verifiedConfigured = false;
     this.signalEpoch = (this.signalEpoch || 0) + 1;
     this.signalSequence = 0;
     this.signalRun = null;
@@ -123,7 +128,7 @@ export class AppControl {
         this.signalDirty = false;
         const port = this.port, epoch = this.signalEpoch;
         try {
-          const snapshot = await this.signalSnapshot();
+          const snapshot = await this.signalSnapshot({verified:this.verifiedConfigured});
           if (this.signalRun !== run || port !== this.port || epoch !== this.signalEpoch || !this.signalsConfigured) break;
           if (!snapshot) continue;
           const serialized = JSON.stringify(snapshot);
@@ -142,15 +147,18 @@ export class AppControl {
     if (port !== this.port) return;
     if (message?.type === 'configure') {
       const values = message.capabilities;
-      if (!Array.isArray(values) || values.length > 1 || values.some(value => value !== 'call-signals-v1') ||
+      if (!Array.isArray(values) || values.length > 2 || new Set(values).size !== values.length ||
+          values.some(value => !['call-signals-v1','verified-auto-admission-v1'].includes(value)) ||
+          (values.includes('verified-auto-admission-v1') && !values.includes('call-signals-v1')) ||
           Object.keys(message).some(key => !['type','capabilities'].includes(key))) return;
       this.signalEpoch++;
       this.signalRun = null;
       this.lastSignals = null;
       this.signalsConfigured = values.includes('call-signals-v1') && this.capabilities.includes('call-signals-v1') && typeof this.signalSnapshot === 'function';
+      this.verifiedConfigured = this.signalsConfigured && values.includes('verified-auto-admission-v1') && this.capabilities.includes('verified-auto-admission-v1');
       this.signalDirty = false;
-      this.send(port,{type:'configured',capabilities:this.signalsConfigured ? ['call-signals-v1'] : []});
-      this.publishSignals();
+      this.send(port,{type:'configured',capabilities:this.signalsConfigured ? ['call-signals-v1',...(this.verifiedConfigured ? ['verified-auto-admission-v1'] : [])] : []});
+      this.publish();
       return;
     }
     // heartbeat-v1: answer at once, never through the command queues (a Stop
