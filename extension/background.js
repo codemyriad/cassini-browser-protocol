@@ -981,6 +981,7 @@ const genericProducer = new GenericCallEvidenceProducer({identity:()=>browserIns
 const controlCapabilities = ["independent-sessions-v1", "call-evidence-v1", "page-state-v1", "multi-stream-v1", "resume-capture-v1", "heartbeat-v1", "tab-readiness-v1"];
 const appControl = new AppControl({
   runtime: chrome.runtime, alarms: chrome.alarms, busy: startBusy, capabilities: controlCapabilities, signalSnapshot:options=>options.verified?genericProducer.snapshot(options):signalProducer.snapshot(), identity: () => ({extensionVersion,extensionInstance,...companionDiagnostics}), cancelPending: cancelPendingStart,
+  signalFinalize:(value,options)=>options.verified?genericProducer.finalize(value):value,
   connected: repairOpenTabs,
   snapshot: async options => { await recovery; return [await meetings(options), controlStatus()]; },
   command: controlCommand

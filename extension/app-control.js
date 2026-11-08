@@ -2,8 +2,8 @@
 // Persistent app management, independent of the per-recording PCM connection.
 export class AppControl {
   constructor({ runtime, alarms, snapshot, command, capabilities = [], identity = () => ({}), cancelPending = () => {}, connected = async () => {},
-                later = (fn, ms) => setTimeout(fn, ms), cancel = id => clearTimeout(id), busy = () => false, signalSnapshot = null }) {
-    Object.assign(this, { runtime, alarms, snapshot, command, capabilities, identity, cancelPending, connected, later, cancel, busy, signalSnapshot });
+                later = (fn, ms) => setTimeout(fn, ms), cancel = id => clearTimeout(id), busy = () => false, signalSnapshot = null, signalFinalize = value => value }) {
+    Object.assign(this, { runtime, alarms, snapshot, command, capabilities, identity, cancelPending, connected, later, cancel, busy, signalSnapshot, signalFinalize });
     this.port = null;
     this.resetSignals();
     this.ready = false;
@@ -130,8 +130,10 @@ export class AppControl {
         this.signalDirty = false;
         const port = this.port, epoch = this.signalEpoch;
         try {
-          const snapshot = await this.signalSnapshot({verified:this.verifiedConfigured,epoch:this.signalConnectionEpoch,configurationEpoch:this.signalEpoch});
+          let snapshot = await this.signalSnapshot({verified:this.verifiedConfigured,epoch:this.signalConnectionEpoch,configurationEpoch:this.signalEpoch});
           if (this.signalRun !== run || port !== this.port || epoch !== this.signalEpoch || !this.signalsConfigured) break;
+          if (!snapshot) continue;
+          snapshot=this.signalFinalize(snapshot,{verified:this.verifiedConfigured});
           if (!snapshot) continue;
           const serialized = JSON.stringify(snapshot);
           if (serialized === this.lastSignals && !this.verifiedConfigured) continue;

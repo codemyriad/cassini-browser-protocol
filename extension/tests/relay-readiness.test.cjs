@@ -105,7 +105,9 @@ test('recovery injects only a relay, reuses compatible instances, and degrades r
     app.chrome.tabs.sendMessage=async()=>null;
     app.chrome.scripting={async executeScript(value){injections.push(value);throw Error('Cannot access contents of this page')}};
     await app.api.repairTab(2);
-    assert.deepEqual(JSON.parse(JSON.stringify(injections)),[{target:{tabId:2,allFrames:true},files:['relay.js'],world:'ISOLATED'}]);
+    assert.deepEqual(JSON.parse(JSON.stringify(injections)),[{target:{tabId:2,allFrames:true},world:'ISOLATED'}]);
+    assert.equal(typeof injections[0].func,'function');
+    assert.equal(injections.some(value=>value.world==='MAIN'),false);
     assert.equal(app.api.controlStatus().browserHealth.state,'idle');
     const instance=app.api.controlStatus().browserHealth.extensionInstance;
     app.chrome.tabs.sendMessage=async()=>({connected:true,protocol:1,instanceId:instance});
@@ -141,7 +143,7 @@ test('a relay that never answers cannot hold recovery or the first status foreve
     const repair=app.api.repairTab(2);
     await until(()=>timers.size===1);assert.equal([...timers.values()][0].ms,2500);
     [...timers.values()][0].fn();
-    await until(()=>injections===1&&timers.size===1);
+    await until(()=>injections===2&&timers.size===1);
     [...timers.values()][0].fn();
     await repair;
     assert.equal(app.api.browserHealth().state,'idle');

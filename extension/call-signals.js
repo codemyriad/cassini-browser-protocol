@@ -98,6 +98,7 @@ export class GenericCallEvidenceProducer {
     timers={later:(fn,ms)=>setTimeout(fn,ms),cancel:id=>clearTimeout(id)}}) {
     Object.assign(this,{identity,tabs,frames,current,executeScript,callIdentity,bindEpisode,now,timers});
     this.publications=new WeakMap();this.lastWire=null;this.epoch=null;this.lastPublishedAt=-Infinity;
+    this.prepared=new WeakMap();
   }
   async bounded(read) {
     let deadline;
@@ -105,6 +106,21 @@ export class GenericCallEvidenceProducer {
       deadline=this.timers.later(()=>resolve(null),750);
     })]); } catch { return null; }
     finally { this.timers.cancel(deadline); }
+  }
+  finalize(snapshot) {
+    const prepared=this.prepared.get(snapshot);
+    if (!prepared) return {...snapshot,tabs:[]};
+    const tabs=snapshot.tabs.filter(row=>{
+      const {frame,binding}=prepared.get(row.tabId)||{};
+      return frame&&this.current(frame)&&frame.browserDocumentId===binding.browser&&
+        frame.documentGeneration===binding.hook&&frame.callGeneration===binding.generation&&
+        frame.obsoleteEpoch===binding.epoch&&this.callIdentity(frame)===binding.call;
+    }).map(row=>{
+      if (row.callEvidence.state==='active'&&this.now()>prepared.get(row.tabId).binding.validUntil)
+        return {...row,callEvidence:{...row.callEvidence,state:'unknown',reason:'unverified',callGeneration:null}};
+      return row;
+    });
+    const result={...snapshot,tabs};this.lastWire=JSON.stringify(result);return result;
   }
   async observe(frame) {
     if (!this.current(frame) || frame.frameId !== 0 || !signalToken(frame.browserDocumentId) || !signalToken(frame.documentGeneration) || !signalToken(frame.callGeneration) || frame.observerDocumentStart!==true || (frame.sourceCount===0&&!this.publications.has(frame))) return null;
@@ -199,6 +215,7 @@ export class GenericCallEvidenceProducer {
     }
     if (JSON.stringify(snapshot)===this.lastWire&&!snapshot.tabs.some(row=>row.callEvidence.state==='active')) return null;
     this.lastWire=JSON.stringify(snapshot);this.lastPublishedAt=this.now();
+    this.prepared.set(snapshot,new Map(frames.filter(frame=>bindings.has(frame)).map(frame=>[frame.tabId,{frame,binding:bindings.get(frame)}])));
     return snapshot;
   }
 }

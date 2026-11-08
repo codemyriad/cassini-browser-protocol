@@ -1258,7 +1258,7 @@ then matched GNOME/Mac adoption, with legitimate Talk positives and passive-medi
 negatives. Deployed legacy exposure remains explicitly accepted until adoption;
 this amendment does not claim to fix old binaries through an ignored new field.
 
-Extension 0.2.26 implements the same-PC R1 producer, advertises the verified
+The extension 0.2.26 implements the same-PC R1 producer, advertises the verified
 capability pair after persistent profile identity is available, and adds the
 content-free popup/Copy diagnostics model. The worker reads the private MAIN
 collector only through browser-owned script results bound to a current relay

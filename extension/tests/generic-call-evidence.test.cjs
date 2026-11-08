@@ -83,3 +83,11 @@ test('a superseded configuration cannot consume the new initial snapshot via the
   queries[1]([{id:2,url:f.frame.browserUrl}]);
   const result=await fresh;assert.equal(result.tabs[0].callEvidence.state,'unknown');
 });
+
+test('the final publication check withdraws expired proof or removes a retired document',async()=>{
+  const f=fixture();let clock=0;f.producer.now=()=>clock;
+  const prepared=await f.producer.snapshot({verified:true});
+  clock=2500;const expired=f.producer.finalize(prepared);
+  assert.equal(expired.tabs[0].callEvidence.state,'unknown');assert.equal(expired.tabs[0].callEvidence.callGeneration,null);
+  f.retire();assert.equal(f.producer.finalize(prepared).tabs.length,0);
+});
