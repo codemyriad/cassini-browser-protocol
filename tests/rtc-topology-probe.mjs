@@ -52,3 +52,25 @@ export function summarizeRtcTopology(before, after) {
     sendingPeers:progressing.filter(row => row.sending).length,
     receivingPeers:progressing.filter(row => row.receiving).length};
 }
+
+// getStats is asynchronous. Await each sample before testing it, and return
+// that exact sample. An async waitForFunction predicate can resolve its first
+// Promise to false instead of polling the eventual state.
+export async function waitRtcTopology(page,{previous=null,sending='none'}={}) {
+  await page.bringToFront(); // Only a disposable headless fixture page.
+  return page.evaluate(async({previous,sending})=>{
+    const deadline=performance.now()+30000;
+    let latest=[];
+    while(performance.now()<deadline){
+      const rows=await cassiniRtcTopology();
+      latest=rows;
+      const grows=(row,key)=>row[key]>(previous?previous.find(value=>value.peer===row.peer)?.[key]??Infinity:0);
+      const received=rows.some(row=>row.connected&&grows(row,'inboundPackets'));
+      const sent=sending==='none'||rows.some(row=>row.connected&&grows(row,'outboundPackets')&&
+        (sending!=='captured'||row.liveCapturedSenders>0));
+      if(received&&sent)return rows;
+      await new Promise(resolve=>requestAnimationFrame(resolve));
+    }
+    throw Error('Timed out waiting for real RTC packet progress: '+JSON.stringify(latest));
+  },{previous,sending});
+}

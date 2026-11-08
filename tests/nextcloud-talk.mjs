@@ -7,7 +7,7 @@ import {generateKeyPairSync,createHash} from 'node:crypto';
 import {cp,mkdir,mkdtemp,readFile,writeFile,chmod,rm} from 'node:fs/promises';
 import os from 'node:os';import path from 'node:path';import {fileURLToPath} from 'node:url';
 import {joinNextcloudTalk,talkMediaState} from '../scenarios/nextcloud-talk.mjs';
-import {installRtcTopologyProbe,summarizeRtcTopology} from './rtc-topology-probe.mjs';
+import {installRtcTopologyProbe,summarizeRtcTopology,waitRtcTopology} from './rtc-topology-probe.mjs';
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const callURL=process.env.NEXTCLOUD_TEST_CALL_URL;
@@ -122,14 +122,8 @@ try{
  // The baseline observer was muted for the independent capture proof above.
  report.rtcTopologyMuted=await meeting.evaluate(()=>cassiniRtcTopology());
  await meeting.getByRole('button',{name:/^Unmute(?: audio)?(?: \(.*\))?$/i}).first().click();
- await meeting.waitForFunction(async()=> (await cassiniRtcTopology()).some(row=>row.connected&&row.liveCapturedSenders>0));
- const topologyBefore=await meeting.evaluate(()=>cassiniRtcTopology());
- await meeting.waitForFunction(async previous=>{
-   const rows=await cassiniRtcTopology();
-   return rows.some(row=>row.connected&&row.liveCapturedSenders>0&&row.outboundPackets>(previous.find(value=>value.peer===row.peer)?.outboundPackets??Infinity))&&
-     rows.some(row=>row.connected&&row.liveReceivers>0&&row.inboundPackets>(previous.find(value=>value.peer===row.peer)?.inboundPackets??Infinity));
- },topologyBefore);
- report.rtcTopology=summarizeRtcTopology(topologyBefore,await meeting.evaluate(()=>cassiniRtcTopology()));
+ const topologyBefore=await waitRtcTopology(meeting,{sending:'captured'});
+ report.rtcTopology=summarizeRtcTopology(topologyBefore,await waitRtcTopology(meeting,{previous:topologyBefore,sending:'captured'}));
  assert.ok(report.rtcTopology.sendingPeers>0&&report.rtcTopology.receivingPeers>0,'Talk measurement requires real bidirectional packet progress');
  report.cases.push('D80.3 actual captured sender and remote receiver topology measured; no inferred split-PC binding');
  assert.deepEqual(pageErrors,[]);report.cases.push('DOM participant names match isolated remote PCM and persisted provenance, no microphone or tone cross-mixing');report.manifest=final;

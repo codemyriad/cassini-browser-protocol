@@ -7,13 +7,13 @@ import {createServer} from 'node:http';
 import {mkdir,mkdtemp,rm,writeFile} from 'node:fs/promises';
 import os from 'node:os';import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {installRtcTopologyProbe,summarizeRtcTopology} from './rtc-topology-probe.mjs';
+import {installRtcTopologyProbe,summarizeRtcTopology,waitRtcTopology} from './rtc-topology-probe.mjs';
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
 const directory=await mkdtemp(path.join(os.tmpdir(),'cassini-rtc-evidence-'));
 const server=createServer((request,response)=>{response.setHeader('Content-Type','text/html');response.end('<!doctype html><title>Controlled RTC evidence study</title><main id="state"></main>');});
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
 let browser;
-const report={scope:'real Chromium candidate-R1 observations only; no producer, native app, admission or capture proof',cases:[]};
+const report={scope:'real Chromium candidate-R1 observations only; no producer, native app, admission or capture proof',completed:false,cases:[]};
 async function gathered(page,index) {
   return page.evaluate(async index=>{
     const pc=peers[index];
@@ -29,6 +29,7 @@ try{
     '--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream','--allow-loopback-in-peer-connection','--disable-features=WebRtcHideLocalIpsWithMdns']});
   report.browserVersion=browser.version();
   for(const fixture of ['duplex','passive-viewer','mic-preview','synthetic-sender','captured-clone','unrelated-mic-peer','echo','unanswered-early-media']){
+    report.runningFixture=fixture;
     const context=await browser.newContext({permissions:['microphone']});
     try{
       await context.addInitScript(installRtcTopologyProbe);
@@ -70,7 +71,10 @@ try{
             let stream;
             if(fixture==='echo'){
               const receiver=pc.getReceivers().find(receiver=>receiver.track?.kind==='audio');
-              if(receiver)stream=new MediaStream([receiver.track]);
+              if(receiver){
+                const input=audio.createMediaStreamSource(new MediaStream([receiver.track]));
+                const output=audio.createMediaStreamDestination();input.connect(output);stream=output.stream;
+              }
             }
             if(!stream){const tone=audio.createOscillator(),output=audio.createMediaStreamDestination();tone.connect(output);tone.start();stream=output.stream;}
             // Reuse a negotiated receive slot when possible; otherwise add a
@@ -83,14 +87,9 @@ try{
         },{index,offer,fixture});
         await caller.evaluate(async({index,answer})=>peers[index].setRemoteDescription(answer),{index,answer:await gathered(remote,index)});
       }
-      await caller.waitForFunction(async()=> (await cassiniRtcTopology()).some(row=>row.connected&&row.inboundPackets>0));
-      const before=await caller.evaluate(()=>cassiniRtcTopology());
-      await caller.waitForFunction(async({before,sending})=>{
-        const rows=await cassiniRtcTopology();
-        const grew=(row,key)=>row[key]>(before.find(previous=>previous.peer===row.peer)?.[key]??Infinity);
-        return rows.some(row=>grew(row,'inboundPackets'))&&(!sending||rows.some(row=>grew(row,'outboundPackets')));
-      },{before,sending:!['passive-viewer','mic-preview'].includes(fixture)});
-      const topology=summarizeRtcTopology(before,await caller.evaluate(()=>cassiniRtcTopology()));
+      const sending=['passive-viewer','mic-preview'].includes(fixture)?'none':'any';
+      const before=await waitRtcTopology(caller,{sending});
+      const topology=summarizeRtcTopology(before,await waitRtcTopology(caller,{previous:before,sending}));
       await caller.waitForFunction(()=>globalThis.__cassiniCallEvidenceV1?.read().revision>=3);
       const observed=await caller.evaluate(()=>{
         const value=globalThis.__cassiniCallEvidenceV1.read();
@@ -98,17 +97,21 @@ try{
           capturedSendingPeers:value.capturedSendingPeers,samePeerCount:value.samePeerCount,unboundReceiverCount:value.unboundReceiverCount};
       });
       const candidateR1=topology.samePeerConnection;
+      // Preserve the actual observed values even when a required positive or
+      // negative fails, so fixture/algorithm failures remain diagnosable.
+      const legacySourceObservation=await caller.evaluate(()=>cassiniObservedDiscovery);
+      const observation={fixture,candidateR1,topology,packagedHookObservation:observed,legacySourceObservation,
+        ...(fixture==='echo'||fixture==='unanswered-early-media'?{requiresCoordinatorReview:candidateR1}: {})};
+      report.cases.push(observation);
       if(['passive-viewer','mic-preview','synthetic-sender','unrelated-mic-peer'].includes(fixture))assert.equal(candidateR1,false,fixture);
       if(['duplex','captured-clone'].includes(fixture))assert.equal(candidateR1,true,fixture);
       if(['passive-viewer','mic-preview','synthetic-sender','unrelated-mic-peer'].includes(fixture))assert.equal(observed.samePeerCount,0,'packaged hook '+fixture);
       if(['duplex','captured-clone'].includes(fixture))assert.equal(observed.samePeerCount,1,'packaged hook '+fixture);
       if(fixture==='passive-viewer')await caller.waitForFunction(()=>cassiniObservedDiscovery?.sourceCount===1&&cassiniObservedDiscovery.heard===true);
-      const legacySourceObservation=await caller.evaluate(()=>cassiniObservedDiscovery);
-      report.cases.push({fixture,candidateR1,topology,packagedHookObservation:observed,
-        legacySourceObservation,
-        ...(fixture==='echo'||fixture==='unanswered-early-media'?{requiresCoordinatorReview:candidateR1}: {})});
+      observation.legacySourceObservation=await caller.evaluate(()=>cassiniObservedDiscovery);
     }finally{await context.close()}
   }
+  report.completed=true;delete report.runningFixture;
 }finally{
   await browser?.close();await new Promise(resolve=>server.close(resolve));
   const artifacts=path.resolve('artifacts');await mkdir(artifacts,{recursive:true});
