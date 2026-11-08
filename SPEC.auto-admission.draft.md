@@ -17,6 +17,16 @@ This proves an **automatic Start request**, not actual microphone/device opening
 
 GNOME's `_auto_start_ready()` currently accepts positive known sourceCount plus heardtrue for a `call-evidence-v1` companion. That capability's legacy name must not be treated as proof of an independently observed call: heard is still received-media evidence. `call-signals-v1` negotiation alone does not strengthen that legacy predicate.
 
+## Independent Meet source-observation receipt
+
+The supplied 2026-11-08 two-browser Meet study used companion0.2.25 with observer Chrome for Testing149.0.7827.55 and actor Chrome156.0.8078.47. After manually verified joins, the observer had one connected/ICE-connected PC and three live recvonly audio tracks; inventory was sourceCount3/heardfalse. Speech made a previously muted receiver unmuted and moved the fresh inventory to heardtrue, with increasing RTP/sample counters. Leaving the observer produced a fresh empty inventory.
+
+This is evidence of received-source discovery, observed audibility and retirement in that tested flow. Three receivers are **not proof of three participants**; active-speaker slots remain an unproven hypothesis. The observer's inputs were denied, and a sendonly/live/muted slot is not proof of an actual page-captured microphone on a sender. No native recording host, Start command or PCM capture was used. Independent call admission, per-participant separation and saved recording remain unvalidated. This Meet result is separate from the isolated GNOME automatic-Start-request proof above; neither may be substituted for the other.
+
+The generic contract must preserve those source facts without promoting heardtrue to active evidence, must not infer a new logical call from receiver/PC changes, and must not treat an empty inventory alone as an affirmative user-call end. A listen-only receiver can have genuine media while failing a mic-sender candidate: that is unknown automatic admission, not unavailable source capture. Add a literal regression for heardfalse → heardtrue → fresh empty inventory with admission still unknown unless independent evidence exists; maintain no automatic Start/fallback/input and no per-person claim. Automated guest-join/codec failures remain a separate precondition issue, not an extension failure.
+
+Receipts: coordination `REPLIES-EXTENSION-meet-observations-2026-11-08.md` and `evidence/extension/meet-observations-2026-11-08.json` (committed at623e9ed). They contain sanitized lifecycle/counter facts; do not copy room URLs, user identities, labels or media into protocol diagnostics. No Meet-specific selector or hostname rule is proposed.
+
 ## Proposed minimal semantic change
 
 Keep existing sourceCount/sourceCountKnown/heard truthful and preserve explicit manual Start/record-all semantics. Require fresh **independent verified call/session evidence** for every automatic Start, including a system fallback following browser rejection. Missing, unknown, ambiguous or stale evidence never implicitly qualifies. Do not derive it from hostname, energy, playback, graph presence or receiver count. A connected PC plus microphone is still a candidate requiring D80.1's negative cases and explicit review, not a detector implemented by this draft.
