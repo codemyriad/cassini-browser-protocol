@@ -1323,6 +1323,29 @@ fallback/input reservation. Unknown, stale or mismatched evidence cannot authori
 pending work. Existing recording ownership, fixed route and120s evidence-loss
 grace remain app-owned; unknown is not an affirmative end.
 
+### Document-start trust boundary
+
+The native collector runs before page scripts and retains its own native method,
+getter, collection-operation, clock and promise references. A later page override
+of Object/Reflect, collection prototypes, MediaStream accessors, RTC statistics or
+track/transport getters cannot manufacture capture provenance or media progress.
+The protected non-configurable reader returns only a null-prototype data snapshot;
+MAIN execution reads that protected property directly, without page Object,
+globalThis, descriptor or postMessage lookups. Native promise values cannot be
+substituted through an inherited page thenable hook. No page-discovery source
+count, document generation, call generation or epoch is admission evidence.
+
+For a document-start trusted main frame, discovery messages only wake a
+browser-documentId-bound native read; the worker adopts identity/source facts
+from that read after current-document checks. A proven native terminal session
+(closed transports and ended captured tracks) followed by a new native session
+changes the collector's hook generation. Only after the trusted read and all
+current-document checks does the worker apply its existing callChanged lifecycle:
+end a previous recording as callEnded, fence old sources and assign the new
+background call generation. There is no page-epoch shortcut around that lifecycle.
+Capture scanning and DOM sender deduplication have no access to the collector's
+private getUserMedia-root/clone provenance.
+
 ### Native Start request binding
 
 Since extension 0.2.26, every ordinary native `type:"start"` dispatched for a host

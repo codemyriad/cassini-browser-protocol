@@ -329,7 +329,6 @@ const recovery = (async () => {
     const info = {generation:value.generation, url:null, addressHash:value.addressHash};
     if (opaque(value.documentGeneration) && opaque(value.hookGeneration))
       Object.assign(info, {documentGeneration:value.documentGeneration, hookGeneration:value.hookGeneration});
-    if (opaque(value.rtcDocument)&&Number.isSafeInteger(value.rtcEpisode)&&value.rtcEpisode>0) Object.assign(info,{rtcDocument:value.rtcDocument,rtcEpisode:value.rtcEpisode});
     if (value.boundaryPending === true) info.boundaryPending = true;
     callGenerations.set(value.tabId, info);
     try {
@@ -655,6 +654,42 @@ async function forwardPacket(session, packet, documentGeneration) {
   } finally { if (reserve) session.trackReservations.delete(packet.id); }
 }
 
+function adoptDiscovery(frame, message) {
+  if (!frames.has(frame) || frame.obsolete || pageState(frame.tabId)==='closed') return;
+  frame.hookSeen = true;
+  lostMeetings.delete(`${frame.tabId}:${frame.frameId}`);
+  // A subframe's spans belong to the main document it appeared under (D61).
+  if (frame.frameId !== 0) frame.mainFrame ??= mainFrame(frame.tabId);
+  const document = message.documentGeneration, generation = message.callGeneration;
+  if (validDocument(document) &&
+      typeof generation === "string" && generation.length > 0 && generation.length <= 200) {
+    const info = callInfo(frame.tabId);
+    if (frame.frameId === 0 && !frame.identitySeeded) {
+      frame.identitySeeded = true;
+      if (info.boundaryPending) fenceBaseline(frame, info);
+      else if (info.documentGeneration === document) {
+        frame.documentGeneration = document; frame.callGeneration = info.hookGeneration;
+      }
+    }
+    if (frame.fencedGenerations.has(JSON.stringify([document,generation]))) return;
+    const changed = frame.frameId === 0 && frame.documentGeneration === document && frame.callGeneration !== undefined && frame.callGeneration !== generation;
+    if (changed) callChanged(frame.tabId);
+    frame.documentGeneration = document; frame.callGeneration = generation;
+    if (frame.frameId === 0 && (info.documentGeneration !== document || info.hookGeneration !== generation)) {
+      Object.assign(info, {documentGeneration:document, hookGeneration:generation, boundaryPending:false});
+      void persistSessions().catch(() => {});
+    }
+  }
+  if (frame.obsolete || pageState(frame.tabId) === "closed") return;
+  if (Number.isInteger(message.sourceCount) && message.sourceCount >= 0 && message.sourceCount <= 64 &&
+      (frame.sourceCount !== message.sourceCount || frame.heard !== (message.heard === true))) {
+    frame.sourceCount = message.sourceCount;
+    frame.heard = message.heard === true;
+    notifyControl();
+  }
+
+}
+
 chrome.runtime.onConnect.addListener(port => {
   if (port.name !== "cassini-frame" || port.sender?.id !== chrome.runtime.id || !port.sender.tab) return;
   const frame = { port, tabId: port.sender.tab.id, frameId: port.sender.frameId ?? 0, browserDocumentId:typeof port.sender.documentId === "string" ? port.sender.documentId : null, browserUrl:port.sender.url, obsoleteEpoch:0, sourceCount: 0, heard: false, checking:true, relayAlive:false, hookReady:false, fencedGenerations: new Set() };
@@ -690,39 +725,13 @@ chrome.runtime.onConnect.addListener(port => {
     }
     if (message.type === "discovery") {
       if (frame.obsolete || pageState(frame.tabId) === "closed") return;
-      frame.hookSeen = true;
-      lostMeetings.delete(`${frame.tabId}:${frame.frameId}`);
-      // A subframe's spans belong to the main document it appeared under (D61).
-      if (frame.frameId !== 0) frame.mainFrame ??= mainFrame(frame.tabId);
-      const document = message.documentGeneration, generation = message.callGeneration;
-      if (validDocument(document) &&
-          typeof generation === "string" && generation.length > 0 && generation.length <= 200) {
-        const info = callInfo(frame.tabId);
-        if (frame.frameId === 0 && !frame.identitySeeded) {
-          frame.identitySeeded = true;
-          if (info.boundaryPending) fenceBaseline(frame, info);
-          else if (info.documentGeneration === document) {
-            frame.documentGeneration = document; frame.callGeneration = info.hookGeneration;
-          }
-        }
-        if (frame.fencedGenerations.has(JSON.stringify([document,generation]))) return;
-        const changed = frame.frameId === 0 && frame.documentGeneration === document && frame.callGeneration !== undefined && frame.callGeneration !== generation;
-        if (changed) callChanged(frame.tabId);
-        frame.documentGeneration = document; frame.callGeneration = generation;
-        if (frame.frameId === 0 && (info.documentGeneration !== document || info.hookGeneration !== generation)) {
-          Object.assign(info, {documentGeneration:document, hookGeneration:generation, boundaryPending:false});
-          void persistSessions().catch(() => {});
-        }
-      }
-      if (frame.obsolete || pageState(frame.tabId) === "closed") return;
-      if (Number.isInteger(message.sourceCount) && message.sourceCount >= 0 && message.sourceCount <= 64 &&
-          (frame.sourceCount !== message.sourceCount || frame.heard !== (message.heard === true))) {
-        frame.sourceCount = message.sourceCount;
-        frame.heard = message.heard === true;
-        notifyControl();
-      }
+      if (frame.frameId===0 && frame.observerDocumentStart===true) {
+        // Wakeup only. read() adopts the browser-bound native facts itself.
+        await genericProducer.read(frame);
+      } else adoptDiscovery(frame,message); // Legacy/manual-only repaired realm.
       return;
     }
+
     const session = sessions.get(frame.tabId);
     if (!session?.frames.has(frame)) return;
     if (session.keepOnNavigation && (frame.obsolete || pageState(frame.tabId) !== "present") &&
@@ -970,14 +979,8 @@ const signalProducer = new CallSignalProducer({identity:()=>browserInstance,tabs
 const genericProducer = new GenericCallEvidenceProducer({identity:()=>browserInstance,tabs:chrome.tabs,frames:()=>frames,
   current:frame=>frames.has(frame)&&mainFrame(frame.tabId)===frame&&relayReady(frame)&&pageState(frame.tabId)==='present',
   executeScript:request=>chrome.scripting.executeScript(request),callIdentity:frame=>callInfo(frame.tabId).generation,
-  bindEpisode:(frame,episode)=>{
-    if (!episode) return;
-    const info=callInfo(frame.tabId);
-    if (info.rtcDocument===frame.documentGeneration&&Number.isSafeInteger(info.rtcEpisode)&&episode>info.rtcEpisode) info.generation=crypto.randomUUID();
-    if (info.rtcDocument!==frame.documentGeneration||info.rtcEpisode!==episode) {
-      info.rtcDocument=frame.documentGeneration;info.rtcEpisode=episode;void persistSessions().catch(()=>{});notifyControl();
-    }
-  }});
+  onNativeRead:(frame,native)=>adoptDiscovery(frame,{documentGeneration:native.documentGeneration,callGeneration:native.hookGeneration,
+    sourceCount:native.sourceCount,heard:native.heard})});
 const controlCapabilities = ["independent-sessions-v1", "call-evidence-v1", "page-state-v1", "multi-stream-v1", "resume-capture-v1", "heartbeat-v1", "tab-readiness-v1"];
 const appControl = new AppControl({
   runtime: chrome.runtime, alarms: chrome.alarms, busy: startBusy, capabilities: controlCapabilities, signalSnapshot:options=>options.verified?genericProducer.snapshot(options):signalProducer.snapshot(), identity: () => ({extensionVersion,extensionInstance,...companionDiagnostics}), cancelPending: cancelPendingStart,

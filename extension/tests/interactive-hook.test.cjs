@@ -4,29 +4,50 @@ const vm=require('node:vm'),fs=require('node:fs'),path=require('node:path');
 const {until}=require('./support/app-control-harness.cjs');
 function fixture(){
   let now=0;const origin=1000000,timers=[],listeners=[],messages=[];
-  class Track {constructor(){this.kind='audio';this.readyState='live';this.enabled=true;this.muted=false}clone(){return new Track()}}
+  const mapEach=Map.prototype.forEach;
+  class Report extends Map {forEach(fn){return Reflect.apply(mapEach,this,[fn])}}
+  class Track {
+    #kind='audio';#state='live';#enabled=true;#muted=false;
+    get kind(){return this.#kind}get readyState(){return this.#state}set readyState(value){this.#state=value}
+    get enabled(){return this.#enabled}set enabled(value){this.#enabled=value}
+    get muted(){return this.#muted}set muted(value){this.#muted=value}
+    clone(){return new Track()}
+  }
+  class Stream {constructor(track){this.tracks=[track]}getAudioTracks(){return this.tracks}}
   class Sender {
-    constructor(track){this.track=track;this.packets=0;this.age=0;this.pending=null}
-    async getStats(){if(this.pending)await this.pending;return new Map([['out',{id:'out',type:'outbound-rtp',kind:'audio',packetsSent:this.packets,timestamp:origin+now-this.age}]])}
+    #track;constructor(track){this.#track=track;this.packets=0;this.age=0;this.pending=null}
+    get track(){return this.#track}set track(value){this.#track=value}
+    async getStats(){if(this.pending)await this.pending;return new Report([['out',{id:'out',type:'outbound-rtp',kind:'audio',packetsSent:this.packets,timestamp:origin+now-this.age}]])}
+  }
+  class Receiver {
+    #track=new Track();constructor(){this.packets=0;this.age=0}
+    get track(){return this.#track}
+    async getStats(){return new Report([['in',{id:'in',type:'inbound-rtp',kind:'audio',packetsReceived:this.packets,timestamp:origin+now-this.age}]])}
+  }
+  class Transceiver {
+    #sender;#receiver;#direction='sendrecv';constructor(sender,receiver){this.#sender=sender;this.#receiver=receiver}
+    get sender(){return this.#sender}get receiver(){return this.#receiver}
+    get currentDirection(){return this.#direction}set currentDirection(value){this.#direction=value}
   }
   class Peer {
-    constructor(){this.connectionState='connected';this.iceConnectionState='connected';this.signalingState='stable';this.slots=[]}
-    addEventListener(){}getTransceivers(){return this.slots}getSenders(){return this.slots.map(slot=>slot.sender)}getReceivers(){return this.slots.map(slot=>slot.receiver)}
-    close(){this.signalingState='closed';this.connectionState='closed'}
+    #connection='connected';#signal='stable';constructor(){this.slots=[]}
+    get connectionState(){return this.#connection}get iceConnectionState(){return this.#connection}get signalingState(){return this.#signal}
+    getTransceivers(){return this.slots}setRemoteDescription(){return Promise.resolve()}
+    close(){this.#signal='closed';this.#connection='closed'}
   }
-  for(const name of ['getStats','createOffer','createAnswer','setLocalDescription','setRemoteDescription','addTrack','addTransceiver'])Peer.prototype[name]=()=>{};
-  const window={RTCPeerConnection:Peer,location:{href:'https://neutral.invalid/call'},postMessage:packet=>messages.push(packet),addEventListener:(name,fn)=>listeners.push(fn)};
-  const context=vm.createContext({window,RTCRtpSender:Sender,MediaStreamTrack:Track,
-    navigator:{mediaDevices:{async getUserMedia(){const track=new Track();return {getAudioTracks:()=>[track]}}}},
+  const location={get href(){return 'https://neutral.invalid/call'}};
+  const window={RTCPeerConnection:Peer,location,postMessage:packet=>messages.push(packet),addEventListener:(name,fn)=>listeners.push(fn)};
+  const context=vm.createContext({window,location,RTCPeerConnection:Peer,RTCRtpSender:Sender,RTCRtpReceiver:Receiver,RTCRtpTransceiver:Transceiver,
+    MediaStreamTrack:Track,MediaStream:Stream,RTCStatsReport:Report,
+    navigator:{mediaDevices:{async getUserMedia(){return new Stream(new Track())}}},
     crypto:{randomUUID:()=> 'hook-document'},performance:{timeOrigin:origin,now:()=>now},
     setInterval:fn=>timers.push(fn),setTimeout,clearTimeout});
-  vm.runInContext(fs.readFileSync(path.join(__dirname,'../page-hook.js'),'utf8'),context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname,'../rtc-evidence.js'),'utf8'),context);
   async function peer(kind='captured'){
     let track=kind==='synthetic'?new Track():(await context.navigator.mediaDevices.getUserMedia()).getAudioTracks()[0];
     if(kind==='clone')track=track.clone();
-    const pc=new window.RTCPeerConnection(),sender=new Sender(track);
-    const receiver={track:new Track(),packets:0,age:0,async getStats(){return new Map([['in',{id:'in',type:'inbound-rtp',kind:'audio',packetsReceived:this.packets,timestamp:origin+now-this.age}]])}};
-    pc.slots.push({sender,receiver,currentDirection:'sendrecv'});
+    const pc=new context.RTCPeerConnection(),sender=new Sender(track),receiver=new Receiver();
+    pc.slots.push(new Transceiver(sender,receiver));
     return {pc,sender,receiver,track};
   }
   const read=()=>context.__cassiniCallEvidenceV1.read();
@@ -54,7 +75,7 @@ test('stale stats timestamps never qualify even as counters increase and legacy 
     const f=fixture(),peer=await f.peer();peer[stale].age=4000;
     await f.tick([peer]);await f.tick([peer]);await f.tick([peer]);
     assert.equal(f.read().samePeerCount,0);
-    const discovery=f.messages.filter(packet=>packet.type==='discovery').at(-1);
+    const discovery=f.read();
     assert.equal(discovery.sourceCount,1);assert.equal(discovery.heard,true);
   }
 });
@@ -81,13 +102,46 @@ test('a sender disabled while native stats are pending cannot complete positive 
 
 test('terminal capture plus closed transport ends an episode; replacement with a live capture retains it',async()=>{
   const f=fixture(),original=await f.peer();await f.tick([original]);await f.tick([original]);
-  assert.equal(f.read().sessionEpoch,1);original.pc.close();
+  assert.equal(f.read().hookGeneration,'0');original.pc.close();
   assert.equal(f.read().ended,false,'closed transport with a live capture is uncertain');
   const replacement=await f.peer();replacement.sender.track=original.track;
   await f.tick([replacement]);await f.tick([replacement]);
-  assert.equal(f.read().samePeerCount,1);assert.equal(f.read().sessionEpoch,1);
+  assert.equal(f.read().samePeerCount,1);assert.equal(f.read().hookGeneration,'0');
   replacement.pc.close();original.track.readyState='ended';
   assert.equal(f.read().ended,true);
   const next=await f.peer();await f.tick([next]);await f.tick([next]);
-  assert.equal(f.read().ended,false);assert.equal(f.read().sessionEpoch,2);
+  assert.equal(f.read().ended,false);assert.equal(f.read().hookGeneration,'1');
+});
+
+test('page replacements of primordials, native getters and stats methods cannot forge or renew the collector',async()=>{
+ const f=fixture(),peer=await f.peer();await f.tick([peer]);await f.tick([peer]);
+ assert.equal(f.read().samePeerCount,1);
+ f.context.peer=peer;
+ vm.runInContext(`
+  Object.getOwnPropertyDescriptor=()=>({value:{read:()=>({samePeerCount:1})}});
+  Reflect.apply=()=>{throw Error('page Reflect')};
+  Math.max=()=>Infinity;Math.min=()=>0;Number.isFinite=()=>true;
+  Array.prototype.filter=Array.prototype.map=Array.prototype.some=()=>{throw Error('page Array')};
+  Array.prototype[Symbol.iterator]=()=>{throw Error('page iterator')};
+  Object.defineProperty(Array.prototype,'0',{set(){throw Error('page indexed setter')},configurable:true});
+  Set=Map=function(){throw Error('page collection')};
+  performance.now=()=>0;
+  RTCStatsReport.prototype.forEach=()=>{throw Error('page stats')};
+  RTCRtpReceiver.prototype.getStats=()=>Promise.resolve(new Map());
+  Object.defineProperty(RTCRtpSender.prototype,'track',{get(){throw Error('page sender getter')}});
+  Object.defineProperty(MediaStreamTrack.prototype,'readyState',{get(){return 'ended'}});
+ `,f.context);
+ await f.tick([peer]);assert.equal(f.read().samePeerCount,1,'captured native operations still observe the genuine session');
+ f.advance(2501);assert.equal(f.read().samePeerCount,0,'page clock replacement cannot keep old media fresh');
+});
+
+test('a page getAudioTracks replacement cannot turn a synthetic sender into captured provenance',async()=>{
+ const f=fixture(),peer=await f.peer('synthetic');
+ f.context.MediaStream.prototype.getAudioTracks=()=>[peer.track];
+ // The native mock stream really contains a different audio capture track.
+ // The page returns the synthetic sender, but the collector uses the captured
+ // native method and remembers only the actual stream-owned capture track.
+ await f.context.navigator.mediaDevices.getUserMedia();
+ await f.tick([peer]);await f.tick([peer]);
+ assert.equal(f.read().capturedSendingPeers,0);assert.equal(f.read().samePeerCount,0);
 });

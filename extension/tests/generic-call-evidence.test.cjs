@@ -9,7 +9,7 @@ function fixture(){
   const frame={tabId:2,frameId:0,browserUrl:'https://neutral.invalid/call',browserDocumentId:'chrome-A',
     documentGeneration:'hook-A',callGeneration:'hook-session-A',obsoleteEpoch:0,observerDocumentStart:true,sourceCount:1,heard:true};
   const sample={version:1,documentGeneration:'hook-A',hookGeneration:'hook-session-A',revision:2,ageMs:10,
-    receivedPeers:1,capturedSendingPeers:1,samePeerCount:1,unboundReceiverCount:0,receivedVersion:1,sentVersion:1,ended:false,sessionEpoch:1};
+    receivedPeers:1,capturedSendingPeers:1,samePeerCount:1,unboundReceiverCount:0,receivedVersion:1,sentVersion:1,ended:false,sourceCount:1,heard:true};
   let live=true,identity='background-A',reads=0;
   const producer=new Generic({identity:()=> 'profile-A',tabs:{async query(){return [{id:2,url:frame.browserUrl}]}},
     frames:()=>[frame],current:value=>value===frame&&live,callIdentity:()=>identity,
@@ -25,15 +25,15 @@ test('only acknowledged generic snapshots expose unequal mapped IDs and the back
   assert.equal(row.remoteAudio,'separated');assert.notEqual(row.documentGeneration,row.sourceDocumentGeneration);
 });
 test('passive, split-PC, stale and malformed observations remain unknown while real source facts are untouched',async()=>{
-  for(const mutation of [s=>{s.samePeerCount=0;s.capturedSendingPeers=0;s.unboundReceiverCount=1},
+  for(const [index,mutation] of [s=>{s.samePeerCount=0;s.capturedSendingPeers=0;s.unboundReceiverCount=1},
     s=>{s.samePeerCount=0;s.receivedPeers=2;s.unboundReceiverCount=2},s=>{s.ageMs=2501},
     s=>{s.documentGeneration='chrome-A'},s=>{s.hookGeneration='retired-hook-session'},
-    s=>{s.samePeerCount=2},s=>{s.revision=0},s=>{s.ageMs=NaN}]){
+    s=>{s.samePeerCount=2},s=>{s.revision=0},s=>{s.ageMs=NaN}].entries()){
     const f=fixture();mutation(f.sample);
     const row=(await f.producer.snapshot({verified:true})).tabs[0];
     assert.equal(row.callEvidence.state,'unknown');assert.equal(row.callEvidence.callGeneration,null);
     assert.equal(f.frame.sourceCount,1);assert.equal(f.frame.heard,true);
-    assert.equal(row.remoteAudio,'separated');
+    assert.equal(row.remoteAudio,index<2?'separated':'unknown');
   }
 });
 test('an unbound additional receiver prevents claiming a scoped separated capture route',async()=>{

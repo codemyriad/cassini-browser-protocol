@@ -22,36 +22,7 @@ manifest.key=key.toString('base64');await writeFile(manifestPath,JSON.stringify(
 const extensionId=[...createHash('sha256').update(key).digest('hex').slice(0,32)].map(c=>String.fromCharCode(97+parseInt(c,16))).join('');
 assert.notEqual(extensionId,'pcafdaahfhjiolfpfnlhmljfgoabbaij');
 const pair=['call-signals-v1','verified-auto-admission-v1'];
-async function privateControl(worker){
- await worker.evaluate(()=>{
-  const event=()=>{const listeners=new Set();return {addListener:fn=>listeners.add(fn),emit:message=>{for(const fn of listeners)fn(message)}}};
-  globalThis.fixturePackets=[];globalThis.fixtureObservers=new Set();globalThis.fixtureCaptureAttempts=0;
-  chrome.runtime.connectNative=name=>{
-   if(name!=='io.codemyriad.cassini.control'){fixtureCaptureAttempts++;throw Error('Input/recording factory forbidden in evidence test')}
-   const port={onMessage:event(),onDisconnect:event(),postMessage(packet){
-    fixturePackets.push(structuredClone(packet));for(const notify of [...fixtureObservers])notify();
-    if(packet.type==='hello')queueMicrotask(()=>port.onMessage.emit({type:'configure',capabilities:['call-signals-v1','verified-auto-admission-v1']}));
-   },disconnect(){port.onDisconnect.emit()}};
-   globalThis.fixtureControlPort=port;return port;
-  };
- });
-}
-async function packet(worker,{type='callSignals',tabId,state,after=0,callGeneration=null}={}){
- return worker.evaluate(options=>new Promise((resolve,reject)=>{
-  let deadline;
-  const check=()=>{
-   const found=fixturePackets.slice(options.after).filter(value=>value.type===options.type).map(value=>({packet:value,row:(value.tabs||value.meetings||[]).find(row=>row.tabId===options.tabId)})).filter(value=>
-    options.tabId==null||value.row&&(options.state==null||value.row.callEvidence?.state===options.state)&&(options.callGeneration==null||value.row.callGeneration===options.callGeneration)).at(-1);
-   if(found){clearTimeout(deadline);fixtureObservers.delete(check);resolve(found)}
-  };
-  deadline=setTimeout(()=>{fixtureObservers.delete(check);reject(Error('Timed out waiting for acknowledged worker evidence: '+options.type+' '+options.state))},15000);
-  fixtureObservers.add(check);check();
- }),{type,tabId,state,after,callGeneration});
-}
-async function barrier(worker){
- await packet(worker,{type:'hello'});
- return worker.evaluate(()=>{const index=fixturePackets.length;fixtureControlPort.onMessage.emit({type:'configure',capabilities:['call-signals-v1','verified-auto-admission-v1']});return index});
-}
+import {privateControl,packet,barrier} from './rtc-evidence-control.mjs';
 const report={decision:'D80.4',scope:'real loaded companion/worker/native-control fixture and R1 media; interactive captured-media session, not answered human intent; no GNOME/Mac adoption or native recording proof',completed:false,cases:[]};
 async function gathered(page,index) {
   return page.evaluate(async index=>{
@@ -64,7 +35,7 @@ async function gathered(page,index) {
   },index);
 }
 try{
-  for(const fixture of ['duplex','passive-viewer','mic-preview','synthetic-sender','captured-clone','unrelated-mic-peer','echo','unanswered-early-media','unanswered-ringing-no-capture','cross-frame-capture','forged-page-evidence','repaired-frame-positive-media'].filter(name=>!process.env.CASSINI_RTC_CASE||name===process.env.CASSINI_RTC_CASE)){
+  for(const fixture of ['duplex','passive-viewer','mic-preview','synthetic-sender','captured-clone','unrelated-mic-peer','echo','unanswered-early-media','unanswered-ringing-no-capture','cross-frame-capture','forged-page-evidence','repaired-frame-positive-media','primordial-poison-positive'].filter(name=>!process.env.CASSINI_RTC_CASE||name===process.env.CASSINI_RTC_CASE)){
     report.runningFixture=fixture;
     const context=await chromium.launchPersistentContext(path.join(directory,'profile-'+fixture),{channel:'chromium',headless:true,
       permissions:['microphone','clipboard-read','clipboard-write'],args:['--disable-audio-output','--autoplay-policy=no-user-gesture-required',
@@ -141,6 +112,19 @@ try{
       const sending=['passive-viewer','mic-preview','unanswered-ringing-no-capture','forged-page-evidence'].includes(fixture)?'none':'any';
       const before=await waitRtcTopology(caller,{sending});
       const topology=summarizeRtcTopology(before,await waitRtcTopology(caller,{previous:before,sending}));
+      if(fixture==='primordial-poison-positive')await caller.evaluate(()=>{
+        Object.getOwnPropertyDescriptor=()=>({value:{read:()=>({samePeerCount:99})}});
+        Reflect.apply=()=>{throw Error('page Reflect')};
+        Array.prototype.filter=Array.prototype.map=Array.prototype.some=()=>{throw Error('page Array')};
+        Array.prototype[Symbol.iterator]=()=>{throw Error('page iteration')};
+        Math.max=()=>Infinity;Math.min=()=>0;
+        Set=Map=function(){throw Error('page collection')};
+        performance.now=()=>0;
+        RTCStatsReport.prototype.forEach=()=>{throw Error('page report')};
+        RTCRtpReceiver.prototype.getStats=async()=>{throw Error('page receiver')};
+        Object.defineProperty(RTCRtpSender.prototype,'track',{get(){throw Error('page track')}});
+        Object.defineProperty(MediaStreamTrack.prototype,'readyState',{get(){return 'ended'}});
+      });
       await caller.waitForFunction(()=>globalThis.__cassiniCallEvidenceV1?.read().revision>=3);
       const observed=await caller.evaluate(()=>{
         const value=globalThis.__cassiniCallEvidenceV1.read();
@@ -155,9 +139,9 @@ try{
         ...(fixture==='echo'||fixture==='unanswered-early-media'?{acceptedPositive:'D80.4 interactive captured-media session'}: {})};
       report.cases.push(observation);
       if(['passive-viewer','mic-preview','synthetic-sender','unrelated-mic-peer','unanswered-ringing-no-capture','cross-frame-capture','forged-page-evidence'].includes(fixture))assert.equal(candidateR1,false,fixture);
-      if(['duplex','captured-clone','echo','unanswered-early-media','repaired-frame-positive-media'].includes(fixture))assert.equal(candidateR1,true,fixture);
+      if(['duplex','captured-clone','echo','unanswered-early-media','repaired-frame-positive-media','primordial-poison-positive'].includes(fixture))assert.equal(candidateR1,true,fixture);
       if(['passive-viewer','mic-preview','synthetic-sender','unrelated-mic-peer','unanswered-ringing-no-capture','cross-frame-capture','forged-page-evidence'].includes(fixture))assert.equal(observed.samePeerCount,0,'packaged hook '+fixture);
-      if(['duplex','captured-clone','echo','unanswered-early-media','repaired-frame-positive-media'].includes(fixture))assert.equal(observed.samePeerCount,1,'packaged hook '+fixture);
+      if(['duplex','captured-clone','echo','unanswered-early-media','repaired-frame-positive-media','primordial-poison-positive'].includes(fixture))assert.equal(observed.samePeerCount,1,'packaged hook '+fixture);
       if(fixture==='passive-viewer')await caller.waitForFunction(()=>cassiniObservedDiscovery?.sourceCount===1&&cassiniObservedDiscovery.heard===true);
       observation.legacySourceObservation=await caller.evaluate(()=>cassiniObservedDiscovery);
       const tabId=await worker.evaluate(async url=>(await chrome.tabs.query({})).find(tab=>tab.url===url).id,url+'caller');
@@ -205,7 +189,7 @@ try{
         });
         await remote.evaluate(()=>{peers.forEach(pc=>pc.close());window.peers=[]});
         await negotiate();
-        await caller.waitForFunction(()=>__cassiniCallEvidenceV1.read().sessionEpoch>=2&&__cassiniCallEvidenceV1.read().samePeerCount===1);
+        await caller.waitForFunction(()=>Number(__cassiniCallEvidenceV1.read().hookGeneration)>=1&&__cassiniCallEvidenceV1.read().samePeerCount===1);
         const next=await packet(worker,{tabId,state:'active',after:await barrier(worker)});
         assert.notEqual(next.row.callEvidence.callGeneration,initial,'new interactive episode gets a background ID');
         assert.equal(next.row.documentGeneration,published.row.documentGeneration);assert.equal(next.row.sourceDocumentGeneration,published.row.sourceDocumentGeneration);
@@ -221,6 +205,44 @@ try{
         await worker.evaluate(()=>clearInterval(fixturePinger));
         assert.ok(await worker.evaluate(()=>fixturePackets.some(value=>value.type==='pong')));
         observation.worker.withdrawalWithHealthyPongMs=withdrawalMs;
+      }
+      if(fixture==='synthetic-sender'){
+        // Exercise the real MAIN capture scan: DOM sender dedup must never
+        // promote a generated sender into the collector's private gUM roots.
+        await worker.evaluate(()=>{
+          const previous=chrome.runtime.connectNative.bind(chrome.runtime);
+          globalThis.fixtureManualStarts=0;
+          chrome.runtime.connectNative=name=>{
+            if(name!=='io.codemyriad.cassini')return previous(name);
+            const event=()=>{const listeners=[];return {addListener:fn=>listeners.push(fn),emit:value=>listeners.forEach(fn=>fn(value))}};
+            return {onMessage:event(),onDisconnect:event(),postMessage(value){
+              if(value.type==='start')fixtureManualStarts++;
+              queueMicrotask(()=>this.onMessage.emit(value.type==='start'?{type:'started',path:'/fixture/manual-synthetic',features:['source-outcomes-v1']}:
+                value.type==='stop'?{type:'stopped',path:'/fixture/manual-synthetic'}:{type:'ack'}));
+            },disconnect(){}};
+          };
+        });
+        let index=await worker.evaluate(tabId=>{
+          const index=fixturePackets.length;
+          fixtureControlPort.onMessage.emit({type:'command',requestId:'synthetic-manual-start',action:'start',tabId,mode:'tracks',independent:true,captureLocal:false,microphone:false});
+          return index;
+        },tabId);
+        const start=(await packet(worker,{type:'result',after:index})).packet;
+        assert.equal(start.requestId,'synthetic-manual-start');assert.equal(start.ok,true,JSON.stringify(start));
+        const revision=await caller.evaluate(()=>__cassiniCallEvidenceV1.read().revision);
+        await caller.waitForFunction(revision=>__cassiniCallEvidenceV1.read().revision>=revision+3,revision);
+        assert.equal(await caller.evaluate(()=>__cassiniCallEvidenceV1.read().samePeerCount),0);
+        await packet(worker,{tabId,state:'unknown',after:await barrier(worker)});
+        index=await worker.evaluate(tabId=>{
+          const index=fixturePackets.length;
+          fixtureControlPort.onMessage.emit({type:'command',requestId:'synthetic-manual-stop',action:'stop',tabId,independent:true});
+          return index;
+        },tabId);
+        const stop=(await packet(worker,{type:'result',after:index})).packet;
+        assert.equal(stop.requestId,'synthetic-manual-stop');assert.equal(stop.ok,true);
+        await packet(worker,{tabId,state:'unknown',after:await barrier(worker)});
+        assert.equal(await worker.evaluate(()=>fixtureManualStarts),1);
+        observation.worker.manualCaptureDoesNotGrantProvenance=true;
       }
       const attempts=await worker.evaluate(()=>({inputs:fixtureCaptureAttempts,pcm:fixturePackets.some(value=>value.type==='audio'||value.type==='start')}));
       assert.equal(attempts.inputs,0);assert.equal(attempts.pcm,false);

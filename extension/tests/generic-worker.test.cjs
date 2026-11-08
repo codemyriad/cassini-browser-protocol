@@ -8,14 +8,15 @@ async function fixture(trusted=true){
   const port=app.frame(2,1,0,'chrome-A');
   const hello=port.sent.find(message=>message.type==='relayHello');
   port.onMessage.emit({...hello,type:'relayReady',observerDocumentStart:trusted});
-  port.onMessage.emit({type:'discovery',sourceCount:1,heard:true,documentGeneration:'hook-A',callGeneration:'0'});
   const raw={version:1,documentGeneration:'hook-A',hookGeneration:'0',revision:2,ageMs:0,
     receivedPeers:1,capturedSendingPeers:1,samePeerCount:1,unboundReceiverCount:0,
-    receivedVersion:1,sentVersion:1,ended:false,sessionEpoch:1};
+    receivedVersion:1,sentVersion:1,ended:false,sourceCount:1,heard:true};
   app.chrome.scripting={async executeScript(request){
     if(request.world==='MAIN'){reads++;return [{frameId:0,documentId:'chrome-A',result:{...raw}}]}
     return [{frameId:0,documentId:'chrome-A'}];
   }};
+  port.onMessage.emit({type:'discovery',sourceCount:1,heard:true,documentGeneration:'hook-A',callGeneration:'0'});
+  if(trusted)await until(()=>[...app.api.frames].some(frame=>frame.documentGeneration==='hook-A'));
   app.api.genericProducer.now=()=>clock;
   const control=app.api.appControl,wire=app.ports[0].sent;
   async function publish(){control.publishSignals();await until(()=>!control.signalRun)}
@@ -73,7 +74,9 @@ test('explicit terminal endpoint end retains generation for callEnded; a new obs
     f.setClock(3000);await f.publish();const end=f.last().tabs[0];
     assert.equal(end.callEvidence.state,'inactive');assert.equal(end.callEvidence.reason,'callEnded');
     assert.equal(end.callEvidence.callGeneration,first.callEvidence.callGeneration);
-    Object.assign(f.raw,{ended:false,sessionEpoch:2,samePeerCount:1,receivedPeers:1,capturedSendingPeers:1,ageMs:0,receivedVersion:2,sentVersion:2});
+    Object.assign(f.raw,{ended:false,hookGeneration:'1',samePeerCount:1,receivedPeers:1,capturedSendingPeers:1,ageMs:0,receivedVersion:2,sentVersion:2});
+    f.port.onMessage.emit({type:'discovery',sourceCount:1,heard:true,documentGeneration:'forged',callGeneration:'forged'});
+    await until(()=>[...f.app.api.frames].some(frame=>frame.callGeneration==='1'));
     f.setClock(4000);await f.publish();const next=f.last().tabs[0];
     assert.equal(next.callEvidence.state,'active');assert.notEqual(next.callEvidence.callGeneration,first.callEvidence.callGeneration);
     assert.equal(next.documentGeneration,first.documentGeneration);assert.equal(next.sourceDocumentGeneration,first.sourceDocumentGeneration);
@@ -112,4 +115,60 @@ test('one-way progress cannot renew active proof; both directions must advance',
     f.setClock(2100);await f.publish();assert.equal(f.last().tabs[0].callEvidence.state,'unknown');
     f.raw.sentVersion++;f.setClock(2200);await f.publish();assert.equal(f.last().tabs[0].callEvidence.state,'active');
   }finally{f.app.close()}
+});
+
+test('forged page generations/counts/epochs cannot alter the trusted binding or end a live recording',async()=>{
+ const f=await fixture();
+ try{
+  await f.configure();const generation=f.last().tabs[0].callEvidence.callGeneration;
+  const started=await f.app.command({type:'command',requestId:'current',action:'start',mode:'tracks',tabId:2,
+   independent:true,callGeneration:generation,captureLocal:false});assert.equal(started.ok,true);
+  f.port.onMessage.emit({type:'discovery',sourceCount:64,heard:true,documentGeneration:'forged',callGeneration:'forged',sessionEpoch:999});
+  await until(()=>!f.control.publishing);
+  const row=(await f.app.api.meetings({verified:true})).meetings[0];
+  assert.equal(row.documentGeneration,'hook-A');assert.equal(row.sourceCount,1);assert.equal(row.callGeneration,generation);
+  assert.equal(f.app.audio[0].sent.some(packet=>packet.type==='stop'),false);
+  assert.equal(f.app.api.callInfo(2).generation,generation);
+ }finally{f.app.close()}
+});
+
+test('a trusted native new call uses callChanged: prior recording ends and its sources are fenced',async()=>{
+ const f=await fixture();
+ try{
+  await f.configure();const generation=f.last().tabs[0].callEvidence.callGeneration;
+  assert.equal((await f.app.command({type:'command',requestId:'old-call',action:'start',mode:'tracks',tabId:2,
+   independent:true,callGeneration:generation,captureLocal:false,keepOnNavigation:true})).ok,true);
+  Object.assign(f.raw,{hookGeneration:'1',receivedVersion:2,sentVersion:2});
+  f.port.onMessage.emit({type:'discovery',sourceCount:64,heard:true,documentGeneration:'forged',callGeneration:'forged'});
+  await until(()=>f.app.audio[0].sent.some(packet=>packet.type==='stop'));
+  const stop=f.app.audio[0].sent.find(packet=>packet.type==='stop');assert.equal(stop.reason,'callEnded');
+  await until(()=>!f.app.api.controlStatus(2).recording);
+  const frame=[...f.app.api.frames].find(frame=>frame.tabId===2);
+  assert.ok(frame.fencedGenerations.has(JSON.stringify(['hook-A','0'])));
+  assert.equal(frame.documentGeneration,'hook-A');assert.equal(frame.callGeneration,'1');
+  assert.notEqual(f.app.api.callInfo(2).generation,generation);
+  f.setClock(1000);await f.publish();assert.equal(f.last().tabs[0].callEvidence.callGeneration,f.app.api.callInfo(2).generation);
+  assert.equal((await f.app.command({type:'command',requestId:'new-call',action:'start',mode:'tracks',tabId:2,
+   independent:true,callGeneration:f.app.api.callInfo(2).generation,captureLocal:false})).ok,true,'new call must not stay permanently busy');
+ }finally{f.app.close()}
+});
+
+test('unrelated tab or fragment updates between native polls do not publish healthy proof as unknown',async()=>{
+ for(const update of ['fragment','second-tab']){
+  const f=await fixture();
+  try{
+   await f.configure();const first=f.last(),generation=first.tabs[0].callEvidence.callGeneration;
+   f.setClock(500);
+   if(update==='fragment')f.app.tabs.get(2).url+='#controls';
+   else{
+    f.app.tabs.set(3,{id:3,url:'https://neutral.invalid/other',title:'Other page'});
+    f.app.frame(3,0,0,'chrome-other');
+   }
+   await f.publish();assert.equal(f.last().sequence,first.sequence,'coalesce without revoking the active row');
+   f.setClock(1000);f.raw.receivedVersion++;f.raw.sentVersion++;await f.publish();
+   const next=f.last();assert.ok(next.sequence>first.sequence);
+   const row=next.tabs.find(row=>row.tabId===2);assert.equal(row.callEvidence.state,'active');assert.equal(row.callEvidence.callGeneration,generation);
+   if(update==='fragment')assert.ok(row.url.endsWith('#controls'));else assert.ok(next.tabs.some(row=>row.tabId===3));
+  }finally{f.app.close()}
+ }
 });

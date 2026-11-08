@@ -93,12 +93,12 @@ export class CallSignalProducer {
 // Generic interactive-media producer. Browser-owned results and trusted
 // document-start relays bind the private observer; page assertions never qualify.
 export class GenericCallEvidenceProducer {
-  constructor({identity,tabs,frames,current,executeScript,callIdentity,bindEpisode=()=>{},
+  constructor({identity,tabs,frames,current,executeScript,callIdentity,onNativeRead=()=>{},
     now=()=>globalThis.performance?.now?.() ?? Date.now(),
     timers={later:(fn,ms)=>setTimeout(fn,ms),cancel:id=>clearTimeout(id)}}) {
-    Object.assign(this,{identity,tabs,frames,current,executeScript,callIdentity,bindEpisode,now,timers});
+    Object.assign(this,{identity,tabs,frames,current,executeScript,callIdentity,onNativeRead,now,timers});
     this.publications=new WeakMap();this.lastWire=null;this.epoch=null;this.lastPublishedAt=-Infinity;
-    this.prepared=new WeakMap();
+    this.prepared=new WeakMap();this.activePublications=new Map();
   }
   async bounded(read) {
     let deadline;
@@ -120,26 +120,32 @@ export class GenericCallEvidenceProducer {
         return {...row,callEvidence:{...row.callEvidence,state:'unknown',reason:'unverified',callGeneration:null}};
       return row;
     });
-    const result={...snapshot,tabs};this.lastWire=JSON.stringify(result);return result;
+    const result={...snapshot,tabs};
+    for(const [id] of this.activePublications)if(!tabs.some(row=>row.tabId===id&&row.callEvidence.state==='active'))this.activePublications.delete(id);
+    this.lastWire=JSON.stringify(result);return result;
+  }
+  async read(frame) {
+    if (!this.current(frame) || frame.frameId !== 0 || !signalToken(frame.browserDocumentId) || frame.observerDocumentStart!==true) return null;
+    const browser=frame.browserDocumentId,epoch=frame.obsoleteEpoch;
+    const results=await this.bounded(()=>this.executeScript({
+      target:{tabId:frame.tabId,documentIds:[browser]},world:'MAIN',
+      // This identifier is a non-configurable own global installed at
+      // document_start. No Object/globalThis/prototype or page message lookup.
+      func:()=>__cassiniCallEvidenceV1.read()
+    }));
+    if (!this.current(frame) || frame.browserDocumentId!==browser || frame.obsoleteEpoch!==epoch ||
+        !Array.isArray(results) || results.length!==1 || results[0]?.documentId!==browser || results[0]?.frameId!==0) return null;
+    const value=results[0].result;
+    if (!value || value.version!==1 || !signalToken(value.documentGeneration) || !signalToken(value.hookGeneration) ||
+        !Number.isInteger(value.sourceCount) || value.sourceCount<0 || value.sourceCount>64 || typeof value.heard!=='boolean') return null;
+    this.onNativeRead(frame,value);
+    if (!this.current(frame) || frame.browserDocumentId!==browser || frame.obsoleteEpoch!==epoch) return null;
+    return value;
   }
   async observe(frame) {
-    if (!this.current(frame) || frame.frameId !== 0 || !signalToken(frame.browserDocumentId) || !signalToken(frame.documentGeneration) || !signalToken(frame.callGeneration) || frame.observerDocumentStart!==true || (frame.sourceCount===0&&!this.publications.has(frame))) return null;
-    const binding={browser:frame.browserDocumentId,hook:frame.documentGeneration,generation:frame.callGeneration,epoch:frame.obsoleteEpoch};
-    const started=this.now();
-    const results=await this.bounded(()=>this.executeScript({
-      target:{tabId:frame.tabId,documentIds:[binding.browser]},world:'MAIN',
-      func:()=>{
-        const descriptor=Object.getOwnPropertyDescriptor(globalThis,'__cassiniCallEvidenceV1');
-        if (!descriptor || descriptor.writable || descriptor.configurable || typeof descriptor.value?.read !== 'function') return null;
-        return descriptor.value.read();
-      }
-    }));
-    if (!this.current(frame) || frame.obsoleteEpoch !== binding.epoch || frame.browserDocumentId !== binding.browser ||
-        frame.documentGeneration !== binding.hook || frame.callGeneration !== binding.generation ||
-        !Array.isArray(results) || results.length !== 1 || results[0]?.documentId !== binding.browser || results[0]?.frameId !== 0) return null;
-    const value=results[0].result;
-    if (!value || value.version !== 1 || value.documentGeneration !== binding.hook || value.hookGeneration !== binding.generation ||
-        typeof value.ended!=='boolean' || !Number.isSafeInteger(value.sessionEpoch) || value.sessionEpoch<0 ||
+    const started=this.now(),value=await this.read(frame);
+    if (!value || value.version !== 1 || value.documentGeneration !== frame.documentGeneration || value.hookGeneration !== frame.callGeneration ||
+        typeof value.ended!=='boolean' ||
         !['receivedVersion','sentVersion'].every(key=>Number.isSafeInteger(value[key])&&value[key]>=0) ||
         (!value.ended && (!Number.isSafeInteger(value.revision) || value.revision <= 0 || typeof value.ageMs !== 'number' || !Number.isFinite(value.ageMs) || value.ageMs < 0 || value.ageMs+Math.max(0,this.now()-started) > 2500)) ||
         !['receivedPeers','capturedSendingPeers','samePeerCount','unboundReceiverCount'].every(key=>Number.isSafeInteger(value[key])&&value[key]>=0&&value[key]<=64) ||
@@ -147,7 +153,7 @@ export class GenericCallEvidenceProducer {
     return {facts:value,validUntil:value.ended?Infinity:started+2500-value.ageMs};
   }
   async snapshot({verified=false,epoch=0,configurationEpoch=0,preview=false,tabId=null}={}) {
-    if (!preview && epoch!==this.epoch) {this.epoch=epoch;this.publications=new WeakMap();this.lastWire=null;this.lastPublishedAt=-Infinity;}
+    if (!preview && epoch!==this.epoch) {this.epoch=epoch;this.publications=new WeakMap();this.activePublications.clear();this.lastWire=null;this.lastPublishedAt=-Infinity;}
     if (!preview && configurationEpoch!==this.configurationEpoch) {this.configurationEpoch=configurationEpoch;this.lastWire=null;}
     const currentPublication=()=>preview||this.epoch===epoch&&this.configurationEpoch===configurationEpoch;
     const browserInstance=this.identity();
@@ -175,7 +181,6 @@ export class GenericCallEvidenceProducer {
       const observation=await this.observe(frame),observed=observation?.facts;
       bindings.get(frame).validUntil=observation?.validUntil ?? 0;
       if (!currentPublication() || !currentBinding(frame)) return null;
-      if (observed && !preview) this.bindEpisode(frame,observed.sessionEpoch);
       bindings.get(frame).call=this.callIdentity(frame);
       const generation=this.callIdentity(frame);
       const active=observed?.samePeerCount===1 && observed.receivedVersion>0 && observed.sentVersion>0 && signalToken(generation);
@@ -183,7 +188,7 @@ export class GenericCallEvidenceProducer {
       bindings.get(frame).active=active;
       const previous=this.publications.get(frame);
       bindings.get(frame).renewed=active&&(!previous||generation!==previous.call||observed.receivedVersion>previous.received&&observed.sentVersion>previous.sent);
-      const captureReady=frame.sourceCount>0 && (!active || observed.unboundReceiverCount===0);
+      const captureReady=observed?.sourceCount>0 && (!active || observed.unboundReceiverCount===0);
       return {tabId:frame.tabId,url:tab.url,documentGeneration:frame.browserDocumentId,
         sourceDocumentGeneration:signalToken(frame.documentGeneration)?frame.documentGeneration:null,
         remoteAudio:captureReady?'separated':'unknown',
@@ -203,17 +208,30 @@ export class GenericCallEvidenceProducer {
     if (preview) return snapshot;
     const stale=snapshot.tabs.filter(row=>row.callEvidence.state==='active'&&!bindings.get(frames.find(frame=>frame.tabId===row.tabId)).renewed);
     const raw=JSON.stringify(snapshot);
-    if (stale.length && raw===this.lastWire && this.now()-this.lastPublishedAt<2000) return null;
+    if (stale.length && this.lastWire!==null && this.activePublications.size &&
+        !snapshot.tabs.some(row=>row.callEvidence.state==='inactive') &&
+        [...this.activePublications].every(([id,previous])=>{
+          const row=snapshot.tabs.find(row=>row.tabId===id),frame=frames.find(frame=>frame.tabId===id),binding=bindings.get(frame);
+          return row?.callEvidence.state==='active' && frame===previous.frame && binding &&
+            binding.browser===previous.browser && binding.hook===previous.hook && binding.generation===previous.generation &&
+            binding.epoch===previous.epoch && binding.call===previous.call && this.now()-previous.publishedAt<2000;
+        })) return null;
     if (!stale.length && raw===this.lastWire && !snapshot.tabs.some(row=>row.callEvidence.state==='active')) return null;
     // Coalesce normal refreshes; actual withdrawal/navigation bypasses this.
     if (!stale.length && raw===this.lastWire && this.now()-this.lastPublishedAt<1000) return null;
+    const activePublications=new Map();
     for (const row of snapshot.tabs) {
       const frame=frames.find(frame=>frame.tabId===row.tabId),binding=bindings.get(frame);
       if (row.callEvidence.state==='active' && !binding.renewed)
         row.callEvidence={...row.callEvidence,state:'unknown',reason:'unverified',callGeneration:null};
-      if (row.callEvidence.state==='active') this.publications.set(frame,{call:binding.call,received:binding.proof.receivedVersion,sent:binding.proof.sentVersion});
+      if (row.callEvidence.state==='active') {
+        const publication={frame,browser:binding.browser,hook:binding.hook,generation:binding.generation,epoch:binding.epoch,
+          call:binding.call,received:binding.proof.receivedVersion,sent:binding.proof.sentVersion,publishedAt:this.now()};
+        this.publications.set(frame,publication);activePublications.set(row.tabId,publication);
+      }
     }
     if (JSON.stringify(snapshot)===this.lastWire&&!snapshot.tabs.some(row=>row.callEvidence.state==='active')) return null;
+    this.activePublications=activePublications;
     this.lastWire=JSON.stringify(snapshot);this.lastPublishedAt=this.now();
     this.prepared.set(snapshot,new Map(frames.filter(frame=>bindings.has(frame)).map(frame=>[frame.tabId,{frame,binding:bindings.get(frame)}])));
     return snapshot;
