@@ -263,11 +263,10 @@ try{
         });
         const revision=await caller.evaluate(()=>__cassiniCallEvidenceV1.read().revision);
         await caller.waitForFunction(revision=>__cassiniCallEvidenceV1.read().revision>=revision+3,revision);
-        const statusIndex=await worker.evaluate(tabId=>{
-          const index=fixturePackets.length;fixtureControlPort.onMessage.emit({type:'command',requestId:'synthetic-still-live',action:'status',tabId,independent:true});return index;
-        },tabId);
-        const live=(await packet(worker,{type:'result',after:statusIndex})).packet;
-        assert.equal(live.requestId,'synthetic-still-live');assert.equal(live.ok,true);assert.equal(live.status.recording,true);
+        // Reconfiguration publishes a fresh protocol status snapshot; status
+        // is a notification, not a host command action.
+        const live=(await packet(worker,{type:'status',after:await barrier(worker)})).packet;
+        assert.equal(live.sessions.some(session=>session.tabId===tabId&&session.recording===true),true,JSON.stringify(live));
         assert.equal(await worker.evaluate(()=>fixtureManualStops),0,'synthetic lifecycle cannot terminate the active recording');
         assert.equal(await caller.evaluate(()=>__cassiniCallEvidenceV1.read().samePeerCount),0);
         await packet(worker,{tabId,state:'unknown',after:await barrier(worker)});
