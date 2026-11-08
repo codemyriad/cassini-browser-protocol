@@ -81,7 +81,11 @@ try{
  // to Chrome's actual meeting-tab object, as in the loaded-reload fixture.
  popup=await observer.newPage();await popup.goto(`chrome-extension://${id}/popup.html`);
  await popup.evaluate(tabId=>{const query=chrome.tabs.query.bind(chrome.tabs);chrome.tabs.query=async options=>options.active?[await chrome.tabs.get(tabId)]:query(options);},row.tabId);
- await popup.getByRole('heading',{name:'Meeting sources detected',exact:true}).waitFor();
+ await popup.getByRole('heading',{name:'Interactive session is unverified',exact:true}).waitFor();
+ const beforeStart=await popup.evaluate(tabId=>chrome.runtime.sendMessage({target:'background',type:'status',tabId}),row.tabId);
+ assert.ok(inventory().some(item=>item.tabId===row.tabId&&item.sourceCount>=2&&item.heard===true),
+  'listen-only Talk retains both RTP sources without automatic admission');
+ assert.equal(beforeStart.tabEvidence.callEvidence.state,'unknown');
  const requestId='nextcloud-start';control.write(JSON.stringify({type:'command',requestId,action:'start',tabId:row.tabId,mode:'tracks',independent:true,captureLocal:false,microphone:false})+'\n');
  const started=await until(()=>events.find(e=>e.type==='result'&&e.requestId===requestId),'native Start result');assert.equal(started.ok,true,JSON.stringify(started));
  const directory=started.status.path;
