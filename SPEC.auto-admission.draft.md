@@ -44,6 +44,8 @@ Proposed additive negotiation, **name provisional**: `verified-auto-admission-v1
 
 If the coordinator rejects the old-consumer projection cost, the alternative is an explicit supported consumer minimum with an upgrade/auto-disabled state. Do not choose an unsafe silent fallback to the old predicate. Consumers must review which migration to ship; this document is not authorization to remove legacy manual rows or upgrade user installations.
 
+Fail closed from the **first publication**, before capability acknowledgement: never send auto-driving unverified legacy rows and retract them only after discovering an old consumer. New consumers keep automatic dispatch disabled while the stricter negotiation is pending or absent. Preserve existing recording status/control even when observations are withheld from an old client's automatic inventory; suppression is not a fabricated call-ended event or permission to start another recording.
+
 The first code change can be the narrowly reviewed consumer admission guard and boundary regressions, followed by the generic producer evidence/negotiation/projection implementation. Do not advertise the new capability until both halves are implemented and conformance-tested. No companion version reservation is taken by a docs-only proposal.
 
 ## Required literal cases / actual boundary regressions
