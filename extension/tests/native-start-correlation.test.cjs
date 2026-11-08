@@ -4,7 +4,9 @@ const assert=require('node:assert/strict');
 const fs=require('node:fs');
 const path=require('node:path');
 const {setup,until}=require('./support/app-control-harness.cjs');
-const vectors=JSON.parse(fs.readFileSync(path.resolve(__dirname,'../../conformance/control/call-signals-vectors.json'))).nativeStartCorrelation;
+const root=path.resolve(__dirname,'../..');
+const contract=fs.existsSync(path.join(root,'conformance/control/call-signals-vectors.json'))?root:path.join(root,'browser-protocol');
+const vectors=JSON.parse(fs.readFileSync(path.join(contract,'conformance/control/call-signals-vectors.json'))).nativeStartCorrelation;
 for(const vector of vectors.cases)test('native Start request binding: '+vector.name,async()=>{
  const app=await setup();let release,entered=false,held=true;
  const get=app.chrome.tabs.get,gate=new Promise(resolve=>release=resolve);
