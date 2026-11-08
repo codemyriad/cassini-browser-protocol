@@ -169,6 +169,8 @@ try{
         Math.max=()=>Infinity;Math.min=()=>0;
         Set=Map=function(){throw Error('page collection')};
         performance.now=()=>0;
+        Object.defineProperty(String.prototype,Symbol.split,{value(){throw Error('page split')}});
+        Object.defineProperty(Promise,Symbol.species,{get(){throw Error('page species')}});
         RTCStatsReport.prototype.forEach=()=>{throw Error('page report')};
         RTCRtpReceiver.prototype.getStats=async()=>{throw Error('page receiver')};
         Object.defineProperty(RTCRtpSender.prototype,'track',{get(){throw Error('page track')}});

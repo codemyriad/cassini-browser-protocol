@@ -127,7 +127,7 @@
     control({ type: "discover" });
   });
   listen("message", event => {
-    if (event.source !== window || event.data?.channel !== "cassini-page") return;
+    if (event.isTrusted !== true || event.source !== window || event.data?.channel !== "cassini-page") return;
     const { type, packet, request } = event.data;
     if (retired && !(drainingToken && event.data.token === drainingToken)) return;
     if (type === "hookReady") {

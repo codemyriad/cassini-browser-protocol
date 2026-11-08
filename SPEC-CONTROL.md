@@ -1325,6 +1325,13 @@ grace remain app-owned; unknown is not an affirmative end.
 
 ### Document-start trust boundary
 
+The collector claims its immutable reader global FIRST, before checking secure
+context, WebRTC, UUID support or any fallible setup. Until complete successful
+initialization, the frozen reader returns null. Non-secure contexts and missing
+capabilities remain unavailable for generic evidence for the entire document;
+page code cannot replace the sentinel or enable it by changing global flags.
+Loopback HTTP may be a browser secure context; ordinary HTTP is not.
+
 The native collector runs before page scripts and retains its own native method,
 getter, collection-operation, clock and promise references. A later page override
 of Object/Reflect, collection prototypes, MediaStream accessors, RTC statistics or
@@ -1345,6 +1352,30 @@ end a previous recording as callEnded, fence old sources and assign the new
 background call generation. There is no page-epoch shortcut around that lifecycle.
 Capture scanning and DOM sender deduplication have no access to the collector's
 private getUserMedia-root/clone provenance.
+
+The collector strips URL fragments with captured indexOf/slice, without a late
+Symbol.split lookup. Its native then calls use a private fixed-species constructor
+and restore the API promise's descriptor afterward; a page Promise[Symbol.species]
+override cannot supply the constructor used for those observations.
+
+Relays reject synthetic MessageEvents (isTrusted false). Native window.postMessage
+is itself UA-trusted even when called by the page, so isTrusted is NOT evidence
+authentication; only the protected native reader provides evidence. Discovery
+wakeups have one in-flight read and a 1000 ms per-frame limit, with one trailing
+refresh to avoid losing changes. This limits page-triggered execution; normal
+verified progress polling remains independent and never renews proof from a
+cached discovery message.
+
+Verified meetings inventory includes only native-verified top-frame source facts;
+page-chosen subframe counts/heard cannot inflate it. The legacy, unacknowledged
+inventory retains its older unverified subframe facts for compatibility. An
+unavailable native collector can likewise retain legacy/manual source facts;
+they are excluded from verified inventory and do not yield a verified source
+alias. A page
+can fabricate those legacy facts, and a legacy consumer using them alone can
+still misclassify a page before adoption. They are not admission proof. Consumers
+must adopt the acknowledged verified contract before using automatic Start; the
+separate Talk-positive product gate still applies before that adoption.
 
 ### Native Start request binding
 

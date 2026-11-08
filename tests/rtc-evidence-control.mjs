@@ -13,17 +13,17 @@ export async function privateControl(worker){
   };
  });
 }
-export async function packet(worker,{type='callSignals',tabId,state,after=0,callGeneration=null,sourceDocumentGeneration=null}={}){
+export async function packet(worker,{type='callSignals',tabId,state,after=0,callGeneration=null,sourceDocumentGeneration=null,sourceCount=null}={}){
  return worker.evaluate(options=>new Promise((resolve,reject)=>{
   let deadline;
   const check=()=>{
    const found=fixturePackets.slice(options.after).filter(value=>value.type===options.type).map(value=>({packet:value,row:(value.tabs||value.meetings||[]).find(row=>row.tabId===options.tabId)})).filter(value=>
-    options.tabId==null||value.row&&(options.state==null||value.row.callEvidence?.state===options.state)&&(options.callGeneration==null||value.row.callGeneration===options.callGeneration)&&(options.sourceDocumentGeneration==null||value.row.sourceDocumentGeneration===options.sourceDocumentGeneration)).at(-1);
+    options.tabId==null||value.row&&(options.state==null||value.row.callEvidence?.state===options.state)&&(options.callGeneration==null||value.row.callGeneration===options.callGeneration)&&(options.sourceDocumentGeneration==null||value.row.sourceDocumentGeneration===options.sourceDocumentGeneration)&&(options.sourceCount==null||value.row.sourceCount===options.sourceCount)).at(-1);
    if(found){clearTimeout(deadline);fixtureObservers.delete(check);resolve(found)}
   };
   deadline=setTimeout(()=>{fixtureObservers.delete(check);reject(Error('Timed out waiting for acknowledged worker evidence: '+options.type+' '+options.state))},15000);
   fixtureObservers.add(check);check();
- }),{type,tabId,state,after,callGeneration,sourceDocumentGeneration});
+ }),{type,tabId,state,after,callGeneration,sourceDocumentGeneration,sourceCount});
 }
 export async function barrier(worker){
  await packet(worker,{type:'hello'});

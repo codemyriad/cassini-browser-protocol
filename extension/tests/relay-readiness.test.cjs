@@ -14,7 +14,7 @@ function relay() {
     connect(){const port={sent:[],onMessage:event(),onDisconnect:event(),disconnect(){this.disconnected=true},postMessage(m){if(!alive)throw Error('Extension context invalidated.');this.sent.push(m)}};ports.push(port);return port}}};
   const context=vm.createContext({window,chrome,setTimeout(fn,ms){const key=++id;timers.set(key,{fn,ms});return key},clearTimeout:key=>timers.delete(key)});
   const inject=()=>vm.runInContext(source,context);inject();
-  const page=data=>{for(const fn of [...handlers.get('message')||[]])fn({source:window,data:{channel:'cassini-page',...data}})};
+  const page=data=>{for(const fn of [...handlers.get('message')||[]])fn({isTrusted:true,source:window,data:{channel:'cassini-page',...data}})};
   return {ports,controls,handlers,runtime,timers,inject,page,context,invalidate(){alive=false}};
 }
 test('relay handshake belongs to the current worker instance; stale and incompatible replies never make it ready',()=>{
@@ -280,4 +280,14 @@ test('persisted restore replaces a frozen port and drains once: '+order,()=>{
  f.page({type:'stopped',token:'old'});
  assert.equal(f.controls.filter(m=>m.type==='start').length,2);
  assert.equal(f.controls.at(-1).token,'new');assert.equal(fresh.disconnected,undefined);
+});
+
+test('synthetic MessageEvent dispatch cannot claim hook readiness',()=>{
+ const f=relay(),port=f.ports[0];
+ port.onMessage.emit({type:'relayHello',protocol:1,instanceId:'current'});
+ for(const listener of f.handlers.get('message'))listener({isTrusted:false,source:f.context.window,
+  data:{channel:'cassini-page',type:'hookReady',protocol:1,instanceId:'current'}});
+ assert.equal(port.sent.some(message=>message.type==='relayReady'),false);
+ f.page({type:'hookReady',protocol:1,instanceId:'current'});
+ assert.equal(port.sent.some(message=>message.type==='relayReady'),true);
 });

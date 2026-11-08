@@ -1,5 +1,5 @@
-// Zero-permission regression for the exact review exploit, using the loaded
-// extension/worker. No gUM call, native input factory, PCM, or user profile.
+// Loaded-extension regressions, including a genuinely insecure origin. All RTC
+// audio is generated; no gUM, native input, PCM sink, or installed profile.
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {generateKeyPairSync,createHash} from 'node:crypto';
@@ -7,53 +7,111 @@ import {cp,mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
 import os from 'node:os';import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {privateControl,packet,barrier} from './rtc-evidence-control.mjs';
+import {connectReceiveSlots} from '../scenarios/product-topologies.mjs';
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
-const temporary=await mkdtemp(path.join(os.tmpdir(),'cassini-zero-permission-'));
-const extension=path.join(temporary,'extension');await cp(path.join(root,'extension'),extension,{recursive:true});
-const manifestPath=path.join(extension,'manifest.json'),manifest=JSON.parse(await readFile(manifestPath,'utf8'));
-const key=generateKeyPairSync('rsa',{modulusLength:2048}).publicKey.export({type:'spki',format:'der'});
-manifest.key=key.toString('base64');await writeFile(manifestPath,JSON.stringify(manifest));
-const id=[...createHash('sha256').update(key).digest('hex').slice(0,32)].map(c=>String.fromCharCode(97+parseInt(c,16))).join('');
-assert.notEqual(id,'pcafdaahfhjiolfpfnlhmljfgoabbaij');
+const temporary=await mkdtemp(path.join(os.tmpdir(),'cassini-admission-attacks-'));
 const server=createServer((_request,response)=>response.end('<!doctype html><title>Permission-free adversary fixture</title>'));
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
-let context;
 try{
- context=await chromium.launchPersistentContext(path.join(temporary,'profile'),{channel:'chromium',headless:true,
-  permissions:[],args:['--disable-audio-output',`--disable-extensions-except=${extension}`,`--load-extension=${extension}`,`--allowlisted-extension-id=${id}`]});
- const worker=context.serviceWorkers()[0]||await context.waitForEvent('serviceworker');await privateControl(worker);
- const page=await context.newPage();const url=`http://127.0.0.1:${server.address().port}/`;
- await page.goto(url);
- const tabId=await worker.evaluate(async url=>(await chrome.tabs.query({})).find(tab=>tab.url===url).id,url);
- const actual=await page.evaluate(()=>__cassiniCallEvidenceV1.read());
- await page.evaluate(()=>{
-  globalThis.forgedDescriptorReads=0;
-  Object.getOwnPropertyDescriptor=()=>{forgedDescriptorReads++;return {value:{read:()=>({version:1,documentGeneration:'X',hookGeneration:'Y',revision:99,
-   ageMs:0,receivedPeers:1,capturedSendingPeers:1,samePeerCount:1,unboundReceiverCount:0,receivedVersion:999,sentVersion:999,ended:false,sessionEpoch:999,sourceCount:1,heard:true})}}};
-  postMessage({channel:'cassini-page',type:'discovery',sourceCount:1,heard:true,documentGeneration:'X',callGeneration:'Y'},'*');
- });
- for(let attempt=0;attempt<3;attempt++){
-  const after=await barrier(worker);const current=await packet(worker,{tabId,after,state:'unknown',sourceDocumentGeneration:actual.documentGeneration});
-  assert.equal(current.row.callEvidence.callGeneration,null);
-  assert.equal(current.row.sourceDocumentGeneration,actual.documentGeneration);
-  assert.notEqual(current.row.sourceDocumentGeneration,'X');
+ for(const fixture of ['secure-loopback-rtp','insecure-origin-rtp','missing-peer']){
+  const extension=path.join(temporary,fixture+'-extension');await cp(path.join(root,'extension'),extension,{recursive:true});
+  const manifestPath=path.join(extension,'manifest.json'),manifest=JSON.parse(await readFile(manifestPath,'utf8'));
+  const key=generateKeyPairSync('rsa',{modulusLength:2048}).publicKey.export({type:'spki',format:'der'});
+  manifest.key=key.toString('base64');manifest.content_scripts[0].js.unshift('fixture-capabilities.js');
+  await writeFile(path.join(extension,'fixture-capabilities.js'),`addEventListener('message',event=>{if(event.data?.channel==='cassini-control'&&event.data.type==='handshake')globalThis.fixtureHandshake=event.data.instanceId});\n${fixture==='missing-peer'?'globalThis.RTCPeerConnection=undefined;':''}`);
+  await writeFile(manifestPath,JSON.stringify(manifest));
+  const id=[...createHash('sha256').update(key).digest('hex').slice(0,32)].map(c=>String.fromCharCode(97+parseInt(c,16))).join('');
+  assert.notEqual(id,'pcafdaahfhjiolfpfnlhmljfgoabbaij');
+  const context=await chromium.launchPersistentContext(path.join(temporary,fixture+'-profile'),{channel:'chromium',headless:true,
+   permissions:[],args:['--disable-audio-output','--no-proxy-server','--host-resolver-rules=MAP insecure.cassini.test 127.0.0.1',
+    '--autoplay-policy=no-user-gesture-required','--allow-loopback-in-peer-connection','--disable-features=WebRtcHideLocalIpsWithMdns',
+    `--disable-extensions-except=${extension}`,`--load-extension=${extension}`,`--allowlisted-extension-id=${id}`]});
+  try{
+   const worker=context.serviceWorkers()[0]||await context.waitForEvent('serviceworker');await privateControl(worker);
+   const page=await context.newPage(),hostname=fixture==='insecure-origin-rtp'?'insecure.cassini.test':'127.0.0.1';
+   const url=`http://${hostname}:${server.address().port}/`;
+   await page.goto(url);
+   const environment=await page.evaluate(()=>{
+    const descriptor=Object.getOwnPropertyDescriptor(globalThis,'__cassiniCallEvidenceV1');
+    return {secure:isSecureContext,uuid:typeof crypto.randomUUID,claimed:!!descriptor,
+     frozen:Object.isFrozen(descriptor?.value),writable:descriptor?.writable,configurable:descriptor?.configurable,
+     snapshot:descriptor?.value.read()};
+   });
+   assert.equal(environment.secure,fixture!=='insecure-origin-rtp');
+   assert.equal(environment.claimed,true);assert.equal(environment.frozen,true);
+   assert.equal(environment.writable,false);assert.equal(environment.configurable,false);
+   if(fixture==='insecure-origin-rtp')assert.equal(environment.uuid,'undefined','this must exercise an actual insecure context');
+   if(fixture!=='secure-loopback-rtp')assert.equal(environment.snapshot,null);
+   const permission=await page.evaluate(async()=>{try{return (await navigator.permissions.query({name:'microphone'})).state}catch{return 'unsupported'}});
+   assert.notEqual(permission,'granted');
+   const tabId=await worker.evaluate(async url=>(await chrome.tabs.query({})).find(tab=>tab.url===url).id,url);
+   if(fixture==='missing-peer'){
+    await page.waitForFunction(()=>typeof fixtureHandshake==='string');
+    assert.equal(await page.evaluate(()=>{
+     const message=new MessageEvent('message',{source:window,data:{channel:'cassini-page',type:'hookReady',protocol:1,instanceId:fixtureHandshake}});
+     dispatchEvent(message);return message.isTrusted;
+    }),false);
+    const synthetic=await worker.evaluate(tabId=>chrome.tabs.sendMessage(tabId,{type:'cassini-connect'}),tabId);
+    assert.equal(synthetic.connected,false,'synthetic MessageEvent cannot complete the handshake');
+    // Real postMessage is UA-trusted but page-forgeable; readiness alone must
+    // still be harmless because the immutable unavailable reader was claimed.
+    await page.evaluate(()=>postMessage({channel:'cassini-page',type:'hookReady',protocol:1,instanceId:fixtureHandshake},'*'));
+   }else{
+    await page.evaluate(()=>{globalThis.fixtureDiscovery=null;addEventListener('message',event=>{if(event.data?.channel==='cassini-page'&&event.data.type==='discovery')fixtureDiscovery=event.data})});
+    const remote=await context.newPage();await remote.goto(url+'remote');
+    await connectReceiveSlots(page,remote,[[440]]);
+    await page.waitForFunction(()=>fixtureDiscovery?.sourceCount===1&&fixtureDiscovery.heard===true);
+    if(fixture==='insecure-origin-rtp'){
+     const before=await worker.evaluate(()=>{const before=fixturePackets.length;fixtureControlPort.onMessage.emit({type:'configure',capabilities:['call-signals-v1']});return before});
+     await packet(worker,{type:'meetings',tabId,sourceCount:1,after:before});
+     const paired=await barrier(worker),verified=(await packet(worker,{type:'meetings',after:paired})).packet;
+     assert.equal(verified.meetings.some(row=>row.tabId===tabId),false);
+    }
+    if(fixture==='secure-loopback-rtp'){
+     await page.waitForFunction(()=>__cassiniCallEvidenceV1.read().heard===true);
+     const navigation=page.waitForEvent('framenavigated',{predicate:frame=>frame.url()===url+'child'});
+     await page.evaluate(url=>{const child=document.createElement('iframe');child.src=url+'child';document.body.append(child)},url);
+     const child=await navigation;
+     await child.evaluate(()=>{
+      const forge=()=>postMessage({channel:'cassini-page',type:'discovery',sourceCount:64,heard:true,documentGeneration:'child-forged',callGeneration:'child-forged'},'*');
+      addEventListener('message',event=>{if(event.data?.channel==='cassini-control'&&event.data.type==='discover')queueMicrotask(forge)});
+      forge();
+     });
+     const before=await worker.evaluate(()=>{const before=fixturePackets.length;fixtureControlPort.onMessage.emit({type:'configure',capabilities:['call-signals-v1']});return before});
+     await packet(worker,{type:'meetings',tabId,sourceCount:65,after:before});
+     const paired=await barrier(worker);
+     await packet(worker,{type:'meetings',tabId,sourceCount:1,after:paired});
+    }
+   }
+   await page.evaluate(()=>{
+    globalThis.forgedDescriptorReads=0;globalThis.forgedRevision=100;
+    const forged=()=>({version:1,documentGeneration:'X',hookGeneration:'Y',revision:++forgedRevision,ageMs:0,
+     receivedPeers:1,capturedSendingPeers:1,samePeerCount:1,unboundReceiverCount:0,receivedVersion:forgedRevision,sentVersion:forgedRevision,
+     ended:false,sessionEpoch:999,sourceCount:1,heard:true});
+    try{Object.defineProperty(globalThis,'__cassiniCallEvidenceV1',{value:{read:forged}})}catch{}
+    Object.getOwnPropertyDescriptor=()=>{forgedDescriptorReads++;return {value:{read:forged}}};
+    try{Object.defineProperty(globalThis,'isSecureContext',{value:true})}catch{}
+    const message=new MessageEvent('message',{source:window,data:{channel:'cassini-page',type:'discovery',sourceCount:64,heard:true,documentGeneration:'X',callGeneration:'Y'}});
+    dispatchEvent(message);
+    postMessage({channel:'cassini-page',type:'discovery',sourceCount:1,heard:true,documentGeneration:'X',callGeneration:'Y'},'*');
+   });
+   for(let attempt=0;attempt<3;attempt++){
+    const after=await barrier(worker),current=await packet(worker,{tabId,after,state:'unknown'});
+    assert.equal(current.row.callEvidence.callGeneration,null);assert.notEqual(current.row.sourceDocumentGeneration,'X');
+   }
+   assert.equal(await page.evaluate(()=>forgedDescriptorReads),0);
+   if(fixture==='secure-loopback-rtp'){
+    await page.evaluate(()=>{
+     Object.prototype.then=function(resolve){resolve({samePeerCount:1,sourceCount:1,documentGeneration:'X'})};
+     Object.prototype.toJSON=function(){return {samePeerCount:1,sourceCount:1,documentGeneration:'X'}};
+    });
+    await packet(worker,{tabId,state:'unknown',after:await barrier(worker)});
+    assert.equal(await page.evaluate(()=>{const value=__cassiniCallEvidenceV1.read();return value.samePeerCount+':'+value.sourceCount}),'0:1');
+   }else assert.equal(await page.evaluate(()=>__cassiniCallEvidenceV1.read()),null);
+   assert.equal(await worker.evaluate(()=>fixtureCaptureAttempts),0);
+   assert.equal(await worker.evaluate(()=>fixturePackets.some(packet=>packet.type==='callSignals'&&packet.tabs.some(row=>row.callEvidence.state==='active'))),false);
+   console.log('PASS admission attack:',fixture,'— immutable bootstrap, unknown evidence, no native input');
+  }finally{await context.close()}
  }
- assert.equal(await page.evaluate(()=>forgedDescriptorReads),0,'native read must never consult the page Object replacement');
- // Prototype then/toJSON poisoning must not replace the browser-returned read.
- await page.evaluate(()=>{
-  Object.prototype.then=function(resolve){resolve({samePeerCount:1,sourceCount:1,documentGeneration:'X'})};
-  Object.prototype.toJSON=function(){return {samePeerCount:1,sourceCount:1,documentGeneration:'X'}};
- });
- const after=await barrier(worker);await packet(worker,{tabId,after,state:'unknown',sourceDocumentGeneration:actual.documentGeneration});
- const evidence=await page.evaluate(()=>{
-  const value=__cassiniCallEvidenceV1.read();
-  // Return only primitives; Object.prototype has deliberately been poisoned.
-  return value.samePeerCount+':'+value.sourceCount;
- });
- assert.equal(evidence,'0:0');
- assert.equal(await worker.evaluate(()=>fixtureCaptureAttempts),0);
- assert.equal(await worker.evaluate(()=>fixturePackets.some(packet=>packet.type==='callSignals'&&packet.tabs.some(row=>row.callEvidence.state==='active'))),false);
- assert.equal(await worker.evaluate(tabId=>fixturePackets.filter(packet=>packet.type==='meetings').at(-1).meetings.some(row=>row.tabId===tabId)),false);
- console.log('PASS zero-permission descriptor/discovery forgery and prototype-then/serialization poisoning: no active proof, no invented source inventory, no native input');
-}finally{await context?.close();await new Promise(resolve=>server.close(resolve));await rm(temporary,{recursive:true,force:true})}
+}finally{await new Promise(resolve=>server.close(resolve));await rm(temporary,{recursive:true,force:true})}

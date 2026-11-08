@@ -172,3 +172,32 @@ test('unrelated tab or fragment updates between native polls do not publish heal
   }finally{f.app.close()}
  }
 });
+
+test('verified meetings exclude page-chosen subframe counts while legacy inventory remains explicitly unverified',async()=>{
+ const f=await fixture();
+ try{
+  await f.configure();f.app.frame(2,64,2,'chrome-child');
+  const legacy=(await f.app.api.meetings()).meetings.find(row=>row.tabId===2);
+  const verified=(await f.app.api.meetings({verified:true})).meetings.find(row=>row.tabId===2);
+  assert.equal(legacy.sourceCount,65);assert.equal(verified.sourceCount,1);assert.equal(verified.heard,true);
+ }finally{f.app.close()}
+});
+
+test('a discovery flood coalesces to one native read per second with one trailing refresh',async()=>{
+ const f=await fixture();
+ try{
+  const frame=[...f.app.api.frames].find(frame=>frame.tabId===2);
+  await until(()=>!frame.discoveryReadState.pending);
+  let clock=0;const scheduled=[];
+  f.app.api.discoveryTimers.now=()=>clock;
+  f.app.api.discoveryTimers.later=(fn,ms)=>{scheduled.push({fn,ms});return scheduled.length};
+  f.app.api.discoveryTimers.cancel=()=>{};
+  frame.discoveryReadState.lastAt=-Infinity;
+  const before=f.reads;
+  for(let i=0;i<200;i++)f.port.onMessage.emit({type:'discovery',sourceCount:64,heard:true,documentGeneration:'forged',callGeneration:'forged'});
+  await until(()=>f.reads===before+1&&scheduled.length===1);
+  assert.equal(scheduled[0].ms,1000);assert.equal(frame.sourceCount,1);
+  clock=1000;scheduled[0].fn();await until(()=>f.reads===before+2);
+  assert.equal(scheduled.length,1);
+ }finally{f.app.close()}
+});

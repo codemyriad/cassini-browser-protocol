@@ -136,6 +136,8 @@ export class GenericCallEvidenceProducer {
     if (!this.current(frame) || frame.browserDocumentId!==browser || frame.obsoleteEpoch!==epoch ||
         !Array.isArray(results) || results.length!==1 || results[0]?.documentId!==browser || results[0]?.frameId!==0) return null;
     const value=results[0].result;
+    frame.nativeCollectorUnavailable=value===null;
+    if(value===null)frame.nativeSourceVerified=false;
     if (!value || value.version!==1 || !signalToken(value.documentGeneration) || !signalToken(value.hookGeneration) ||
         !Number.isInteger(value.sourceCount) || value.sourceCount<0 || value.sourceCount>64 || typeof value.heard!=='boolean') return null;
     this.onNativeRead(frame,value);
@@ -190,7 +192,8 @@ export class GenericCallEvidenceProducer {
       bindings.get(frame).renewed=active&&(!previous||generation!==previous.call||observed.receivedVersion>previous.received&&observed.sentVersion>previous.sent);
       const captureReady=observed?.sourceCount>0 && (!active || observed.unboundReceiverCount===0);
       return {tabId:frame.tabId,url:tab.url,documentGeneration:frame.browserDocumentId,
-        sourceDocumentGeneration:signalToken(frame.documentGeneration)?frame.documentGeneration:null,
+        sourceDocumentGeneration:observed?.documentGeneration ||
+          (frame.observerDocumentStart===true&&frame.nativeSourceVerified===true&&signalToken(frame.documentGeneration)?frame.documentGeneration:null),
         remoteAudio:captureReady?'separated':'unknown',
         callEvidence:{state:active?'active':observed?.ended?'inactive':'unknown',reason:active?'activeCall':observed?.ended?'callEnded':'unverified',
           adapter:{name:'webrtc-interactive',version:'1'},callGeneration:active||observed?.ended?generation:null}};

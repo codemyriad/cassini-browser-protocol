@@ -2,15 +2,23 @@
 // globals/prototypes may supply admission facts. No device is opened here.
 (() => {
   'use strict';
-  const apply=Reflect.apply, construct=Reflect.construct, define=Object.defineProperty,
-    descriptor=Object.getOwnPropertyDescriptor, freeze=Object.freeze, create=Object.create, assign=Object.assign, setPrototype=Object.setPrototypeOf, own=Object.prototype.hasOwnProperty,
-    push=Array.prototype.push, split=String.prototype.split, numberFinite=Number.isFinite,
+  // Claim the name before secure-context/capability checks or any setup that
+  // can fail. The public function remains an immutable unavailable sentinel
+  // until the complete native collector has initialized successfully.
+  const define=Object.defineProperty,freeze=Object.freeze,create=Object.create;
+  let collector=()=>null;
+  const api=create(null);define(api,'read',{value:()=>collector()});freeze(api);
+  try{define(globalThis,'__cassiniCallEvidenceV1',{value:api})}catch{return}
+  if(globalThis.isSecureContext!==true)return;
+  const apply=Reflect.apply, construct=Reflect.construct,
+    descriptor=Object.getOwnPropertyDescriptor, assign=Object.assign, setPrototype=Object.setPrototypeOf, own=Object.prototype.hasOwnProperty,
+    push=Array.prototype.push, indexOf=String.prototype.indexOf, slice=String.prototype.slice, deleteProperty=Reflect.deleteProperty, species=Symbol.species, numberFinite=Number.isFinite,
     safeInteger=Number.isSafeInteger, NativePromise=Promise, promiseThen=Promise.prototype.then;
   const PC=globalThis.RTCPeerConnection, Sender=globalThis.RTCRtpSender,
     Receiver=globalThis.RTCRtpReceiver, Transceiver=globalThis.RTCRtpTransceiver,
     Track=globalThis.MediaStreamTrack, Stream=globalThis.MediaStream,
     Stats=globalThis.RTCStatsReport;
-  if (!PC || descriptor(globalThis,'__cassiniCallEvidenceV1')) return;
+  if (!PC || typeof globalThis.crypto?.randomUUID!=='function') return;
   const method=(prototype,key)=>descriptor(prototype||{},key)?.value;
   const getter=(prototype,key)=>descriptor(prototype||{},key)?.get;
   const call=(fn,target,args=[])=>apply(fn,target,args);
@@ -19,7 +27,16 @@
   // our captured callback runs. These interfaces have no native then member.
   for (const prototype of [Stream?.prototype,Stats?.prototype]) if(prototype)
     define(prototype,'then',{value:undefined});
-  const then=(promise,yes,no)=>{define(promise,'constructor',{value:NativePromise});return call(promiseThen,promise,[yes,no])};
+  // Promise.prototype.then normally consults page-mutable @@species. Give
+  // this invocation a private constructor with a fixed species, then restore
+  // the API promise's own descriptor without invoking its inherited getter.
+  const thenConstructor=create(null);define(thenConstructor,species,{value:NativePromise});freeze(thenConstructor);
+  const then=(promise,yes,no)=>{
+    const previous=descriptor(promise,'constructor');
+    define(promise,'constructor',{value:thenConstructor,configurable:true});
+    try{return call(promiseThen,promise,[yes,no])}
+    finally{if(previous)define(promise,'constructor',previous);else deleteProperty(promise,'constructor')}
+  };
   const list=()=>setPrototype([],null);
   const add=(array,value)=>call(push,array,[value]);
   const get=(fn,target)=>{try{return call(fn,target)}catch{return null}};
@@ -42,9 +59,10 @@
   // cannot alter native invocation. Timer methods do not consult that receiver.
   const timerTarget=globalThis;
   const timeout=(fn,ms)=>call(nativeTimeout,timerTarget,[fn,ms]);
+  const addressOf=()=>{const value=get(href,locationObject)||'',fragment=call(indexOf,value,['#']);return fragment<0?value:call(slice,value,[0,fragment])};
   const roots=list(), peers=list(), qualified=list();
   let overflow=false, generation=0, revision=0, receivedVersion=0, sentVersion=0,
-    address=call(split,get(href,locationObject)||'',['#',1])[0], sampling=false, heard=false;
+    address=addressOf(), sampling=false, heard=false;
   const documentGeneration=call(uuid,cryptoObject);
   const root=track=>{for(let i=0;i<roots.length;i++)if(roots[i].track===track)return roots[i].root;return null};
   const rememberRoot=(track,ancestor=track)=>{if(roots.length<1024)add(roots,{track,root:ancestor});else overflow=true};
@@ -62,7 +80,7 @@
   };
   const reset=()=>{heard=false;qualified.length=0;for(let i=0;i<peers.length;i++){peers[i].receivers=list();peers[i].senders=list();peers[i].generation=null}};
   const refresh=()=>{
-    const next=call(split,get(href,locationObject)||'',['#',1])[0];
+    const next=addressOf();
     if(next!==address){address=next;generation++;reset()}
   };
   const record=pc=>{for(let i=0;i<peers.length;i++)if(peers[i].pc===pc)return peers[i];return null};
@@ -197,6 +215,6 @@
       receivedPeers,capturedSendingPeers,samePeerCount:overflow?0:samePeerCount,
       receivedVersion:received,sentVersion:sent,unboundReceiverCount,ended:terminal()});
   }
-  define(globalThis,'__cassiniCallEvidenceV1',{value:freeze(assign(create(null),{read}))});
   call(nativeInterval,timerTarget,[sample,1000]);
+  collector=read;
 })();

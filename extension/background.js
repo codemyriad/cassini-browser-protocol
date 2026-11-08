@@ -654,6 +654,31 @@ async function forwardPacket(session, packet, documentGeneration) {
   } finally { if (reserve) session.trackReservations.delete(packet.id); }
 }
 
+const discoveryTimers={now:()=>globalThis.performance?.now?.()??Date.now(),later:(fn,ms)=>setTimeout(fn,ms),cancel:id=>clearTimeout(id)};
+function requestNativeDiscovery(frame, hint=null) {
+  if (!frames.has(frame)) return;
+  const state=frame.discoveryReadState ||= {lastAt:-Infinity,pending:false,timer:null,dirty:false,closed:false};
+  if(state.closed)return;
+  if(hint)state.hint=hint;
+  state.dirty=true;
+  if(state.pending || state.timer!==null)return;
+  const remaining=1000-(discoveryTimers.now()-state.lastAt);
+  if(remaining>0){state.timer=discoveryTimers.later(()=>{state.timer=null;if(!state.closed)requestNativeDiscovery(frame)},remaining);return}
+  state.dirty=false;state.pending=true;state.lastAt=discoveryTimers.now();
+  void genericProducer.read(frame).then(value=>{
+    // An owned unavailable sentinel cannot authenticate facts. Preserve the
+    // legacy/manual inventory only; verified inventory excludes this frame.
+    if(value===null&&frame.nativeCollectorUnavailable===true&&state.hint&&!state.closed)adoptDiscovery(frame,state.hint);
+  }).catch(()=>{}).finally(()=>{
+    state.pending=false;
+    if(state.dirty&&!state.closed)requestNativeDiscovery(frame);
+  });
+}
+function retireNativeDiscovery(frame) {
+  const state=frame.discoveryReadState;
+  if(state){state.closed=true;discoveryTimers.cancel(state.timer);state.timer=null;state.dirty=false}
+}
+
 function adoptDiscovery(frame, message) {
   if (!frames.has(frame) || frame.obsolete || pageState(frame.tabId)==='closed') return;
   frame.hookSeen = true;
@@ -727,7 +752,7 @@ chrome.runtime.onConnect.addListener(port => {
       if (frame.obsolete || pageState(frame.tabId) === "closed") return;
       if (frame.frameId===0 && frame.observerDocumentStart===true) {
         // Wakeup only. read() adopts the browser-bound native facts itself.
-        await genericProducer.read(frame);
+        requestNativeDiscovery(frame,message);
       } else adoptDiscovery(frame,message); // Legacy/manual-only repaired realm.
       return;
     }
@@ -778,6 +803,7 @@ chrome.runtime.onConnect.addListener(port => {
     try { port.postMessage({ type: "ack", token: session.token, request: message.request }); } catch {}
   });
   port.onDisconnect.addListener(() => {
+    retireNativeDiscovery(frame);
     // Chrome closes this channel when a page enters BFCache. Consume the
     // callback error before the existing cleanup/loss handling below.
     void chrome.runtime.lastError;
@@ -924,7 +950,8 @@ async function meetings({verified=false}={}) {
       if (known && callInfo(tabId).url === null) callInfo(tabId).url = callAddress(tab.url);
       // A can reload after its lookup finishes while B's is still pending.
       // Collect every row's current evidence synchronously after ALL lookups.
-      const current = [...frames].filter(frame => frame.tabId === tabId && relayReady(frame) && frame.sourceCount > 0);
+      const current = [...frames].filter(frame => frame.tabId === tabId && relayReady(frame) && frame.sourceCount > 0 &&
+        (!verified || frame.frameId===0 && frame.observerDocumentStart===true && frame.nativeSourceVerified===true));
       const sourceCount = known ? Math.min(4096, current.reduce((total, frame) => total + frame.sourceCount, 0)) : session.lastSourceCount;
       if (session && known) session.lastSourceCount = sourceCount;
       if (!sourceCount && !sessions.has(tabId)) return null;
@@ -979,8 +1006,8 @@ const signalProducer = new CallSignalProducer({identity:()=>browserInstance,tabs
 const genericProducer = new GenericCallEvidenceProducer({identity:()=>browserInstance,tabs:chrome.tabs,frames:()=>frames,
   current:frame=>frames.has(frame)&&mainFrame(frame.tabId)===frame&&relayReady(frame)&&pageState(frame.tabId)==='present',
   executeScript:request=>chrome.scripting.executeScript(request),callIdentity:frame=>callInfo(frame.tabId).generation,
-  onNativeRead:(frame,native)=>adoptDiscovery(frame,{documentGeneration:native.documentGeneration,callGeneration:native.hookGeneration,
-    sourceCount:native.sourceCount,heard:native.heard})});
+  onNativeRead:(frame,native)=>{frame.nativeSourceVerified=true;adoptDiscovery(frame,{documentGeneration:native.documentGeneration,callGeneration:native.hookGeneration,
+    sourceCount:native.sourceCount,heard:native.heard})}});
 const controlCapabilities = ["independent-sessions-v1", "call-evidence-v1", "page-state-v1", "multi-stream-v1", "resume-capture-v1", "heartbeat-v1", "tab-readiness-v1"];
 const appControl = new AppControl({
   runtime: chrome.runtime, alarms: chrome.alarms, busy: startBusy, capabilities: controlCapabilities, signalSnapshot:options=>options.verified?genericProducer.snapshot(options):signalProducer.snapshot(), identity: () => ({extensionVersion,extensionInstance,...companionDiagnostics}), cancelPending: cancelPendingStart,

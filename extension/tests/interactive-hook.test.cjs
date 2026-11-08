@@ -37,7 +37,7 @@ function fixture(){
   }
   const location={get href(){return 'https://neutral.invalid/call'}};
   const window={RTCPeerConnection:Peer,location,postMessage:packet=>messages.push(packet),addEventListener:(name,fn)=>listeners.push(fn)};
-  const context=vm.createContext({window,location,RTCPeerConnection:Peer,RTCRtpSender:Sender,RTCRtpReceiver:Receiver,RTCRtpTransceiver:Transceiver,
+  const context=vm.createContext({isSecureContext:true,window,location,RTCPeerConnection:Peer,RTCRtpSender:Sender,RTCRtpReceiver:Receiver,RTCRtpTransceiver:Transceiver,
     MediaStreamTrack:Track,MediaStream:Stream,RTCStatsReport:Report,
     navigator:{mediaDevices:{async getUserMedia(){return new Stream(new Track())}}},
     crypto:{randomUUID:()=> 'hook-document'},performance:{timeOrigin:origin,now:()=>now},
@@ -124,6 +124,8 @@ test('page replacements of primordials, native getters and stats methods cannot 
   Array.prototype.filter=Array.prototype.map=Array.prototype.some=()=>{throw Error('page Array')};
   Array.prototype[Symbol.iterator]=()=>{throw Error('page iterator')};
   Object.defineProperty(Array.prototype,'0',{set(){throw Error('page indexed setter')},configurable:true});
+  Object.defineProperty(String.prototype,Symbol.split,{value(){throw Error('page split')}});
+  Object.defineProperty(Promise,Symbol.species,{get(){throw Error('page species')}});
   Set=Map=function(){throw Error('page collection')};
   performance.now=()=>0;
   RTCStatsReport.prototype.forEach=()=>{throw Error('page stats')};
@@ -144,4 +146,17 @@ test('a page getAudioTracks replacement cannot turn a synthetic sender into capt
  await f.context.navigator.mediaDevices.getUserMedia();
  await f.tick([peer]);await f.tick([peer]);
  assert.equal(f.read().capturedSendingPeers,0);assert.equal(f.read().samePeerCount,0);
+});
+
+for(const failure of ['insecure','missing-peer','missing-uuid','throwing-capability'])test('bootstrap claims its frozen unavailable reader first: '+failure,()=>{
+ const values={isSecureContext:failure!=='insecure',RTCPeerConnection:failure==='missing-peer'?undefined:function(){},
+  crypto:failure==='missing-uuid'?{}:{randomUUID:()=> 'doc'}};
+ const context=vm.createContext(values);
+ if(failure==='throwing-capability')vm.runInContext("Object.defineProperty(globalThis,'RTCPeerConnection',{get(){throw Error('missing capability')}})",context);
+ const run=()=>vm.runInContext(fs.readFileSync(path.join(__dirname,'../rtc-evidence.js'),'utf8'),context);
+ if(failure==='throwing-capability')assert.throws(run,/missing capability/);else run();
+ const descriptor=Object.getOwnPropertyDescriptor(context,'__cassiniCallEvidenceV1');
+ assert.equal(descriptor.configurable,false);assert.equal(descriptor.writable,false);assert.equal(Object.isFrozen(descriptor.value),true);
+ assert.equal(descriptor.value.read(),null);
+ assert.throws(()=>Object.defineProperty(context,'__cassiniCallEvidenceV1',{value:{read:()=>({samePeerCount:1})}}));
 });
