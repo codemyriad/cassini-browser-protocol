@@ -152,6 +152,9 @@ jobs:
       - name: Detect the real call and preserve separate incoming PCM
         working-directory: protocol
         run: timeout 240 node tests/nextcloud-talk.mjs
+      - name: Measure generic RTC positives, negatives and semantic ambiguity
+        working-directory: protocol
+        run: timeout 240 node tests/rtc-evidence-observations.mjs
       - name: Preserve Talk service logs
         if: always()
         run: |
