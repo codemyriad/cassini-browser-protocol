@@ -36,3 +36,11 @@ test('tab projection never borrows another tab evidence or capture and distingui
   assert.equal(view.transport.app,'connected');assert.equal(view.transport.page,'reloadRequired');
   assert.equal(view.execution.recording,false);assert.equal(view.execution.starting,false);assert.equal(view.execution.tracks,0);
 });
+
+test('healthy transport without source media stays distinct from unavailable capture and unknown admission',async()=>{
+  const {tabEvidenceView}=await import('../tab-evidence.mjs');
+  const view=tabEvidenceView({browserHealth:{nativeControl:'connected',tabs:[]},tabEvidence:{tabId:7,
+    transport:{page:'ready'},callEvidence:{state:'unknown',reason:'unverified'},captureCapability:{kind:'unavailable',assurance:'observed'}}},7);
+  assert.equal(view.transport.page,'ready');assert.equal(view.callEvidence.state,'unknown');
+  assert.equal(view.captureCapability.kind,'unavailable');assert.equal(view.execution.recording,false);
+});

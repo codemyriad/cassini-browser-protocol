@@ -28,7 +28,7 @@
   let callAddress = window.location?.href?.split("#", 1)[0];
   function refreshCall() {
     const next = window.location?.href?.split("#", 1)[0];
-    if (next !== callAddress) { callAddress = next; callGeneration++; resetEvidence(); }
+    if (next !== callAddress) { callAddress = next; callGeneration++; resetEvidence(); qualifiedEndpoints.clear();sessionEpoch=0; }
   }
   function receiverGeneration(receiver, pc) {
     let value = receiverGenerations.get(receiver);
@@ -152,7 +152,9 @@
   // A connected/live receiver slot without fresh packets is not a positive.
   const senderStats = globalThis.RTCRtpSender?.prototype?.getStats;
   let senderBaselines = new WeakMap(), receiverBaselines = new WeakMap(), receivedProgress = new WeakMap();
-  let interactiveProof = null, interactiveRevision = 0;
+  let interactiveProof = null, interactiveRevision = 0, receivedRevision = 0, sentRevision = 0;
+  const qualifiedEndpoints = new Map();
+  let sessionEpoch=0;
   // RTCStats.timestamp uses timeOrigin + now(), per w3.org/TR/webrtc-stats/.
   const freshReport = report => typeof report.timestamp === 'number' && Number.isFinite(report.timestamp) &&
     performance.timeOrigin + performance.now() - report.timestamp >= 0 &&
@@ -185,7 +187,7 @@
           next.set(report.id,{count:report.packetsSent,at:report.timestamp});
           const last = baseline.get(report.id);
           if (last && report.timestamp > last.at && report.timestamp-last.at <= 2500 && report.packetsSent > last.count)
-            proven.push({...candidate,at:report.timestamp-performance.timeOrigin});
+            proven.push({...candidate,at:report.timestamp-performance.timeOrigin,progress:++sentRevision});
         });
         senderBaselines.set(candidate.sender,{track:candidate.track,counts:next});
       } catch { /* Unavailable stats cannot supply admission evidence. */ }
@@ -195,8 +197,6 @@
   }
   // Read the closure through browser-owned executeScript results, not page
   // postMessage claims. The snapshot contains no SDP, device IDs or content.
-  // Deliberately do not advertise verified admission while adversarial/lifecycle
-  // and split-PC review gates remain open.
   try { Object.defineProperty(globalThis,'__cassiniCallEvidenceV1',{value:Object.freeze({read() {
     refreshCall();
     const proof = interactiveProof, age = proof ? performance.now()-proof.at : Infinity;
@@ -209,9 +209,23 @@
     const sending = new Set(proof?.generation === callGeneration && age <= 2500 ?
       proof.senders.filter(({pc,sender,track,at})=>performance.now()-at <= 2500 && capturedSender(pc,sender,track)).map(value=>value.pc) : []);
     const same = new Set([...sending].filter(pc=>receiving.has(pc)));
+    const terminal = qualifiedEndpoints.size>0 && [...qualifiedEndpoints].every(([pc,tracks])=>
+      closed(pc)&&tracks.every(track=>track.readyState==='ended'));
+    if (same.size && (sessionEpoch===0 || terminal)) { sessionEpoch++;qualifiedEndpoints.clear(); }
+    for (const pc of same) qualifiedEndpoints.set(pc,proof.senders.filter(value=>value.pc===pc).map(value=>value.track));
+    // Terminal transport AND ended capture establish an ended interactive
+    // endpoint. Temporary disconnect/mute/replacement remains unknown.
+    const ended = qualifiedEndpoints.size>0 && [...qualifiedEndpoints].every(([pc,tracks])=>
+      closed(pc)&&tracks.every(track=>track.readyState==='ended')) && [...peers].every(closed);
+    const receivedVersion = Math.max(0,...[...current.receivers].filter(([,pc])=>same.has(pc)).map(([receiver])=>receivedProgress.get(receiver)?.progress||0));
+    const sentVersion = Math.max(0,...(proof?.senders||[]).filter(value=>same.has(value.pc)).map(value=>value.progress));
+    const receivedAt=Math.max(-Infinity,...[...current.receivers].filter(([,pc])=>same.has(pc)).map(([receiver])=>receivedProgress.get(receiver)?.at??-Infinity));
+    const sentAt=Math.max(-Infinity,...(proof?.senders||[]).filter(value=>same.has(value.pc)).map(value=>value.at));
+    const proofAge=same.size?performance.now()-Math.min(receivedAt,sentAt):age;
     return {version:1,documentGeneration,hookGeneration:String(callGeneration),revision:proof?.revision ?? 0,
-      ageMs:Number.isFinite(age) ? Math.max(0,age) : null,receivedPeers:receiving.size,
+      ageMs:Number.isFinite(proofAge) ? Math.max(0,proofAge) : null,receivedPeers:receiving.size,
       capturedSendingPeers:sending.size,samePeerCount:same.size,
+      receivedVersion,sentVersion,ended,sessionEpoch,
       unboundReceiverCount:[...current.receivers.values()].filter(pc=>!same.has(pc)).length};
   }})}); } catch { /* A conflicting pre-existing reader is not installed by this hook. */ }
   const connected = pc => !closed(pc) &&
@@ -309,7 +323,7 @@
           if (freshReport(report)) {
             const last = received.get(report.id);
             if (last && report.timestamp > last.at && report.timestamp-last.at <= 2500 && count > last.count)
-              receivedProgress.set(receiver,{pc,track:receiver.track,at:report.timestamp-performance.timeOrigin});
+              receivedProgress.set(receiver,{pc,track:receiver.track,at:report.timestamp-performance.timeOrigin,progress:++receivedRevision});
             received.set(report.id,{count,at:report.timestamp});
           }
         });

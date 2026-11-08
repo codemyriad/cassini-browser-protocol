@@ -16,7 +16,7 @@ export function tabEvidenceView(result, tabId) {
       reason:member(source?.callEvidence?.reason, ['activeCall','callEnded','nonCall','unverified','unsupported','evidenceConflict'], 'unverified')},
     captureCapability:{kind:member(source?.captureCapability?.kind, ['separated','mixed','unavailable','unknown'], 'unknown'),
       assurance:member(source?.captureCapability?.assurance, ['observed','unknown'], 'unknown')},
-    transport:{page:member(current?.state, ['ready','checking','reloadRequired'], 'unavailable'),
+    transport:{page:member(source?.transport?.page ?? current?.state, ['ready','checking','reloadRequired','unavailable'], 'unavailable'),
       app:member(health?.nativeControl, ['connected','disconnected'], 'unknown')},
     execution:{recording:scoped && result.recording === true, starting:scoped && result.starting === true,
       stopping:scoped && result.stopping === true, tracks:scoped ? count(result.tracks) : 0,

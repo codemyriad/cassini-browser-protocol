@@ -21,7 +21,7 @@ export async function browserProfileIdentity(storage, uuid, timers = {later:(fn,
 }
 
 export class SiteSignalAdapters {
-  constructor(definitions = [{name:'whatsapp-web',version:'1-unverified',hostname:'web.whatsapp.com',remoteAudio:'mixed'}]) {
+  constructor(definitions = []) {
     if (!Array.isArray(definitions) || definitions.length > 32) throw Error('Invalid site definitions.');
     this.definitions = definitions.map(definition => {
       if (!definition || !['name','version','hostname'].every(key => typeof definition[key] === 'string' && definition[key].length > 0 && definition[key].length <= 80) ||
@@ -90,23 +90,24 @@ export class CallSignalProducer {
   }
 }
 
-// Candidate generic producer. Kept unadvertised until the approved matrix and
-// session/lifecycle review gates pass. It never consumes page-posted evidence.
+// Generic interactive-media producer. Browser-owned results and trusted
+// document-start relays bind the private observer; page assertions never qualify.
 export class GenericCallEvidenceProducer {
-  constructor({identity,tabs,frames,current,executeScript,callIdentity,
+  constructor({identity,tabs,frames,current,executeScript,callIdentity,bindEpisode=()=>{},
     now=()=>globalThis.performance?.now?.() ?? Date.now(),
     timers={later:(fn,ms)=>setTimeout(fn,ms),cancel:id=>clearTimeout(id)}}) {
-    Object.assign(this,{identity,tabs,frames,current,executeScript,callIdentity,now,timers});
+    Object.assign(this,{identity,tabs,frames,current,executeScript,callIdentity,bindEpisode,now,timers});
+    this.publications=new WeakMap();this.lastWire=null;this.epoch=null;this.lastPublishedAt=-Infinity;
   }
   async bounded(read) {
     let deadline;
     try { return await Promise.race([Promise.resolve().then(read),new Promise(resolve=>{
-      deadline=this.timers.later(()=>resolve(null),2500);
+      deadline=this.timers.later(()=>resolve(null),750);
     })]); } catch { return null; }
     finally { this.timers.cancel(deadline); }
   }
   async observe(frame) {
-    if (!this.current(frame) || frame.frameId !== 0 || !signalToken(frame.browserDocumentId) || !signalToken(frame.documentGeneration) || !signalToken(frame.callGeneration)) return null;
+    if (!this.current(frame) || frame.frameId !== 0 || !signalToken(frame.browserDocumentId) || !signalToken(frame.documentGeneration) || !signalToken(frame.callGeneration) || frame.observerDocumentStart!==true || (frame.sourceCount===0&&!this.publications.has(frame))) return null;
     const binding={browser:frame.browserDocumentId,hook:frame.documentGeneration,generation:frame.callGeneration,epoch:frame.obsoleteEpoch};
     const started=this.now();
     const results=await this.bounded(()=>this.executeScript({
@@ -122,17 +123,23 @@ export class GenericCallEvidenceProducer {
         !Array.isArray(results) || results.length !== 1 || results[0]?.documentId !== binding.browser || results[0]?.frameId !== 0) return null;
     const value=results[0].result;
     if (!value || value.version !== 1 || value.documentGeneration !== binding.hook || value.hookGeneration !== binding.generation ||
-        !Number.isSafeInteger(value.revision) || value.revision <= 0 || typeof value.ageMs !== 'number' || !Number.isFinite(value.ageMs) || value.ageMs < 0 || value.ageMs+Math.max(0,this.now()-started) > 2500 ||
+        typeof value.ended!=='boolean' || !Number.isSafeInteger(value.sessionEpoch) || value.sessionEpoch<0 ||
+        !['receivedVersion','sentVersion'].every(key=>Number.isSafeInteger(value[key])&&value[key]>=0) ||
+        (!value.ended && (!Number.isSafeInteger(value.revision) || value.revision <= 0 || typeof value.ageMs !== 'number' || !Number.isFinite(value.ageMs) || value.ageMs < 0 || value.ageMs+Math.max(0,this.now()-started) > 2500)) ||
         !['receivedPeers','capturedSendingPeers','samePeerCount','unboundReceiverCount'].every(key=>Number.isSafeInteger(value[key])&&value[key]>=0&&value[key]<=64) ||
         value.samePeerCount > Math.min(value.receivedPeers,value.capturedSendingPeers)) return null;
-    return {facts:value,validUntil:started+2500-value.ageMs};
+    return {facts:value,validUntil:value.ended?Infinity:started+2500-value.ageMs};
   }
-  async snapshot({verified=false}={}) {
+  async snapshot({verified=false,epoch=0,configurationEpoch=0,preview=false,tabId=null}={}) {
+    if (!preview && epoch!==this.epoch) {this.epoch=epoch;this.publications=new WeakMap();this.lastWire=null;this.lastPublishedAt=-Infinity;}
+    if (!preview && configurationEpoch!==this.configurationEpoch) {this.configurationEpoch=configurationEpoch;this.lastWire=null;}
+    const currentPublication=()=>preview||this.epoch===epoch&&this.configurationEpoch===configurationEpoch;
     const browserInstance=this.identity();
     if (!signalToken(browserInstance)) return null;
     if (!verified) return {browserInstance,tabs:[]};
-    const frames=[...this.frames()].filter(frame=>frame.frameId===0&&this.current(frame)).slice(0,100);
+    const frames=[...this.frames()].filter(frame=>frame.frameId===0&&this.current(frame)&&(tabId===null||frame.tabId===tabId)).slice(0,100);
     const tabs=await this.bounded(()=>this.tabs.query({}));
+    if (!currentPublication()) return null;
     if (!Array.isArray(tabs)) return {browserInstance,tabs:[]};
     const bindings=new Map();
     const currentBinding=frame=>{
@@ -151,24 +158,47 @@ export class GenericCallEvidenceProducer {
         generation:frame.callGeneration,epoch:frame.obsoleteEpoch,call:this.callIdentity(frame)});
       const observation=await this.observe(frame),observed=observation?.facts;
       bindings.get(frame).validUntil=observation?.validUntil ?? 0;
-      if (!currentBinding(frame)) return null;
+      if (!currentPublication() || !currentBinding(frame)) return null;
+      if (observed && !preview) this.bindEpisode(frame,observed.sessionEpoch);
+      bindings.get(frame).call=this.callIdentity(frame);
       const generation=this.callIdentity(frame);
-      const active=observed?.samePeerCount===1 && signalToken(generation);
+      const active=observed?.samePeerCount===1 && observed.receivedVersion>0 && observed.sentVersion>0 && signalToken(generation);
+      bindings.get(frame).proof=observed;
+      bindings.get(frame).active=active;
+      const previous=this.publications.get(frame);
+      bindings.get(frame).renewed=active&&(!previous||generation!==previous.call||observed.receivedVersion>previous.received&&observed.sentVersion>previous.sent);
       const captureReady=frame.sourceCount>0 && (!active || observed.unboundReceiverCount===0);
       return {tabId:frame.tabId,url:tab.url,documentGeneration:frame.browserDocumentId,
         sourceDocumentGeneration:signalToken(frame.documentGeneration)?frame.documentGeneration:null,
         remoteAudio:captureReady?'separated':'unknown',
-        callEvidence:{state:active?'active':'unknown',reason:active?'activeCall':'unverified',
-          adapter:{name:'webrtc-interactive',version:'1'},callGeneration:active?generation:null}};
+        callEvidence:{state:active?'active':observed?.ended?'inactive':'unknown',reason:active?'activeCall':observed?.ended?'callEnded':'unverified',
+          adapter:{name:'webrtc-interactive',version:'1'},callGeneration:active||observed?.ended?generation:null}};
     }));
     // All reads/Chrome lookups have completed: fence documents retired while a
     // different tab was still pending, before any snapshot can leave the worker.
-    return {browserInstance,tabs:rows.flatMap((row,index)=>{
+    const snapshot={browserInstance,tabs:rows.flatMap((row,index)=>{
       const frame=frames[index];
       if (!row || !currentBinding(frame)) return [];
       if (row.callEvidence.state==='active' && this.now()>bindings.get(frame).validUntil)
         row.callEvidence={...row.callEvidence,state:'unknown',reason:'unverified',callGeneration:null};
       return [row];
     })};
+    if (!currentPublication()) return null;
+    if (preview) return snapshot;
+    const stale=snapshot.tabs.filter(row=>row.callEvidence.state==='active'&&!bindings.get(frames.find(frame=>frame.tabId===row.tabId)).renewed);
+    const raw=JSON.stringify(snapshot);
+    if (stale.length && raw===this.lastWire && this.now()-this.lastPublishedAt<2000) return null;
+    if (!stale.length && raw===this.lastWire && !snapshot.tabs.some(row=>row.callEvidence.state==='active')) return null;
+    // Coalesce normal refreshes; actual withdrawal/navigation bypasses this.
+    if (!stale.length && raw===this.lastWire && this.now()-this.lastPublishedAt<1000) return null;
+    for (const row of snapshot.tabs) {
+      const frame=frames.find(frame=>frame.tabId===row.tabId),binding=bindings.get(frame);
+      if (row.callEvidence.state==='active' && !binding.renewed)
+        row.callEvidence={...row.callEvidence,state:'unknown',reason:'unverified',callGeneration:null};
+      if (row.callEvidence.state==='active') this.publications.set(frame,{call:binding.call,received:binding.proof.receivedVersion,sent:binding.proof.sentVersion});
+    }
+    if (JSON.stringify(snapshot)===this.lastWire&&!snapshot.tabs.some(row=>row.callEvidence.state==='active')) return null;
+    this.lastWire=JSON.stringify(snapshot);this.lastPublishedAt=this.now();
+    return snapshot;
   }
 }

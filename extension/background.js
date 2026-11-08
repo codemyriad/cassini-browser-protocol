@@ -1,5 +1,5 @@
 import { AppControl } from "./app-control.js";
-import { browserProfileIdentity, SiteSignalAdapters, CallSignalProducer } from "./call-signals.js";
+import { browserProfileIdentity, SiteSignalAdapters, CallSignalProducer, GenericCallEvidenceProducer } from "./call-signals.js";
 
 async function hasOffscreenDocument() {
   return (await chrome.runtime.getContexts({ contextTypes: ["OFFSCREEN_DOCUMENT"] })).length > 0;
@@ -52,8 +52,7 @@ const identityReady = (async () => {
 let browserInstance = null;
 const browserIdentityReady = browserProfileIdentity(chrome.storage.local, () => crypto.randomUUID())
   .then(value => { browserInstance = value; });
-const signalAdapters = new SiteSignalAdapters();
-const signalOnlySite = address => signalAdapters.resolve(address)?.remoteAudio === 'mixed';
+const signalAdapters = new SiteSignalAdapters([]);
 const lostMeetings = new Map();
 const tabRepairs = new Map();
 const relayReady = frame => frame.relayAlive === true && frame.hookReady === true && !frame.obsolete;
@@ -152,6 +151,7 @@ async function repairTab(tabId, frameId = null) {
     // Never wrap RTCPeerConnection again on an already-running page. A fresh
     // isolated relay can reuse a compatible MAIN hook; older hooks require reload.
     try {
+      await chrome.scripting.executeScript({target:frameId === null ? {tabId,allFrames:true} : {tabId,frameIds:[frameId]},func:()=>{globalThis.__cassiniRepairInjection=true;},world:"ISOLATED"});
       await chrome.scripting.executeScript({target:frameId === null ? {tabId,allFrames:true} : {tabId,frameIds:[frameId]},files:["relay.js"],world:"ISOLATED"});
       await probe();
     } catch (error) {
@@ -329,6 +329,7 @@ const recovery = (async () => {
     const info = {generation:value.generation, url:null, addressHash:value.addressHash};
     if (opaque(value.documentGeneration) && opaque(value.hookGeneration))
       Object.assign(info, {documentGeneration:value.documentGeneration, hookGeneration:value.hookGeneration});
+    if (opaque(value.rtcDocument)&&Number.isSafeInteger(value.rtcEpisode)&&value.rtcEpisode>0) Object.assign(info,{rtcDocument:value.rtcDocument,rtcEpisode:value.rtcEpisode});
     if (value.boundaryPending === true) info.boundaryPending = true;
     callGenerations.set(value.tabId, info);
     try {
@@ -499,7 +500,6 @@ async function start(mode, tabId = null, options = {}) {
     } else [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (request.cancelled || options.resumeIntent?.cancelled) throw new Error("Recording could not start.");
     if (!Number.isSafeInteger(tab?.id) || tab.id < 0 || !/^https?:/.test(tab.url || "")) throw refused("Open the meeting tab first. Recording works on web pages only.", "notWebPage");
-    if (signalOnlySite(tab.url)) throw refused("This site mixes remote audio. Record computer audio in Cassini instead.", "unsupported");
     if (sessions.has(tab.id)) throw refused("A recording is already running. Stop it before starting another.", "busy");
     request.tabId = tab.id; // A popup's Symbol reservation now has a browser-owned identity.
     if (mode === "tracks") requireTrackReadiness(tab.id);
@@ -671,6 +671,7 @@ chrome.runtime.onConnect.addListener(port => {
     if (message.type === "relayHello" || message.type === "relayReady" || message.type === "relayUnavailable") {
       if (message.protocol !== relayProtocol || message.instanceId !== extensionInstance) return;
       frame.relayAlive = true;
+      frame.observerDocumentStart = message.observerDocumentStart === true;
       if (message.type !== "relayHello") {
         frame.checking = false; clearTimeout(frame.handshakeDeadline); frame.hookReady = message.type === "relayReady";
         frame.hookSeen ||= frame.hookReady;
@@ -810,7 +811,17 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       const scoped = Object.prototype.hasOwnProperty.call(message, "tabId");
       if (scoped && (!Number.isSafeInteger(message.tabId) || message.tabId < 0))
         return {error:"Choose a valid browser tab.", code:"invalid"};
-      return {...(scoped ? popupTabStatus(message.tabId) : status()), browserHealth:browserHealth()};
+      const result={...(scoped ? popupTabStatus(message.tabId) : status()),browserHealth:browserHealth()};
+      if (scoped) {
+        const snapshot=await genericProducer.snapshot({verified:true,preview:true,tabId:message.tabId});
+        const row=snapshot?.tabs.find(row=>row.tabId===message.tabId);
+        const frame=mainFrame(message.tabId);
+        const page=tabReadiness(message.tabId)?.state||(frame?(relayReady(frame)?'ready':frame.checking?'checking':'reloadRequired'):'unavailable');
+        const kind=['separated','mixed'].includes(row?.remoteAudio)?row.remoteAudio:frame&&relayReady(frame)&&frame.sourceCount===0?'unavailable':'unknown';
+        result.tabEvidence={tabId:message.tabId,transport:{page},callEvidence:row?.callEvidence||{state:'unknown',reason:'unverified'},
+          captureCapability:{kind,assurance:kind==='unknown'?'unknown':'observed'}};
+      }
+      return result;
     }
     if (offscreen) {
       const active = [...sessions.values()].find(s => s.mode === "tab");
@@ -885,7 +896,7 @@ function controlStatus(tabId = null) {
   packet.browserHealth = browserHealth();
   return packet;
 }
-async function meetings() {
+async function meetings({verified=false}={}) {
   const counts = new Map();
   for (const frame of frames) if (relayReady(frame) && frame.sourceCount > 0) counts.set(frame.tabId, Math.min(4096, (counts.get(frame.tabId) || 0) + frame.sourceCount));
   for (const session of sessions.values()) if (!counts.has(session.tabId)) counts.set(session.tabId, 0);
@@ -899,7 +910,7 @@ async function meetings() {
       if (!session && tabReadiness(tabId)?.state !== "ready") return null;
       const known = !!tab && /^https?:/.test(tab.url || "");
       if (!known) tab = session?.lastTab;
-      if (!tab || !/^https?:/.test(tab.url || "") || signalOnlySite(tab.url)) return null;
+      if (!tab || !/^https?:/.test(tab.url || "")) return null;
       if (session && known) session.lastTab = { ...tab };
       if (known && callInfo(tabId).url === null) callInfo(tabId).url = callAddress(tab.url);
       // A can reload after its lookup finishes while B's is still pending.
@@ -909,7 +920,7 @@ async function meetings() {
       if (session && known) session.lastSourceCount = sourceCount;
       if (!sourceCount && !sessions.has(tabId)) return null;
       const heard = current.some(frame => frame.heard);
-      return { tabId, title: [...(tab.title || "Meeting")].slice(0, 200).join(""), url: new URL(tab.url).href.slice(0, 2048), sourceCount, heard, sourceCountKnown: known, documentGeneration: documentFor(tabId), callGeneration: callInfo(tabId).generation, pageState: pageState(tabId) };
+      return { tabId, title: [...(tab.title || "Meeting")].slice(0, 200).join(""), url: new URL(tab.url).href.slice(0, 2048), sourceCount, heard, sourceCountKnown: known, ...(verified ? {browserDocumentId:mainFrame(tabId)?.browserDocumentId} : {}), documentGeneration: documentFor(tabId), callGeneration: callInfo(tabId).generation, pageState: pageState(tabId) };
     } catch { return null; }
   });
   return { type: "meetings", meetings: found.filter(Boolean) };
@@ -930,7 +941,6 @@ async function controlCommand(command, intent = {}) {
   }
   if (command.action === "start") {
     if (startBusy(command)) throw refused("A recording is already running. Stop it before starting another.", "busy");
-    if (signalOnlySite(mainFrame(command.tabId)?.browserUrl)) throw refused("This site mixes remote audio. Record computer audio in Cassini instead.", "unsupported");
     requireTrackReadiness(command.tabId);
     if (![...frames].some(frame => frame.tabId === command.tabId && relayReady(frame) && frame.sourceCount > 0))
       throw refused("No audio is available from that meeting yet.", "noSources");
@@ -957,14 +967,25 @@ function cancelPendingStart(command) {
 function notifyControl() { appControl.publish(); }
 const signalProducer = new CallSignalProducer({identity:()=>browserInstance,tabs:chrome.tabs,frames:()=>frames,
   current:frame=>frames.has(frame) && mainFrame(frame.tabId) === frame && relayReady(frame) && pageState(frame.tabId) === 'present',adapters:signalAdapters});
+const genericProducer = new GenericCallEvidenceProducer({identity:()=>browserInstance,tabs:chrome.tabs,frames:()=>frames,
+  current:frame=>frames.has(frame)&&mainFrame(frame.tabId)===frame&&relayReady(frame)&&pageState(frame.tabId)==='present',
+  executeScript:request=>chrome.scripting.executeScript(request),callIdentity:frame=>callInfo(frame.tabId).generation,
+  bindEpisode:(frame,episode)=>{
+    if (!episode) return;
+    const info=callInfo(frame.tabId);
+    if (info.rtcDocument===frame.documentGeneration&&Number.isSafeInteger(info.rtcEpisode)&&episode>info.rtcEpisode) info.generation=crypto.randomUUID();
+    if (info.rtcDocument!==frame.documentGeneration||info.rtcEpisode!==episode) {
+      info.rtcDocument=frame.documentGeneration;info.rtcEpisode=episode;void persistSessions().catch(()=>{});notifyControl();
+    }
+  }});
 const controlCapabilities = ["independent-sessions-v1", "call-evidence-v1", "page-state-v1", "multi-stream-v1", "resume-capture-v1", "heartbeat-v1", "tab-readiness-v1"];
 const appControl = new AppControl({
-  runtime: chrome.runtime, alarms: chrome.alarms, busy: startBusy, capabilities: controlCapabilities, signalSnapshot:()=>signalProducer.snapshot(), identity: () => ({extensionVersion,extensionInstance,...companionDiagnostics}), cancelPending: cancelPendingStart,
+  runtime: chrome.runtime, alarms: chrome.alarms, busy: startBusy, capabilities: controlCapabilities, signalSnapshot:options=>options.verified?genericProducer.snapshot(options):signalProducer.snapshot(), identity: () => ({extensionVersion,extensionInstance,...companionDiagnostics}), cancelPending: cancelPendingStart,
   connected: repairOpenTabs,
-  snapshot: async () => { await recovery; return [await meetings(), controlStatus()]; },
+  snapshot: async options => { await recovery; return [await meetings(options), controlStatus()]; },
   command: controlCommand
 });
 void Promise.all([identityReady,diagnosticsReady,browserIdentityReady]).then(() => {
-  if (browserInstance) controlCapabilities.push('call-signals-v1');
+  if (browserInstance) controlCapabilities.push('call-signals-v1','verified-auto-admission-v1');
   appControl.start(); void repairOpenTabs();
 });

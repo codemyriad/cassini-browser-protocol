@@ -1258,9 +1258,19 @@ then matched GNOME/Mac adoption, with legitimate Talk positives and passive-medi
 negatives. Deployed legacy exposure remains explicitly accepted until adoption;
 this amendment does not claim to fix old binaries through an ignored new field.
 
-Candidate extension 0.2.26 adds content-free popup diagnostics and strict
-negotiation/revocation fencing. Verified producer advertisement remains disabled
-until the real positive/negative and session-binding review gates pass.
+Extension 0.2.26 implements the same-PC R1 producer, advertises the verified
+capability pair after persistent profile identity is available, and adds the
+content-free popup/Copy diagnostics model. The worker reads the private MAIN
+collector only through browser-owned script results bound to a current relay
+installed at document start. Repaired/older documents remain unverified until a
+fresh document loads; manual source capture remains available. Publication uses
+new bidirectional progress, bounded reads and per-configuration fencing, with
+periodic media-backed refresh/withdrawal under the numeric rules below.
+
+Split-PC sessions remain unknown until a generic cohort binding is reviewed.
+The measured Talk topology has one sending and two receiving PCs; its existing
+source/capture CI stays supported, but this is not a generic-admission positive.
+No hostname/label registry supplies evidence or routing in the 0.2.26 producer.
 
 ### Qualification and negotiation
 

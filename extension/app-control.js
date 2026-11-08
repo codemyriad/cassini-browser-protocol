@@ -110,6 +110,8 @@ export class AppControl {
     })().finally(() => { this.publishing = null; if (this.dirty && this.port) this.publish(); });
   }
   resetSignals() {
+    this.cancel(this.signalTimer);this.signalTimer=null;
+    this.signalConnectionEpoch=(this.signalConnectionEpoch||0)+1;
     this.signalsConfigured = false;
     this.verifiedConfigured = false;
     this.signalEpoch = (this.signalEpoch || 0) + 1;
@@ -122,17 +124,17 @@ export class AppControl {
     if (!this.port || !this.signalsConfigured) return;
     this.signalDirty = true;
     if (this.connecting || this.signalRun) return;
-    const run = this.signalRun = {};
+    const run = this.signalRun = {startedAt:Date.now()};
     void (async () => {
       while (this.signalRun === run && this.signalDirty && this.port && this.signalsConfigured && !this.connecting) {
         this.signalDirty = false;
         const port = this.port, epoch = this.signalEpoch;
         try {
-          const snapshot = await this.signalSnapshot({verified:this.verifiedConfigured});
+          const snapshot = await this.signalSnapshot({verified:this.verifiedConfigured,epoch:this.signalConnectionEpoch,configurationEpoch:this.signalEpoch});
           if (this.signalRun !== run || port !== this.port || epoch !== this.signalEpoch || !this.signalsConfigured) break;
           if (!snapshot) continue;
           const serialized = JSON.stringify(snapshot);
-          if (serialized === this.lastSignals) continue;
+          if (serialized === this.lastSignals && !this.verifiedConfigured) continue;
           this.lastSignals = serialized;
           this.send(port,{type:'callSignals',sequence:this.signalSequence++,...snapshot});
         } catch { /* Failed metadata is not an audio failure or a capture command. */ }
@@ -141,6 +143,9 @@ export class AppControl {
       if (this.signalRun !== run) return;
       this.signalRun = null;
       if (this.signalDirty && this.signalsConfigured) this.publishSignals();
+      else if (this.verifiedConfigured && this.port && this.signalTimer==null) this.signalTimer=this.later(()=>{
+        this.signalTimer=null;this.publishSignals();
+      },Math.max(0,500-(Date.now()-run.startedAt)));
     });
   }
   receive(port, message) {
@@ -151,6 +156,7 @@ export class AppControl {
           values.some(value => !['call-signals-v1','verified-auto-admission-v1'].includes(value)) ||
           (values.includes('verified-auto-admission-v1') && !values.includes('call-signals-v1')) ||
           Object.keys(message).some(key => !['type','capabilities'].includes(key))) return;
+      this.cancel(this.signalTimer);this.signalTimer=null;
       this.signalEpoch++;
       this.signalRun = null;
       this.lastSignals = null;

@@ -7,13 +7,14 @@ test('verified shape requires implemented capability and acknowledgement, and re
   const app=await setup(0);
   try{
     const control=app.api.appControl,port=control.port;
+    control.capabilities.splice(control.capabilities.indexOf('verified-auto-admission-v1'),1);
     const seen=[];
     control.signalSnapshot=async options=>{seen.push(options.verified);return {browserInstance:'profile',tabs:[]}};
     const configure=capabilities=>port.onMessage.emit({type:'configure',capabilities});
     configure(pair);
     assert.deepEqual(plain(port.sent.filter(m=>m.type==='configured').at(-1).capabilities),['call-signals-v1']);
     await until(()=>seen.length);assert.equal(seen.at(-1),false);
-    control.capabilities.push('verified-auto-admission-v1');
+    if(!control.capabilities.includes('verified-auto-admission-v1'))control.capabilities.push('verified-auto-admission-v1');
     configure(pair);
     const ack=port.sent.findLastIndex(m=>m.type==='configured');
     assert.deepEqual(plain(port.sent[ack].capabilities),pair);
@@ -34,7 +35,7 @@ test('revocation fences a held alias inventory; duplicate/standalone features ca
       const before=port.sent.length;port.onMessage.emit({type:'configure',capabilities});
       assert.equal(port.sent.length,before);assert.equal(control.verifiedConfigured,false);
     }
-    control.capabilities.push('verified-auto-admission-v1');
+    if(!control.capabilities.includes('verified-auto-admission-v1'))control.capabilities.push('verified-auto-admission-v1');
     const shapes=[];
     control.snapshot=async({verified})=>{
       shapes.push(verified);

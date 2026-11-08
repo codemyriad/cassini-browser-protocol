@@ -1,6 +1,10 @@
 # Draft: verified automatic admission, separate from source observation
 
-**Review proposal; no runtime behavior or capability advertisement is enabled.** Proposed canonical SPEC/schema/vector amendments now accompany this draft for review; the producer and consumers are not implemented by them. D80.1, 2026-11-08. Companion version remains0.2.25. No hostname-specific rules, marker implementation, graph capture or user-browser study is proposed here.
+**Historical design proposal; canonical SPEC-CONTROL.md D80.3/D80.4 is controlling.**
+The original failure receipt uses companion0.2.25. Companion0.2.26 implements the
+same-PC interactive-media producer and verified negotiation; consumer adoption
+follows separately. The superseded withholding proposal is not an implementation
+requirement. No hostname-specific markers or graph capture are introduced.
 
 ## Confirmed failure at the consumer Start boundary
 

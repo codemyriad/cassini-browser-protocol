@@ -78,3 +78,16 @@ test('a sender disabled while native stats are pending cannot complete positive 
   const sampling=f.tick([peer]);await until(()=>entered);peer.track.enabled=false;release();await sampling;
   assert.equal(f.read().samePeerCount,0);assert.equal(typeof original,'function');
 });
+
+test('terminal capture plus closed transport ends an episode; replacement with a live capture retains it',async()=>{
+  const f=fixture(),original=await f.peer();await f.tick([original]);await f.tick([original]);
+  assert.equal(f.read().sessionEpoch,1);original.pc.close();
+  assert.equal(f.read().ended,false,'closed transport with a live capture is uncertain');
+  const replacement=await f.peer();replacement.sender.track=original.track;
+  await f.tick([replacement]);await f.tick([replacement]);
+  assert.equal(f.read().samePeerCount,1);assert.equal(f.read().sessionEpoch,1);
+  replacement.pc.close();original.track.readyState='ended';
+  assert.equal(f.read().ended,true);
+  const next=await f.peer();await f.tick([next]);await f.tick([next]);
+  assert.equal(f.read().ended,false);assert.equal(f.read().sessionEpoch,2);
+});

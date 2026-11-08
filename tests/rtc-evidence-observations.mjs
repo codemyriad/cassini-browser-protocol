@@ -4,7 +4,8 @@
 // negative. This is observer proof, not app admission/native recording proof.
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
-import {mkdir,mkdtemp,rm,writeFile} from 'node:fs/promises';
+import {generateKeyPairSync,createHash} from 'node:crypto';
+import {cp,readFile,mkdir,mkdtemp,rm,writeFile} from 'node:fs/promises';
 import os from 'node:os';import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {installRtcTopologyProbe,summarizeRtcTopology,waitRtcTopology} from './rtc-topology-probe.mjs';
@@ -12,8 +13,46 @@ const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
 const directory=await mkdtemp(path.join(os.tmpdir(),'cassini-rtc-evidence-'));
 const server=createServer((request,response)=>{response.setHeader('Content-Type','text/html');response.end('<!doctype html><title>Controlled RTC evidence study</title><main id="state"></main>');});
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
-let browser;
-const report={decision:'D80.4',scope:'real Chromium packaged R1 observer; interactive captured-media session, not answered human intent; no full producer/app admission/native recording proof',completed:false,cases:[]};
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+const extension=path.join(directory,'extension');
+await cp(path.join(root,'extension'),extension,{recursive:true});
+const manifestPath=path.join(extension,'manifest.json'),manifest=JSON.parse(await readFile(manifestPath,'utf8'));
+const key=generateKeyPairSync('rsa',{modulusLength:2048}).publicKey.export({type:'spki',format:'der'});
+manifest.key=key.toString('base64');await writeFile(manifestPath,JSON.stringify(manifest));
+const extensionId=[...createHash('sha256').update(key).digest('hex').slice(0,32)].map(c=>String.fromCharCode(97+parseInt(c,16))).join('');
+assert.notEqual(extensionId,'pcafdaahfhjiolfpfnlhmljfgoabbaij');
+const pair=['call-signals-v1','verified-auto-admission-v1'];
+async function privateControl(worker){
+ await worker.evaluate(()=>{
+  const event=()=>{const listeners=new Set();return {addListener:fn=>listeners.add(fn),emit:message=>{for(const fn of listeners)fn(message)}}};
+  globalThis.fixturePackets=[];globalThis.fixtureObservers=new Set();globalThis.fixtureCaptureAttempts=0;
+  chrome.runtime.connectNative=name=>{
+   if(name!=='io.codemyriad.cassini.control'){fixtureCaptureAttempts++;throw Error('Input/recording factory forbidden in evidence test')}
+   const port={onMessage:event(),onDisconnect:event(),postMessage(packet){
+    fixturePackets.push(structuredClone(packet));for(const notify of [...fixtureObservers])notify();
+    if(packet.type==='hello')queueMicrotask(()=>port.onMessage.emit({type:'configure',capabilities:['call-signals-v1','verified-auto-admission-v1']}));
+   },disconnect(){port.onDisconnect.emit()}};
+   globalThis.fixtureControlPort=port;return port;
+  };
+ });
+}
+async function packet(worker,{type='callSignals',tabId,state,after=0,callGeneration=null}={}){
+ return worker.evaluate(options=>new Promise((resolve,reject)=>{
+  let deadline;
+  const check=()=>{
+   const found=fixturePackets.slice(options.after).filter(value=>value.type===options.type).map(value=>({packet:value,row:(value.tabs||value.meetings||[]).find(row=>row.tabId===options.tabId)})).filter(value=>
+    options.tabId==null||value.row&&(options.state==null||value.row.callEvidence?.state===options.state)&&(options.callGeneration==null||value.row.callGeneration===options.callGeneration)).at(-1);
+   if(found){clearTimeout(deadline);fixtureObservers.delete(check);resolve(found)}
+  };
+  deadline=setTimeout(()=>{fixtureObservers.delete(check);reject(Error('Timed out waiting for acknowledged worker evidence: '+options.type+' '+options.state))},15000);
+  fixtureObservers.add(check);check();
+ }),{type,tabId,state,after,callGeneration});
+}
+async function barrier(worker){
+ await packet(worker,{type:'hello'});
+ return worker.evaluate(()=>{const index=fixturePackets.length;fixtureControlPort.onMessage.emit({type:'configure',capabilities:['call-signals-v1','verified-auto-admission-v1']});return index});
+}
+const report={decision:'D80.4',scope:'real loaded companion/worker/native-control fixture and R1 media; interactive captured-media session, not answered human intent; no GNOME/Mac adoption or native recording proof',completed:false,cases:[]};
 async function gathered(page,index) {
   return page.evaluate(async index=>{
     const pc=peers[index];
@@ -25,15 +64,16 @@ async function gathered(page,index) {
   },index);
 }
 try{
-  browser=await chromium.launch({headless:true,args:['--disable-audio-output','--autoplay-policy=no-user-gesture-required',
-    '--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream','--allow-loopback-in-peer-connection','--disable-features=WebRtcHideLocalIpsWithMdns']});
-  report.browserVersion=browser.version();
-  for(const fixture of ['duplex','passive-viewer','mic-preview','synthetic-sender','captured-clone','unrelated-mic-peer','echo','unanswered-early-media']){
+  for(const fixture of ['duplex','passive-viewer','mic-preview','synthetic-sender','captured-clone','unrelated-mic-peer','echo','unanswered-early-media','unanswered-ringing-no-capture','cross-frame-capture','forged-page-evidence','repaired-frame-positive-media'].filter(name=>!process.env.CASSINI_RTC_CASE||name===process.env.CASSINI_RTC_CASE)){
     report.runningFixture=fixture;
-    const context=await browser.newContext({permissions:['microphone']});
+    const context=await chromium.launchPersistentContext(path.join(directory,'profile-'+fixture),{channel:'chromium',headless:true,
+      permissions:['microphone','clipboard-read','clipboard-write'],args:['--disable-audio-output','--autoplay-policy=no-user-gesture-required',
+      '--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream','--allow-loopback-in-peer-connection','--disable-features=WebRtcHideLocalIpsWithMdns',
+      `--disable-extensions-except=${extension}`,`--load-extension=${extension}`,`--allowlisted-extension-id=${extensionId}`]});
+    report.browserVersion=context.browser()?.version()||'Chromium';
     try{
       await context.addInitScript(installRtcTopologyProbe);
-      await context.addInitScript({path:path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../extension/page-hook.js')});
+      const worker=context.serviceWorkers()[0]||await context.waitForEvent('serviceworker');await privateControl(worker);
       await context.addInitScript(()=>{
         globalThis.cassiniObservedDiscovery=null;
         addEventListener('message',event=>{
@@ -45,11 +85,16 @@ try{
       });
       const caller=await context.newPage(),remote=await context.newPage();
       const url=`http://127.0.0.1:${server.address().port}/`;
-      await Promise.all([caller.goto(url),remote.goto(url)]);
+      await Promise.all([caller.goto(url+'caller'),remote.goto(url+'remote')]);
       await caller.evaluate(async fixture=>{
         window.peers=[new RTCPeerConnection()];window.fixture=fixture;window.capture=null;
-        document.querySelector('#state').textContent=fixture==='unanswered-early-media'?'Ringing':'Controlled RTC';
-        if(!['passive-viewer','synthetic-sender'].includes(fixture))window.capture=await navigator.mediaDevices.getUserMedia({audio:true});
+        document.querySelector('#state').textContent=fixture.startsWith('unanswered-')?'Ringing':'Controlled RTC';
+        if(!['passive-viewer','synthetic-sender','unanswered-ringing-no-capture','forged-page-evidence','cross-frame-capture'].includes(fixture))window.capture=await navigator.mediaDevices.getUserMedia({audio:true});
+        if(fixture==='cross-frame-capture'){
+          const iframe=document.createElement('iframe');iframe.src='/child';
+          await new Promise(resolve=>{iframe.onload=resolve;document.body.append(iframe)});
+          window.capture=await iframe.contentWindow.navigator.mediaDevices.getUserMedia({audio:true});
+        }
         if(fixture==='unrelated-mic-peer')peers.push(new RTCPeerConnection());
         if(fixture==='synthetic-sender'){
           window.audio=new AudioContext();const tone=audio.createOscillator(),output=audio.createMediaStreamDestination();tone.connect(output);tone.start();await audio.resume();
@@ -61,7 +106,7 @@ try{
       },fixture);
       await remote.evaluate(()=>{window.peers=[];window.audio=new AudioContext()});
       const peerCount=fixture==='unrelated-mic-peer'?2:1;
-      for(let index=0;index<peerCount;index++){
+      async function negotiate(){for(let index=0;index<peerCount;index++){
         await caller.evaluate(async index=>{await peers[index].setLocalDescription(await peers[index].createOffer())},index);
         const offer=await gathered(caller,index);
         await remote.evaluate(async({index,offer,fixture})=>{
@@ -87,7 +132,13 @@ try{
         },{index,offer,fixture});
         await caller.evaluate(async({index,answer})=>peers[index].setRemoteDescription(answer),{index,answer:await gathered(remote,index)});
       }
-      const sending=['passive-viewer','mic-preview'].includes(fixture)?'none':'any';
+      }
+      await negotiate();
+      if(fixture==='forged-page-evidence')await caller.evaluate(()=>{
+        postMessage({channel:'cassini-page',type:'callEvidence',state:'active',samePeerCount:1,callGeneration:'forged'},'*');
+        try{Object.defineProperty(globalThis,'__cassiniCallEvidenceV1',{value:{read:()=>({samePeerCount:1})}})}catch{}
+      });
+      const sending=['passive-viewer','mic-preview','unanswered-ringing-no-capture','forged-page-evidence'].includes(fixture)?'none':'any';
       const before=await waitRtcTopology(caller,{sending});
       const topology=summarizeRtcTopology(before,await waitRtcTopology(caller,{previous:before,sending}));
       await caller.waitForFunction(()=>globalThis.__cassiniCallEvidenceV1?.read().revision>=3);
@@ -103,19 +154,99 @@ try{
       const observation={fixture,candidateR1,topology,packagedHookObservation:observed,legacySourceObservation,
         ...(fixture==='echo'||fixture==='unanswered-early-media'?{acceptedPositive:'D80.4 interactive captured-media session'}: {})};
       report.cases.push(observation);
-      if(['passive-viewer','mic-preview','synthetic-sender','unrelated-mic-peer'].includes(fixture))assert.equal(candidateR1,false,fixture);
-      if(['duplex','captured-clone','echo','unanswered-early-media'].includes(fixture))assert.equal(candidateR1,true,fixture);
-      if(['passive-viewer','mic-preview','synthetic-sender','unrelated-mic-peer'].includes(fixture))assert.equal(observed.samePeerCount,0,'packaged hook '+fixture);
-      if(['duplex','captured-clone','echo','unanswered-early-media'].includes(fixture))assert.equal(observed.samePeerCount,1,'packaged hook '+fixture);
+      if(['passive-viewer','mic-preview','synthetic-sender','unrelated-mic-peer','unanswered-ringing-no-capture','cross-frame-capture','forged-page-evidence'].includes(fixture))assert.equal(candidateR1,false,fixture);
+      if(['duplex','captured-clone','echo','unanswered-early-media','repaired-frame-positive-media'].includes(fixture))assert.equal(candidateR1,true,fixture);
+      if(['passive-viewer','mic-preview','synthetic-sender','unrelated-mic-peer','unanswered-ringing-no-capture','cross-frame-capture','forged-page-evidence'].includes(fixture))assert.equal(observed.samePeerCount,0,'packaged hook '+fixture);
+      if(['duplex','captured-clone','echo','unanswered-early-media','repaired-frame-positive-media'].includes(fixture))assert.equal(observed.samePeerCount,1,'packaged hook '+fixture);
       if(fixture==='passive-viewer')await caller.waitForFunction(()=>cassiniObservedDiscovery?.sourceCount===1&&cassiniObservedDiscovery.heard===true);
       observation.legacySourceObservation=await caller.evaluate(()=>cassiniObservedDiscovery);
+      const tabId=await worker.evaluate(async url=>(await chrome.tabs.query({})).find(tab=>tab.url===url).id,url+'caller');
+      const hello=(await packet(worker,{type:'hello'})).packet;
+      for(const capability of pair)assert.ok(hello.capabilities.includes(capability));
+      if(fixture==='repaired-frame-positive-media'){
+        await worker.evaluate(async tabId=>{
+          await chrome.scripting.executeScript({target:{tabId,frameIds:[0]},world:'ISOLATED',func:()=>{globalThis.__cassiniRelay.retire();globalThis.__cassiniRepairInjection=true;}});
+          await chrome.scripting.executeScript({target:{tabId,frameIds:[0]},world:'ISOLATED',files:['relay.js']});
+        },tabId);
+      }
+      const after=await barrier(worker);
+      const expected=candidateR1&&fixture!=='repaired-frame-positive-media'?'active':'unknown';
+      const published=await packet(worker,{tabId,state:expected,after}).catch(async error=>{
+        observation.workerFailure=await worker.evaluate(async tabId=>({
+          states:fixturePackets.filter(packet=>packet.type==='callSignals').slice(-5).map(packet=>packet.tabs.map(row=>({tabId:row.tabId,state:row.callEvidence.state}))),
+          isolated:(await chrome.scripting.executeScript({target:{tabId,frameIds:[0]},world:'ISOLATED',func:()=>({repair:globalThis.__cassiniRepairInjection,valid:globalThis.__cassiniRelay?.valid(),trusted:globalThis.__cassiniRelay?.observerDocumentStart})}))[0]?.result
+        }),tabId);throw error;
+      });
+      assert.equal(published.row.sourceDocumentGeneration,await caller.evaluate(()=>__cassiniCallEvidenceV1.read().documentGeneration));
+      assert.notEqual(published.row.documentGeneration,published.row.sourceDocumentGeneration);
+      const inventory=await packet(worker,{type:'meetings',tabId,after});
+      assert.equal(inventory.row.browserDocumentId,published.row.documentGeneration);
+      assert.equal(inventory.row.documentGeneration,published.row.sourceDocumentGeneration);
+      assert.equal(inventory.row.sourceCount,1);assert.equal(inventory.row.heard,true);
+      if(expected==='active')assert.equal(inventory.row.callGeneration,published.row.callEvidence.callGeneration);
+      else assert.equal(published.row.callEvidence.callGeneration,null);
+      assert.notEqual(inventory.row.callGeneration,'0');
+      observation.worker={acknowledged:true,state:published.row.callEvidence.state,namespaceBinding:true,legacySourceCount:inventory.row.sourceCount,legacyHeard:inventory.row.heard};
+      if(fixture==='duplex'){
+        const initial=published.row.callEvidence.callGeneration;
+        const refreshed=await packet(worker,{tabId,state:'active',after:await worker.evaluate(()=>fixturePackets.length)});
+        assert.ok(refreshed.packet.sequence>published.packet.sequence);assert.equal(refreshed.row.callEvidence.callGeneration,initial);
+        await caller.evaluate(()=>{capture.getAudioTracks()[0].enabled=false});
+        await packet(worker,{tabId,state:'unknown',after:await barrier(worker)});
+        await caller.evaluate(()=>{capture.getAudioTracks()[0].enabled=true});
+        const unmuted=await packet(worker,{tabId,state:'active',after:await barrier(worker)});
+        assert.equal(unmuted.row.callEvidence.callGeneration,initial,'mute/unmute retains identity');
+        await caller.evaluate(()=>{capture.getAudioTracks().forEach(track=>track.stop());peers.forEach(pc=>pc.close())});
+        const ended=await packet(worker,{tabId,state:'inactive',after:await barrier(worker)});
+        assert.equal(ended.row.callEvidence.reason,'callEnded');assert.equal(ended.row.callEvidence.callGeneration,initial);
+        await caller.evaluate(async()=>{
+          window.capture=await navigator.mediaDevices.getUserMedia({audio:true});window.peers=[new RTCPeerConnection()];
+          peers[0].addTrack(capture.getAudioTracks()[0]);peers[0].addTransceiver('audio',{direction:'recvonly'});
+        });
+        await remote.evaluate(()=>{peers.forEach(pc=>pc.close());window.peers=[]});
+        await negotiate();
+        await caller.waitForFunction(()=>__cassiniCallEvidenceV1.read().sessionEpoch>=2&&__cassiniCallEvidenceV1.read().samePeerCount===1);
+        const next=await packet(worker,{tabId,state:'active',after:await barrier(worker)});
+        assert.notEqual(next.row.callEvidence.callGeneration,initial,'new interactive episode gets a background ID');
+        assert.equal(next.row.documentGeneration,published.row.documentGeneration);assert.equal(next.row.sourceDocumentGeneration,published.row.sourceDocumentGeneration);
+        observation.worker.terminalEndAndNewEpisode=true;
+        const freezeIndex=await worker.evaluate(()=>{
+          globalThis.fixturePinger=setInterval(()=>fixtureControlPort.onMessage.emit({type:'ping',seq:Date.now()}),100);
+          return fixturePackets.length;
+        });
+        const stoppedAt=Date.now();
+        await caller.evaluate(()=>{const last=setInterval(()=>{},60000);for(let id=1;id<=last;id++)clearInterval(id)});
+        await packet(worker,{tabId,state:'unknown',after:freezeIndex});
+        const withdrawalMs=Date.now()-stoppedAt;assert.ok(withdrawalMs<=5000,'collector freeze withdrawal '+withdrawalMs);
+        await worker.evaluate(()=>clearInterval(fixturePinger));
+        assert.ok(await worker.evaluate(()=>fixturePackets.some(value=>value.type==='pong')));
+        observation.worker.withdrawalWithHealthyPongMs=withdrawalMs;
+      }
+      const attempts=await worker.evaluate(()=>({inputs:fixtureCaptureAttempts,pcm:fixturePackets.some(value=>value.type==='audio'||value.type==='start')}));
+      assert.equal(attempts.inputs,0);assert.equal(attempts.pcm,false);
+      // The real popup RPC and Copy diagnostics use one content-free projection.
+      const popup=await context.newPage();await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+      await popup.evaluate(tabId=>{const query=chrome.tabs.query.bind(chrome.tabs);chrome.tabs.query=async options=>options.active?[await chrome.tabs.get(tabId)]:query(options)},tabId);
+      await popup.waitForFunction(()=>document.querySelector('main')?.getAttribute('aria-busy')==='false');
+      await popup.waitForFunction(expected=>{
+        const text=document.querySelector('#diagnostics').textContent;
+        return text&&JSON.parse(text).callEvidence?.state===expected&&document.querySelector('#status').textContent===
+          (expected==='active'?'Interactive media session detected':'Interactive session is unverified');
+      },fixture==='duplex'?'unknown':expected);
+      await popup.evaluate(()=>Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>{globalThis.fixtureCopy=text}}}));
+      await popup.locator('summary').click();await popup.locator('#copy').click();await popup.waitForFunction(()=>typeof fixtureCopy==='string');
+      assert.equal(await popup.evaluate(()=>fixtureCopy),await popup.locator('#diagnostics').textContent());
+      const diagnostics=JSON.parse(await popup.locator('#diagnostics').textContent());
+      assert.doesNotMatch(JSON.stringify(diagnostics),/127\.0\.0\.1|browserInstance|Generation|tabId|path|title|SDP/);
+      observation.worker.diagnosticsContentFree=true;
+
     }finally{await context.close()}
   }
   report.completed=true;delete report.runningFixture;
 }finally{
-  await browser?.close();await new Promise(resolve=>server.close(resolve));
+  await new Promise(resolve=>server.close(resolve));
   const artifacts=path.resolve('artifacts');await mkdir(artifacts,{recursive:true});
   await writeFile(path.join(artifacts,'rtc-evidence-observations.json'),JSON.stringify(report,null,2));
   await rm(directory,{recursive:true,force:true});
 }
-console.log('PASS packaged R1 observer: duplex, captured clone, echo and early-media positives; passive, preview, synthetic and unrelated-PC negatives. Active means interactive media, not answered human intent.');
+console.log('PASS loaded worker/native-control R1: duplex, captured clone, echo and early-media positives; passive, preview, synthetic and unrelated-PC negatives. Active means interactive media, not answered human intent.');

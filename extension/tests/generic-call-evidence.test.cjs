@@ -7,9 +7,9 @@ vm.runInContext(fs.readFileSync(path.join(__dirname,'../call-signals.js'),'utf8'
 const Generic=context.Generic;
 function fixture(){
   const frame={tabId:2,frameId:0,browserUrl:'https://neutral.invalid/call',browserDocumentId:'chrome-A',
-    documentGeneration:'hook-A',callGeneration:'hook-session-A',obsoleteEpoch:0,sourceCount:1,heard:true};
+    documentGeneration:'hook-A',callGeneration:'hook-session-A',obsoleteEpoch:0,observerDocumentStart:true,sourceCount:1,heard:true};
   const sample={version:1,documentGeneration:'hook-A',hookGeneration:'hook-session-A',revision:2,ageMs:10,
-    receivedPeers:1,capturedSendingPeers:1,samePeerCount:1,unboundReceiverCount:0};
+    receivedPeers:1,capturedSendingPeers:1,samePeerCount:1,unboundReceiverCount:0,receivedVersion:1,sentVersion:1,ended:false,sessionEpoch:1};
   let live=true,identity='background-A',reads=0;
   const producer=new Generic({identity:()=> 'profile-A',tabs:{async query(){return [{id:2,url:frame.browserUrl}]}},
     frames:()=>[frame],current:value=>value===frame&&live,callIdentity:()=>identity,
@@ -70,4 +70,16 @@ test('browser round-trip time consumes proof freshness instead of refreshing old
   f.producer.executeScript=async()=>{clock=600;return [{frameId:0,documentId:'chrome-A',result:f.sample}]};
   const row=(await f.producer.snapshot({verified:true})).tabs[0];
   assert.equal(row.callEvidence.state,'unknown');assert.equal(row.callEvidence.callGeneration,null);
+});
+
+test('a superseded configuration cannot consume the new initial snapshot via the dedup cache',async()=>{
+  const f=fixture(),queries=[];
+  Object.assign(f.sample,{samePeerCount:0,capturedSendingPeers:0,unboundReceiverCount:1});
+  f.producer.tabs.query=()=>new Promise(resolve=>queries.push(resolve));
+  const old=f.producer.snapshot({verified:true,epoch:1,configurationEpoch:1});
+  const fresh=f.producer.snapshot({verified:true,epoch:1,configurationEpoch:2});
+  await until(()=>queries.length===2);
+  queries[0]([{id:2,url:f.frame.browserUrl}]);assert.equal(await old,null);
+  queries[1]([{id:2,url:f.frame.browserUrl}]);
+  const result=await fresh;assert.equal(result.tabs[0].callEvidence.state,'unknown');
 });

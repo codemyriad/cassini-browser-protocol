@@ -4,6 +4,7 @@
   const previous = globalThis.__cassiniRelay;
   if (previous?.valid()) { previous.discover(); return; }
   previous?.retire();
+  const observerDocumentStart = globalThis.__cassiniRepairInjection !== true;
   const protocol = 1;
   let instanceId = null, hookReady = false, handshakeComplete = false, retired = false, handshakeTimer = null;
   const waiters = new Set();
@@ -39,10 +40,11 @@
     } else cleanup();
   }
   function send(message) {
+    if (['relayHello','relayReady','relayUnavailable'].includes(message.type)) message={...message,observerDocumentStart};
     try { port?.postMessage(message); }
     catch { retire(); }
   }
-  globalThis.__cassiniRelay = {valid, retire, discover: () => control({type:"discover"})};
+  globalThis.__cassiniRelay = {valid, retire, observerDocumentStart, discover: () => control({type:"discover"})};
   let port = null, token = null, drainingToken = null, pendingStart = null;
   const pending = new Set();
   let sourceCount, heard = false, hidden = false;

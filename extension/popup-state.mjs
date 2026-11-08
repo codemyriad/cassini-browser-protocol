@@ -3,7 +3,8 @@
 import { tabEvidenceView } from './tab-evidence.mjs';
 export function popupState(result, tab, reloadedTabId = null) {
   const health = result?.browserHealth;
-  const current = health?.tabs?.find(item => item.tabId === tab?.id);
+  const current = health?.tabs?.find(item => item.tabId === tab?.id) ||
+    (result?.tabEvidence?.tabId===tab?.id ? {state:tabEvidenceView(result,tab?.id).transport.page} : null);
   const capture = result?.recording === true && result.tabId === tab?.id;
   const view = {connected: health?.nativeControl === 'connected', fileIssue: health?.filesOk === false, tone: 'neutral', reloadTabId: null,
     note: 'Recording is managed in Cassini.'};
