@@ -30,12 +30,12 @@ export function popupState(result, tab, reloadedTabId = null) {
     description: 'The extension is checking whether it can reach this meeting’s audio sources. Recording is not confirmed.'};
   if (result?.tabEvidence?.tabId === tab.id) {
     const evidence = tabEvidenceView(result,tab.id);
-    if (evidence.callEvidence.state === 'unknown') return {...view, title:'Call detection is unverified',
-      description:'Cassini has not verified an interactive call. Listen-only calls may need manual recording in Cassini.'};
-    if (evidence.callEvidence.state === 'active') return {...view, tone:'good', title:'Interactive call detected',
+    if (evidence.callEvidence.state === 'unknown') return {...view, title:'Interactive session is unverified',
+      description:'Cassini has not verified an interactive media session. Listen-only calls may need manual recording in Cassini.'};
+    if (evidence.callEvidence.state === 'active') return {...view, tone:'good', title:'Interactive media session detected',
       description:evidence.captureCapability.kind === 'separated' ?
-        'Live received audio and a sent microphone track are verified. Open Cassini to check recording.' :
-        'Call evidence is verified. Audio capture availability is checked separately in Cassini.'};
+        'Live audio is flowing both ways. This can include microphone tests or early media. Check the recording in Cassini.' :
+        'An interactive media session is detected. Audio capture availability is checked separately in Cassini.'};
   }
   if (current?.state === 'ready') return {...view, tone: 'good', title: 'Meeting sources detected',
     description: view.connected ? 'The extension can reach audio sources on this page. Open Cassini to check or manage the recording.' :

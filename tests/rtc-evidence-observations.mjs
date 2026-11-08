@@ -1,7 +1,7 @@
 // Measure the proposed R1 predicate with real RTC/media and fake browser devices.
-// This is an ambiguity study, not a production producer/admission test. In
-// particular echo/early-media observations are reported honestly, never renamed
-// into passing admission negatives. No app/native host or real device is used.
+// D80.4 defines active as an interactive captured-media session, not answered
+// human intent: echo and early media are asserted positives. Passive media stays
+// negative. This is observer proof, not app admission/native recording proof.
 import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {mkdir,mkdtemp,rm,writeFile} from 'node:fs/promises';
@@ -13,7 +13,7 @@ const directory=await mkdtemp(path.join(os.tmpdir(),'cassini-rtc-evidence-'));
 const server=createServer((request,response)=>{response.setHeader('Content-Type','text/html');response.end('<!doctype html><title>Controlled RTC evidence study</title><main id="state"></main>');});
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
 let browser;
-const report={scope:'real Chromium candidate-R1 observations only; no producer, native app, admission or capture proof',completed:false,cases:[]};
+const report={decision:'D80.4',scope:'real Chromium packaged R1 observer; interactive captured-media session, not answered human intent; no full producer/app admission/native recording proof',completed:false,cases:[]};
 async function gathered(page,index) {
   return page.evaluate(async index=>{
     const pc=peers[index];
@@ -101,12 +101,12 @@ try{
       // negative fails, so fixture/algorithm failures remain diagnosable.
       const legacySourceObservation=await caller.evaluate(()=>cassiniObservedDiscovery);
       const observation={fixture,candidateR1,topology,packagedHookObservation:observed,legacySourceObservation,
-        ...(fixture==='echo'||fixture==='unanswered-early-media'?{requiresCoordinatorReview:candidateR1}: {})};
+        ...(fixture==='echo'||fixture==='unanswered-early-media'?{acceptedPositive:'D80.4 interactive captured-media session'}: {})};
       report.cases.push(observation);
       if(['passive-viewer','mic-preview','synthetic-sender','unrelated-mic-peer'].includes(fixture))assert.equal(candidateR1,false,fixture);
-      if(['duplex','captured-clone'].includes(fixture))assert.equal(candidateR1,true,fixture);
+      if(['duplex','captured-clone','echo','unanswered-early-media'].includes(fixture))assert.equal(candidateR1,true,fixture);
       if(['passive-viewer','mic-preview','synthetic-sender','unrelated-mic-peer'].includes(fixture))assert.equal(observed.samePeerCount,0,'packaged hook '+fixture);
-      if(['duplex','captured-clone'].includes(fixture))assert.equal(observed.samePeerCount,1,'packaged hook '+fixture);
+      if(['duplex','captured-clone','echo','unanswered-early-media'].includes(fixture))assert.equal(observed.samePeerCount,1,'packaged hook '+fixture);
       if(fixture==='passive-viewer')await caller.waitForFunction(()=>cassiniObservedDiscovery?.sourceCount===1&&cassiniObservedDiscovery.heard===true);
       observation.legacySourceObservation=await caller.evaluate(()=>cassiniObservedDiscovery);
     }finally{await context.close()}
@@ -118,4 +118,4 @@ try{
   await writeFile(path.join(artifacts,'rtc-evidence-observations.json'),JSON.stringify(report,null,2));
   await rm(directory,{recursive:true,force:true});
 }
-console.log('Measured candidate R1 on real RTC fixtures; echo/early-media ambiguity is reported for review, not hidden.');
+console.log('PASS packaged R1 observer: duplex, captured clone, echo and early-media positives; passive, preview, synthetic and unrelated-PC negatives. Active means interactive media, not answered human intent.');
