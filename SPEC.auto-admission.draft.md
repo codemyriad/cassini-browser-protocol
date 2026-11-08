@@ -1,6 +1,6 @@
 # Draft: verified automatic admission, separate from source observation
 
-**Review proposal only. No capability is advertised, packet schema changed or runtime behavior enabled by this file.** D80.1, 2026-11-08. Companion version remains0.2.25. No hostname-specific rules, marker implementation, graph capture or user-browser study is proposed here.
+**Review proposal; no runtime behavior or capability advertisement is enabled.** Proposed canonical SPEC/schema/vector amendments now accompany this draft for review; the producer and consumers are not implemented by them. D80.1, 2026-11-08. Companion version remains0.2.25. No hostname-specific rules, marker implementation, graph capture or user-browser study is proposed here.
 
 ## Confirmed failure at the consumer Start boundary
 
@@ -43,7 +43,7 @@ Correlate browser/profile, tab, current browser document and call generation. Do
 
 Adding an optional admission field to a legacy meeting is insufficient: existing consumers ignore it and still start from heardtrue. Redefining heard to mean call-active silently corrupts the source observation contract. Existing behavior cannot be made safe for every old consumer merely by an unknown extra field.
 
-Proposed additive negotiation, **name provisional**: `verified-auto-admission-v1`, carried by the existing hello/configure/configured capability mechanism alongside `call-signals-v1`. No new message type or public automatic Start flag is needed merely to express the guard. Canonical schemas/corpus would change only after consumer review.
+Proposed additive negotiation, **name provisional**: `verified-auto-admission-v1`, carried by the existing hello/configure/configured capability mechanism alongside `call-signals-v1`. No new message type or public automatic Start flag is needed merely to express the guard. Proposed canonical schema/vector additions are now included for review; their runtime adoption still requires consumer/coordinator review.
 
 | Pairing | Proposed safety behavior / migration cost |
 | --- | --- |
@@ -56,7 +56,7 @@ If the coordinator rejects the old-consumer projection cost, the alternative is 
 
 Fail closed from the **first publication**, before capability acknowledgement: never send auto-driving unverified legacy rows and retract them only after discovering an old consumer. New consumers keep automatic dispatch disabled while the stricter negotiation is pending or absent. Preserve existing recording status/control even when observations are withheld from an old client's automatic inventory; suppression is not a fabricated call-ended event or permission to start another recording.
 
-The first code change can be the narrowly reviewed consumer admission guard and boundary regressions, followed by the generic producer evidence/negotiation/projection implementation. Do not advertise the new capability until both halves are implemented and conformance-tested. No companion version reservation is taken by a docs-only proposal.
+D80.3 overrides an interim blanket consumer guard: fast-track the generic producer/SPEC first, then matched consumer adoption and boundary regressions. Legacy inventory withholding/manual-UI cost remains an explicit rollout decision, not shipped by these documents. Do not advertise the new capability until both halves are implemented and conformance-tested. No companion version reservation is taken by a docs-only proposal.
 
 ## Required literal cases / actual boundary regressions
 
@@ -74,3 +74,5 @@ The first code change can be the narrowly reviewed consumer admission guard and 
 | Reconnect/replayed evidence | Same current identity | Same valid call | No duplicate automatic Start; manual Stop suppression retained |
 
 Test the real consumer dispatch through its final wire/input boundary with private transports and forbidden device factories. For generic positives, separately prove the detector against representative actual-site flows; synthetic fixtures alone do not establish site support. Keep real passive RTP plus media-only and unrelated-mic negatives, with no hostname exceptions. Require Mac and GNOME consumer review, then agy/coordinator review, before merging any schema/policy/runtime change.
+
+The concrete identity mapping and updated separated-existing-rtp-ready/passive-rtc-viewer literals are in the D80.3 section of SPEC-CONTROL.md and conformance/control/call-signals-vectors.json. Chrome documentGeneration and MAIN-hook documentGeneration are distinct namespaces; use the explicit browserDocumentId/sourceDocumentGeneration aliases and the shared background callGeneration, never raw cross-namespace equality.

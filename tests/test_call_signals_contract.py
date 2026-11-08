@@ -28,17 +28,62 @@ class CallSignalContractTests(unittest.TestCase):
         message['tabs'][0]['callEvidence']['state'] = 'inactive'
         self.assertFalse(validator.is_valid(message), 'unknown evidence cannot become affirmative inactive')
 
-    def test_passive_media_literals_never_start_and_do_not_fabricate_rtp(self):
+    def test_passive_media_literals_never_start_and_preserve_real_rtp(self):
         cases = VECTORS['passiveMediaNegatives']
-        self.assertEqual(len(cases), 5)
+        self.assertEqual(len(cases), 6)
         for case in cases:
             schema('control-extension').validate(case['signal'])
             self.assertTrue(case['fixtureAudioPlaying'])
             self.assertTrue(case['autoRecordOptIn'])  # opt-in alone is insufficient
             self.assertEqual(case['signal']['tabs'][0]['callEvidence']['state'], 'unknown')
-            for field in ['signalAutoCandidate', 'appSystemStart', 'browserStart', 'legacyHeard']:
+            for field in ['signalAutoCandidate', 'appSystemStart', 'browserStart']:
                 self.assertFalse(case['expect'][field])
-            self.assertEqual(case['expect']['legacySourceCount'], 0)
+            rtc = case['name'] == 'passive-rtc-viewer'
+            self.assertEqual(case['expect']['legacySourceCount'], 1 if rtc else 0)
+            self.assertEqual(case['expect']['legacyHeard'], rtc)
+            if rtc:
+                self.assertFalse(case['fixtureGetUserMedia'])
+                self.assertFalse(case['fixtureLocalCapturedSender'])
+                self.assertEqual(case['fixtureHookCallGeneration'], '0')
+                self.assertEqual(case['rtp']['callGeneration'], 'call-A')
+                self.assertFalse(case['expect']['nativeFallback'])
+                self.assertFalse(case['expect']['inputOpened'])
+
+    def test_verified_rtp_admission_joins_explicit_namespaces_not_raw_ids(self):
+        cases = [case for case in VECTORS['routing'] if 'configuredCapabilities' in case]
+        cases += [case for case in VECTORS['passiveMediaNegatives'] if case['name'] == 'passive-rtc-viewer']
+        for case in cases:
+            with self.subTest(name=case['name']):
+                row = case['signal']['tabs'][0]
+                schema('control-extension').validate(case['signal'])
+                schema('control-extension').validate(dict(type='meetings', meetings=[dict(
+                    case['rtp'], title='Controlled media', url='https://conference.invalid/session')]))
+                binding = self.binding_matches(case)
+                self.assertEqual(binding, case['expect']['bindingMatches'])
+                ready = (case['rtp']['sourceCountKnown'] and case['rtp']['sourceCount'] > 0
+                         and case['rtp']['heard'] and case['rtp']['pageState'] == 'present')
+                negotiated = set(case['configuredCapabilities']) == {
+                    'call-signals-v1', 'verified-auto-admission-v1'}
+                automatic = (case['autoRecordOptIn'] and negotiated and binding and ready
+                             and row['callEvidence']['state'] == 'active' and row['remoteAudio'] == 'separated')
+                self.assertEqual(automatic, case['expect']['browserStart'])
+        positive = next(c for c in cases if c['name'] == 'separated-existing-rtp-ready')
+        self.assertNotEqual(positive['rtp']['documentGeneration'],
+                            positive['signal']['tabs'][0]['documentGeneration'])
+        self.assertEqual(positive['expect']['policy'], 'verified-call-and-RTP')
+
+    @staticmethod
+    def binding_matches(case):
+        row, rtp = case['signal']['tabs'][0], case['rtp']
+        identities = [row.get('documentGeneration'), row.get('sourceDocumentGeneration'),
+                      rtp.get('browserDocumentId'), rtp.get('documentGeneration'),
+                      row['callEvidence'].get('callGeneration'), rtp.get('callGeneration')]
+        return (all(isinstance(value, str) and 0 < len(value.encode()) <= 200 for value in identities)
+                and case['connectionBrowserInstance'] == case['signal']['browserInstance']
+                and rtp['tabId'] == row['tabId']
+                and rtp['browserDocumentId'] == row['documentGeneration']
+                and rtp['documentGeneration'] == row['sourceDocumentGeneration']
+                and rtp['callGeneration'] == row['callEvidence']['callGeneration'])
 
     def test_routing_literals_distinguish_opt_in_system_and_existing_rtp(self):
         cases = {case['name']: case for case in VECTORS['routing']}
