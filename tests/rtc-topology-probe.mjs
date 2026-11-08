@@ -26,6 +26,43 @@ export function installRtcTopologyProbe() {
     }
   });
   if (window.webkitRTCPeerConnection === Native) window.webkitRTCPeerConnection = window.RTCPeerConnection;
+  // Study only: export opaque equality classes of standardized native SDP
+  // fields, never SDP/credentials/fingerprints/names themselves. Shared server
+  // identity alone is explicitly NOT an admission/session-cohort rule.
+  const descriptor=Object.getOwnPropertyDescriptor,apply=Reflect.apply;
+  const local=descriptor(Native.prototype,'localDescription')?.get;
+  const remote=descriptor(Native.prototype,'remoteDescription')?.get;
+  const sdp=descriptor(RTCSessionDescription.prototype,'sdp')?.get;
+  window.cassiniRtcCohortFacts=()=>{
+    const groups=new Map();
+    const reference=(kind,value)=>{
+      if(!value||value==='-')return null;
+      let values=groups.get(kind);if(!values){values=new Map();groups.set(kind,values)}
+      if(!values.has(value))values.set(value,values.size);
+      return values.get(value);
+    };
+    const fields=description=>{
+      const result={originSession:[],sessionName:[],iceUsername:[],fingerprint:[],rtcpCname:[],streamId:[]};
+      let text;try{text=apply(sdp,description,[])}catch{return result}
+      if(typeof text!=='string'||text.length>1048576)return result;
+      for(const line of text.split(/\r?\n/)){
+        let kind,value;
+        if(line.startsWith('o=')){kind='originSession';value=line.slice(2).split(/\s+/)[1]}
+        else if(line.startsWith('s=')){kind='sessionName';value=line.slice(2)}
+        else if(line.startsWith('a=ice-ufrag:')){kind='iceUsername';value=line.slice(12)}
+        else if(line.startsWith('a=fingerprint:')){kind='fingerprint';value=line.slice(14)}
+        else if(/^a=ssrc:\d+ cname:/.test(line)){kind='rtcpCname';value=line.slice(line.indexOf(' cname:')+7)}
+        else if(line.startsWith('a=msid:')){kind='streamId';value=line.slice(7).split(/\s+/)[0]}
+        if(kind&&result[kind].length<32){const group=reference(kind,value);if(group!==null&&!result[kind].includes(group))result[kind].push(group)}
+      }
+      return result;
+    };
+    return {notAdmissionRule:true,scope:'native applied descriptions; integer equality classes only',
+      peers:[...peers].slice(0,16).map((pc,peer)=>{
+        let a=null,b=null;try{a=apply(local,pc,[]);b=apply(remote,pc,[])}catch{}
+        return {peer,local:fields(a),remote:fields(b)};
+      })};
+  };
   window.cassiniRtcTopology = async () => Promise.all([...peers].map(async (pc, index) => {
     const live = track => track?.kind === 'audio' && track.readyState === 'live';
     const row = {peer:index, connected:pc.connectionState === 'connected',

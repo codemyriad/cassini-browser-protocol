@@ -106,11 +106,15 @@
   const find=(entries,object)=>{for(let i=0;i<entries.length;i++)if(entries[i].object===object)return entries[i];return null};
   const samples=reports=>{
     const result=list();
-    try{call(statsEach,reports,[report=>add(result,report)])}catch{return result}
+    try{call(statsEach,reports,[report=>{if(result.length<128)add(result,report);else overflow=true}])}catch{return result}
     return result;
   };
   const fresh=report=>{const timestamp=data(report,'timestamp'),age=origin+now()-timestamp;return typeof timestamp==='number'&&numberFinite(timestamp)&&age>=0&&age<=2500};
-  const nativeSlots=pc=>{try{return call(transceivers,pc)}catch{return list()}};
+  const nativeSlots=pc=>{
+    const result=list();
+    try{const slots=call(transceivers,pc);if(slots.length>64)overflow=true;for(let i=0;i<slots.length&&i<64;i++)add(result,slots[i])}catch{}
+    return result;
+  };
   const sending=(pc,sender,track,slot)=>connected(pc)&&get(senderTrack,sender)===track&&live(track)&&
     get(trackEnabled,track)===true&&get(trackMuted,track)===false&&root(track)!==null&&
     get(transceiverSender,slot)===sender&&(get(direction,slot)==='sendrecv'||get(direction,slot)==='sendonly');
@@ -124,6 +128,7 @@
         const entry=peers[i];if(entry.generation!==stamp||!connected(entry.pc))continue;
         const slots=nativeSlots(entry.pc);
         for(let j=0;j<slots.length;j++){
+          if(tasks.length>=128){overflow=true;break}
           const slot=slots[j],receiver=get(transceiverReceiver,slot),track=get(receiverTrack,receiver);
           if(receive(entry.pc,receiver,track,slot))add(tasks,{entry,slot,object:receiver,track,receive:true,promise:bounded(()=>call(receiverStats,receiver))});
           const sender=get(transceiverSender,slot),sent=get(senderTrack,sender);

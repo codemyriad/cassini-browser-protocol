@@ -129,6 +129,7 @@ try{
  const topologyBefore=await waitRtcTopology(meeting,{sending:'captured'});
  report.rtcTopology=summarizeRtcTopology(topologyBefore,await waitRtcTopology(meeting,{previous:topologyBefore,sending:'captured'}));
  assert.ok(report.rtcTopology.sendingPeers>0&&report.rtcTopology.receivingPeers>0,'Talk measurement requires real bidirectional packet progress');
+ report.rtcCohortCandidates=await meeting.evaluate(()=>cassiniRtcCohortFacts());
  report.cases.push('D80.3 actual captured sender and remote receiver topology measured; no inferred split-PC binding');
  assert.deepEqual(pageErrors,[]);report.cases.push('DOM participant names match isolated remote PCM and persisted provenance, no microphone or tone cross-mixing');report.manifest=final;
  console.log('PASS real Nextcloud Talk: Hypatia=440Hz and Ibn al-Haytham=880Hz, distinct sources, DOM provenance, separate remote WAVs and finalization');success=true;

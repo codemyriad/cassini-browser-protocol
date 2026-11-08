@@ -37,6 +37,7 @@ async function gathered(page,index) {
 try{
   for(const fixture of ['duplex','passive-viewer','mic-preview','synthetic-sender','captured-clone','unrelated-mic-peer','echo','unanswered-early-media','unanswered-ringing-no-capture','cross-frame-capture','forged-page-evidence','repaired-frame-positive-media','primordial-poison-positive'].filter(name=>!process.env.CASSINI_RTC_CASE||name===process.env.CASSINI_RTC_CASE)){
     report.runningFixture=fixture;
+    console.log("RTC fixture:",fixture);
     const context=await chromium.launchPersistentContext(path.join(directory,'profile-'+fixture),{channel:'chromium',headless:true,
       permissions:['microphone','clipboard-read','clipboard-write'],args:['--disable-audio-output','--autoplay-policy=no-user-gesture-required',
       '--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream','--allow-loopback-in-peer-connection','--disable-features=WebRtcHideLocalIpsWithMdns',
@@ -112,19 +113,6 @@ try{
       const sending=['passive-viewer','mic-preview','unanswered-ringing-no-capture','forged-page-evidence'].includes(fixture)?'none':'any';
       const before=await waitRtcTopology(caller,{sending});
       const topology=summarizeRtcTopology(before,await waitRtcTopology(caller,{previous:before,sending}));
-      if(fixture==='primordial-poison-positive')await caller.evaluate(()=>{
-        Object.getOwnPropertyDescriptor=()=>({value:{read:()=>({samePeerCount:99})}});
-        Reflect.apply=()=>{throw Error('page Reflect')};
-        Array.prototype.filter=Array.prototype.map=Array.prototype.some=()=>{throw Error('page Array')};
-        Array.prototype[Symbol.iterator]=()=>{throw Error('page iteration')};
-        Math.max=()=>Infinity;Math.min=()=>0;
-        Set=Map=function(){throw Error('page collection')};
-        performance.now=()=>0;
-        RTCStatsReport.prototype.forEach=()=>{throw Error('page report')};
-        RTCRtpReceiver.prototype.getStats=async()=>{throw Error('page receiver')};
-        Object.defineProperty(RTCRtpSender.prototype,'track',{get(){throw Error('page track')}});
-        Object.defineProperty(MediaStreamTrack.prototype,'readyState',{get(){return 'ended'}});
-      });
       await caller.waitForFunction(()=>globalThis.__cassiniCallEvidenceV1?.read().revision>=3);
       const observed=await caller.evaluate(()=>{
         const value=globalThis.__cassiniCallEvidenceV1.read();
@@ -171,6 +159,25 @@ try{
       else assert.equal(published.row.callEvidence.callGeneration,null);
       assert.notEqual(inventory.row.callGeneration,'0');
       observation.worker={acknowledged:true,state:published.row.callEvidence.state,namespaceBinding:true,legacySourceCount:inventory.row.sourceCount,legacyHeard:inventory.row.heard};
+      if(fixture==='primordial-poison-positive'){
+        const before=await worker.evaluate(()=>fixturePackets.length);
+        await worker.evaluate(async tabId=>chrome.scripting.executeScript({target:{tabId,frameIds:[0]},world:'MAIN',func:()=>{
+        Object.getOwnPropertyDescriptor=()=>({value:{read:()=>({samePeerCount:99})}});
+        Reflect.apply=()=>{throw Error('page Reflect')};
+        Array.prototype.filter=Array.prototype.map=Array.prototype.some=()=>{throw Error('page Array')};
+        Array.prototype[Symbol.iterator]=()=>{throw Error('page iteration')};
+        Math.max=()=>Infinity;Math.min=()=>0;
+        Set=Map=function(){throw Error('page collection')};
+        performance.now=()=>0;
+        RTCStatsReport.prototype.forEach=()=>{throw Error('page report')};
+        RTCRtpReceiver.prototype.getStats=async()=>{throw Error('page receiver')};
+        Object.defineProperty(RTCRtpSender.prototype,'track',{get(){throw Error('page track')}});
+        Object.defineProperty(MediaStreamTrack.prototype,'readyState',{get(){return 'ended'}});
+        }}),tabId);
+        const renewed=await packet(worker,{tabId,state:'active',after:before});
+        assert.equal(renewed.row.callEvidence.callGeneration,published.row.callEvidence.callGeneration);
+        observation.worker.nativeProgressSurvivesPagePrimordialPoison=true;
+      }
       if(fixture==='duplex'){
         const initial=published.row.callEvidence.callGeneration;
         const refreshed=await packet(worker,{tabId,state:'active',after:await worker.evaluate(()=>fixturePackets.length)});
