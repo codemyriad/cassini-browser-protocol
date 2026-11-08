@@ -11,10 +11,18 @@ import {connectReceiveSlots} from '../scenarios/product-topologies.mjs';
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const temporary=await mkdtemp(path.join(os.tmpdir(),'cassini-admission-attacks-'));
-const server=createServer((_request,response)=>response.end('<!doctype html><title>Permission-free adversary fixture</title>'));
+const server=createServer((request,response)=>{
+ const attack=request.url.includes('/pre-handshake-forgery/')?`<script>
+ const doc=__cassiniCallEvidenceV1.read()?.documentGeneration;
+ globalThis.fixtureInlineAttacksSent=!!doc;
+ if(doc){postMessage({channel:'cassini-page',type:'discovery',sourceCount:0,heard:false,documentGeneration:doc,callGeneration:'0'},'*');
+ postMessage({channel:'cassini-page',type:'discovery',sourceCount:64,heard:true,documentGeneration:doc,callGeneration:'FORGED'},'*')}
+ </script>`:'';
+ response.end('<!doctype html><title>Permission-free adversary fixture</title>'+attack);
+});
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
 try{
- for(const fixture of ['secure-loopback-rtp','insecure-origin-rtp','missing-peer']){
+ for(const fixture of ['secure-loopback-rtp','insecure-origin-rtp','missing-peer','pre-handshake-forgery']){
   const extension=path.join(temporary,fixture+'-extension');await cp(path.join(root,'extension'),extension,{recursive:true});
   const manifestPath=path.join(extension,'manifest.json'),manifest=JSON.parse(await readFile(manifestPath,'utf8'));
   const key=generateKeyPairSync('rsa',{modulusLength:2048}).publicKey.export({type:'spki',format:'der'});
@@ -24,13 +32,13 @@ try{
   const id=[...createHash('sha256').update(key).digest('hex').slice(0,32)].map(c=>String.fromCharCode(97+parseInt(c,16))).join('');
   assert.notEqual(id,'pcafdaahfhjiolfpfnlhmljfgoabbaij');
   const context=await chromium.launchPersistentContext(path.join(temporary,fixture+'-profile'),{channel:'chromium',headless:true,
-   permissions:[],args:['--disable-audio-output','--no-proxy-server','--host-resolver-rules=MAP insecure.cassini.test 127.0.0.1',
+   permissions:[],args:['--use-fake-device-for-media-stream','--disable-audio-output','--no-proxy-server','--host-resolver-rules=MAP insecure.cassini.test 127.0.0.1',
     '--autoplay-policy=no-user-gesture-required','--allow-loopback-in-peer-connection','--disable-features=WebRtcHideLocalIpsWithMdns',
     `--disable-extensions-except=${extension}`,`--load-extension=${extension}`,`--allowlisted-extension-id=${id}`]});
   try{
    const worker=context.serviceWorkers()[0]||await context.waitForEvent('serviceworker');await privateControl(worker);
    const page=await context.newPage(),hostname=fixture==='insecure-origin-rtp'?'insecure.cassini.test':'127.0.0.1';
-   const url=`http://${hostname}:${server.address().port}/`;
+   const url=`http://${hostname}:${server.address().port}/${fixture}/`;
    await page.goto(url);
    const environment=await page.evaluate(()=>{
     const descriptor=Object.getOwnPropertyDescriptor(globalThis,'__cassiniCallEvidenceV1');
@@ -42,7 +50,7 @@ try{
    assert.equal(environment.claimed,true);assert.equal(environment.frozen,true);
    assert.equal(environment.writable,false);assert.equal(environment.configurable,false);
    if(fixture==='insecure-origin-rtp')assert.equal(environment.uuid,'undefined','this must exercise an actual insecure context');
-   if(fixture!=='secure-loopback-rtp')assert.equal(environment.snapshot,null);
+   if(['insecure-origin-rtp','missing-peer'].includes(fixture))assert.equal(environment.snapshot,null);
    const permission=await page.evaluate(async()=>{try{return (await navigator.permissions.query({name:'microphone'})).state}catch{return 'unsupported'}});
    assert.notEqual(permission,'granted');
    const tabId=await worker.evaluate(async url=>(await chrome.tabs.query({})).find(tab=>tab.url===url).id,url);
@@ -79,7 +87,7 @@ try{
       forge();
      });
      const before=await worker.evaluate(()=>{const before=fixturePackets.length;fixtureControlPort.onMessage.emit({type:'configure',capabilities:['call-signals-v1']});return before});
-     await packet(worker,{type:'meetings',tabId,sourceCount:65,after:before});
+     await packet(worker,{type:'meetings',tabId,sourceCount:1,after:before});
      const paired=await barrier(worker);
      await packet(worker,{type:'meetings',tabId,sourceCount:1,after:paired});
     }
@@ -108,10 +116,35 @@ try{
     });
     await packet(worker,{tabId,state:'unknown',after:await barrier(worker)});
     assert.equal(await page.evaluate(()=>{const value=__cassiniCallEvidenceV1.read();return value.samePeerCount+':'+value.sourceCount}),'0:1');
-   }else assert.equal(await page.evaluate(()=>__cassiniCallEvidenceV1.read()),null);
+   }else if(['insecure-origin-rtp','missing-peer'].includes(fixture))assert.equal(await page.evaluate(()=>__cassiniCallEvidenceV1.read()),null);
    assert.equal(await worker.evaluate(()=>fixtureCaptureAttempts),0);
    assert.equal(await worker.evaluate(()=>fixturePackets.some(packet=>packet.type==='callSignals'&&packet.tabs.some(row=>row.callEvidence.state==='active'))),false);
-   console.log('PASS admission attack:',fixture,'— immutable bootstrap, unknown evidence, no native input');
+   if(fixture==='pre-handshake-forgery'){
+    assert.equal(await page.evaluate(()=>fixtureInlineAttacksSent),true);
+    await page.evaluate(()=>{
+     dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true}));
+     dispatchEvent(new PageTransitionEvent('pagehide',{persisted:true}));
+     const doc=__cassiniCallEvidenceV1.read().documentGeneration;
+     postMessage({channel:'cassini-page',type:'discovery',sourceCount:0,heard:false,documentGeneration:doc,callGeneration:'0'},'*');
+     postMessage({channel:'cassini-page',type:'discovery',sourceCount:64,heard:true,documentGeneration:doc,callGeneration:'FORGED'},'*');
+    });
+    await context.grantPermissions(['microphone'],{origin:new URL(url).origin});
+    const offer=await page.evaluate(async()=>{
+     const stream=await navigator.mediaDevices.getUserMedia({audio:true});
+     const transceiver=topologyPeer.getTransceivers()[0];await transceiver.sender.replaceTrack(stream.getAudioTracks()[0]);
+     transceiver.direction='sendrecv';await topologyPeer.setLocalDescription(await topologyPeer.createOffer());
+     return topologyPeer.localDescription.toJSON();
+    });
+    const remote=context.pages().find(value=>value.url()===url+'remote');
+    const answer=await remote.evaluate(async offer=>{
+     const peer=topologyRemote.peer;await peer.setRemoteDescription(offer);peer.getTransceivers()[0].direction='sendrecv';
+     await peer.setLocalDescription(await peer.createAnswer());return peer.localDescription.toJSON();
+    },offer);
+    await page.evaluate(answer=>topologyPeer.setRemoteDescription(answer),answer);
+    await packet(worker,{tabId,state:'active',after:await barrier(worker)});
+    assert.equal(await worker.evaluate(()=>fixtureCaptureAttempts),0);
+   }
+   console.log('PASS admission attack:',fixture,'— forgery refused, no native input'+(fixture==='pre-handshake-forgery'?'; later genuine captured R1 qualifies':''));
   }finally{await context.close()}
  }
 }finally{await new Promise(resolve=>server.close(resolve));await rm(temporary,{recursive:true,force:true})}

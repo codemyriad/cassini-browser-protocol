@@ -1,6 +1,6 @@
 // Actual worker/AppControl with modeled browser script results; no real inputs.
 const {test}=require('node:test');const assert=require('node:assert/strict');
-const {setup,until}=require('./support/app-control-harness.cjs');
+const {setup,until,event}=require('./support/app-control-harness.cjs');
 const pair=['call-signals-v1','verified-auto-admission-v1'];
 async function fixture(trusted=true){
   const app=await setup(0);let clock=0,reads=0;
@@ -199,5 +199,66 @@ test('a discovery flood coalesces to one native read per second with one trailin
   assert.equal(scheduled[0].ms,1000);assert.equal(frame.sourceCount,1);
   clock=1000;scheduled[0].fn();await until(()=>f.reads===before+2);
   assert.equal(scheduled.length,1);
+ }finally{f.app.close()}
+});
+
+
+test('pre-attestation discovery cannot seed identities, fence a real generation, or poison later genuine proof',async()=>{
+ const app=await setup(0);app.pages[0].onDisconnect.emit();
+ const raw={version:1,documentGeneration:'hook-real',hookGeneration:'0',revision:0,ageMs:0,
+  receivedPeers:0,capturedSendingPeers:0,samePeerCount:0,unboundReceiverCount:0,
+  receivedVersion:0,sentVersion:0,ended:false,sourceCount:0,heard:false};
+ const port={name:'cassini-frame',sender:{id:'extension',tab:{id:2},frameId:0,documentId:'chrome-real',url:app.tabs.get(2).url},
+  onMessage:event(),onDisconnect:event(),sent:[],postMessage(message){this.sent.push(message)}};
+ app.chrome.scripting={async executeScript(){return [{frameId:0,documentId:'chrome-real',result:{...raw}}]}};
+ try{
+  app.chrome.runtime.onConnect.emit(port);
+  const frame=[...app.api.frames][0],generation=app.api.callInfo(2).generation;
+  port.onMessage.emit({type:'discovery',documentGeneration:'hook-real',callGeneration:'0',sourceCount:0,heard:false});
+  port.onMessage.emit({type:'discovery',documentGeneration:'hook-real',callGeneration:'FORGED',sourceCount:64,heard:true});
+  assert.equal(frame.sourceCount,0);assert.equal(frame.documentGeneration,undefined);assert.equal(frame.fencedGenerations.size,0);
+  assert.equal(app.api.callInfo(2).generation,generation);
+  const hello=port.sent.find(message=>message.type==='relayHello');
+  port.onMessage.emit({...hello,type:'relayReady',observerDocumentStart:true});
+  await until(()=>frame.nativeSourceVerified===true);
+  assert.equal(frame.callGeneration,'0');assert.equal(frame.fencedGenerations.size,0);assert.equal(frame.sourceCount,0);
+  Object.assign(raw,{revision:2,receivedPeers:1,capturedSendingPeers:1,samePeerCount:1,receivedVersion:1,sentVersion:1,sourceCount:1,heard:true});
+  app.api.appControl.port.onMessage.emit({type:'configure',capabilities:pair});
+  await until(()=>app.ports[0].sent.some(message=>message.type==='callSignals'&&message.tabs.some(row=>row.callEvidence.state==='active')));
+  assert.equal(app.api.callInfo(2).generation,generation,'a forged pre-handshake epoch cannot rotate the real call');
+ }finally{app.close()}
+});
+
+test('trusted subframes use native document/frame envelopes and never contribute admission rows',async()=>{
+ const f=await fixture();
+ try{
+  const original=f.app.chrome.scripting.executeScript;
+  f.app.chrome.scripting.executeScript=async request=>request.target.documentIds?.[0]==='chrome-child'?[
+   {frameId:2,documentId:'chrome-child',result:{...f.raw,documentGeneration:'native-child',sourceCount:2,heard:true}}]:original(request);
+  const child=f.app.frame(2,64,2,'chrome-child'),hello=child.sent.find(message=>message.type==='relayHello');
+  child.onMessage.emit({...hello,type:'relayReady',observerDocumentStart:true});
+  await until(()=>[...f.app.api.frames].some(frame=>frame.frameId===2&&frame.nativeSourceVerified));
+  child.onMessage.emit({type:'discovery',documentGeneration:'forged-child',callGeneration:'FORGED',sourceCount:64,heard:true});
+  const before=f.app.api.callInfo(2).generation;
+  await f.configure();
+  assert.equal((await f.app.api.meetings()).meetings[0].sourceCount,3);
+  assert.equal((await f.app.api.meetings({verified:true})).meetings[0].sourceCount,3,'only genuine native child sources count');
+  assert.equal(f.last().tabs.length,1);assert.equal(f.last().tabs[0].sourceDocumentGeneration,'hook-A');
+  assert.equal(f.app.api.callInfo(2).generation,before);
+  const frame=[...f.app.api.frames].find(frame=>frame.frameId===2);
+  assert.equal(frame.documentGeneration,'native-child');assert.equal(frame.callGeneration,'0');
+ }finally{f.app.close()}
+});
+
+test('duplicate ready replies cannot bypass the native-read budget',async()=>{
+ const f=await fixture();
+ try{
+  await f.configure();
+  const frame=[...f.app.api.frames].find(frame=>frame.tabId===2);
+  await until(()=>!frame.discoveryReadState?.pending&&!f.control.signalRun);
+  const before=f.reads,hello=f.port.sent.find(message=>message.type==='relayHello');
+  for(let i=0;i<200;i++)f.port.onMessage.emit({...hello,type:'relayReady',observerDocumentStart:true});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(f.reads,before);
  }finally{f.app.close()}
 });

@@ -730,6 +730,8 @@ chrome.runtime.onConnect.addListener(port => {
     if (!frames.has(frame)) return;
     if (message.type === "relayHello" || message.type === "relayReady" || message.type === "relayUnavailable") {
       if (message.protocol !== relayProtocol || message.instanceId !== extensionInstance) return;
+      const trustedReady=frame.relayAlive&&frame.hookReady&&frame.observerDocumentStart===true;
+      if(message.type==='relayReady'&&frame.relayAlive&&frame.hookReady&&frame.observerDocumentStart===(message.observerDocumentStart===true))return;
       frame.relayAlive = true;
       frame.observerDocumentStart = message.observerDocumentStart === true;
       if (message.type !== "relayHello") {
@@ -738,7 +740,13 @@ chrome.runtime.onConnect.addListener(port => {
       }
       // Cache matching readiness during verification, but do not publish or
       // admit an obsolete frame until Chrome proves its document identity.
-      if (!frame.obsolete) { attachFrame(frame); notifyControl(); }
+      if (!frame.obsolete) {
+        if(message.type==='relayReady'&&frame.observerDocumentStart===true&&!trustedReady){
+          await genericProducer.read(frame);
+          if(!frames.has(frame)||frame.obsolete)return;
+        }
+        attachFrame(frame);notifyControl();
+      }
       return;
     }
     if (message.type === "pageState") {
@@ -749,11 +757,11 @@ chrome.runtime.onConnect.addListener(port => {
       return;
     }
     if (message.type === "discovery") {
-      if (frame.obsolete || pageState(frame.tabId) === "closed") return;
-      if (frame.frameId===0 && frame.observerDocumentStart===true) {
+      if (!frame.relayAlive || frame.obsolete || pageState(frame.tabId) === "closed") return;
+      if (frame.observerDocumentStart===true) {
         // Wakeup only. read() adopts the browser-bound native facts itself.
         requestNativeDiscovery(frame,message);
-      } else adoptDiscovery(frame,message); // Legacy/manual-only repaired realm.
+      } else if(frame.observerDocumentStart===false)adoptDiscovery(frame,message); // Explicitly legacy/manual-only repaired realm.
       return;
     }
 
@@ -951,7 +959,8 @@ async function meetings({verified=false}={}) {
       // A can reload after its lookup finishes while B's is still pending.
       // Collect every row's current evidence synchronously after ALL lookups.
       const current = [...frames].filter(frame => frame.tabId === tabId && relayReady(frame) && frame.sourceCount > 0 &&
-        (!verified || frame.frameId===0 && frame.observerDocumentStart===true && frame.nativeSourceVerified===true));
+        (!verified || frame.observerDocumentStart===true && frame.nativeSourceVerified===true &&
+          (frame.frameId===0 || frame.mainFrame===mainFrame(tabId))));
       const sourceCount = known ? Math.min(4096, current.reduce((total, frame) => total + frame.sourceCount, 0)) : session.lastSourceCount;
       if (session && known) session.lastSourceCount = sourceCount;
       if (!sourceCount && !sessions.has(tabId)) return null;
@@ -1005,6 +1014,8 @@ const signalProducer = new CallSignalProducer({identity:()=>browserInstance,tabs
   current:frame=>frames.has(frame) && mainFrame(frame.tabId) === frame && relayReady(frame) && pageState(frame.tabId) === 'present',adapters:signalAdapters});
 const genericProducer = new GenericCallEvidenceProducer({identity:()=>browserInstance,tabs:chrome.tabs,frames:()=>frames,
   current:frame=>frames.has(frame)&&mainFrame(frame.tabId)===frame&&relayReady(frame)&&pageState(frame.tabId)==='present',
+  currentSource:frame=>frames.has(frame)&&relayReady(frame)&&pageState(frame.tabId)==='present'&&
+    (frame.frameId===0?mainFrame(frame.tabId)===frame:!!mainFrame(frame.tabId)&&(!frame.mainFrame||frame.mainFrame===mainFrame(frame.tabId))),
   executeScript:request=>chrome.scripting.executeScript(request),callIdentity:frame=>callInfo(frame.tabId).generation,
   onNativeRead:(frame,native)=>{frame.nativeSourceVerified=true;adoptDiscovery(frame,{documentGeneration:native.documentGeneration,callGeneration:native.hookGeneration,
     sourceCount:native.sourceCount,heard:native.heard})}});

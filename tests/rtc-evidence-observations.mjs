@@ -236,12 +236,12 @@ try{
         // promote a generated sender into the collector's private gUM roots.
         await worker.evaluate(()=>{
           const previous=chrome.runtime.connectNative.bind(chrome.runtime);
-          globalThis.fixtureManualStarts=0;
+          globalThis.fixtureManualStarts=0;globalThis.fixtureManualStops=0;
           chrome.runtime.connectNative=name=>{
             if(name!=='io.codemyriad.cassini')return previous(name);
             const event=()=>{const listeners=[];return {addListener:fn=>listeners.push(fn),emit:value=>listeners.forEach(fn=>fn(value))}};
             return {onMessage:event(),onDisconnect:event(),postMessage(value){
-              if(value.type==='start')fixtureManualStarts++;
+              if(value.type==='start')fixtureManualStarts++;if(value.type==='stop')fixtureManualStops++;
               queueMicrotask(()=>this.onMessage.emit(value.type==='start'?{type:'started',path:'/fixture/manual-synthetic',features:['source-outcomes-v1']}:
                 value.type==='stop'?{type:'stopped',path:'/fixture/manual-synthetic'}:{type:'ack'}));
             },disconnect(){}};
@@ -249,13 +249,26 @@ try{
         });
         let index=await worker.evaluate(tabId=>{
           const index=fixturePackets.length;
-          fixtureControlPort.onMessage.emit({type:'command',requestId:'synthetic-manual-start',action:'start',tabId,mode:'tracks',independent:true,captureLocal:false,microphone:false});
+          fixtureControlPort.onMessage.emit({type:'command',requestId:'synthetic-manual-start',action:'start',tabId,mode:'tracks',independent:true,captureLocal:false,microphone:false,keepOnNavigation:true});
           return index;
         },tabId);
         const start=(await packet(worker,{type:'result',after:index})).packet;
         assert.equal(start.requestId,'synthetic-manual-start');assert.equal(start.ok,true,JSON.stringify(start));
+        await caller.evaluate(()=>{
+          dispatchEvent(new PageTransitionEvent('pageshow',{persisted:true}));
+          dispatchEvent(new PageTransitionEvent('pagehide',{persisted:true}));
+          const doc=__cassiniCallEvidenceV1.read().documentGeneration;
+          postMessage({channel:'cassini-page',type:'discovery',sourceCount:0,heard:false,documentGeneration:doc,callGeneration:'0'},'*');
+          postMessage({channel:'cassini-page',type:'discovery',sourceCount:64,heard:true,documentGeneration:doc,callGeneration:'FORGED'},'*');
+        });
         const revision=await caller.evaluate(()=>__cassiniCallEvidenceV1.read().revision);
         await caller.waitForFunction(revision=>__cassiniCallEvidenceV1.read().revision>=revision+3,revision);
+        const statusIndex=await worker.evaluate(tabId=>{
+          const index=fixturePackets.length;fixtureControlPort.onMessage.emit({type:'command',requestId:'synthetic-still-live',action:'status',tabId,independent:true});return index;
+        },tabId);
+        const live=(await packet(worker,{type:'result',after:statusIndex})).packet;
+        assert.equal(live.requestId,'synthetic-still-live');assert.equal(live.ok,true);assert.equal(live.status.recording,true);
+        assert.equal(await worker.evaluate(()=>fixtureManualStops),0,'synthetic lifecycle cannot terminate the active recording');
         assert.equal(await caller.evaluate(()=>__cassiniCallEvidenceV1.read().samePeerCount),0);
         await packet(worker,{tabId,state:'unknown',after:await barrier(worker)});
         index=await worker.evaluate(tabId=>{

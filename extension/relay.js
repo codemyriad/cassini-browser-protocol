@@ -108,12 +108,14 @@
   }
   chrome.runtime.onMessage.addListener(runtimeMessage);
   connect();
-  listen("pagehide", () => {
+  listen("pagehide", event => {
+    if(event?.isTrusted!==true)return;
     hidden = true; sourceCount = 0; heard = false;
     send({ type: "pageState", state: "navigating" });
     send({ type: "discovery", sourceCount, heard });
   });
   listen("pageshow", event => {
+    if(event?.isTrusted!==true)return;
     hidden = false;
     // The cached realm may thaw before its queued onDisconnect runs. Never
     // send through that stale port or retire an otherwise valid relay for it.
@@ -132,6 +134,7 @@
     if (retired && !(drainingToken && event.data.token === drainingToken)) return;
     if (type === "hookReady") {
       if (event.data.protocol !== protocol || event.data.instanceId !== instanceId || !instanceId) return;
+      if(hookReady&&handshakeComplete)return;
       hookReady = true; handshakeComplete = true; clearTimeout(handshakeTimer);
       send({type:"relayReady", protocol, instanceId}); settle();
       control({type:"discover"}); return;

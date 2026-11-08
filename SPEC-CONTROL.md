@@ -1342,8 +1342,10 @@ globalThis, descriptor or postMessage lookups. Native promise values cannot be
 substituted through an inherited page thenable hook. No page-discovery source
 count, document generation, call generation or epoch is admission evidence.
 
-For a document-start trusted main frame, discovery messages only wake a
-browser-documentId-bound native read; the worker adopts identity/source facts
+Discovery is refused before relay attestation. Readiness bootstraps a native
+read before publishing the initial state. For every document-start trusted frame
+(including subframes), discovery messages only wake a browser-documentId-bound
+native read; the worker adopts identity/source facts
 from that read after current-document checks. A proven native terminal session
 (closed transports and ended captured tracks) followed by a new native session
 changes the collector's hook generation. Only after the trusted read and all
@@ -1358,7 +1360,9 @@ Symbol.split lookup. Its native then calls use a private fixed-species construct
 and restore the API promise's descriptor afterward; a page Promise[Symbol.species]
 override cannot supply the constructor used for those observations.
 
-Relays reject synthetic MessageEvents (isTrusted false). Native window.postMessage
+Relays reject synthetic MessageEvents and synthetic pagehide/pageshow events
+(isTrusted false), so fake lifecycle events cannot reconnect a live relay.
+Repeated ready messages cannot bypass the discovery execution bound. Native window.postMessage
 is itself UA-trusted even when called by the page, so isTrusted is NOT evidence
 authentication; only the protected native reader provides evidence. Discovery
 wakeups have one in-flight read and a 1000 ms per-frame limit, with one trailing
@@ -1366,8 +1370,11 @@ refresh to avoid losing changes. This limits page-triggered execution; normal
 verified progress polling remains independent and never renews proof from a
 cached discovery message.
 
-Verified meetings inventory includes only native-verified top-frame source facts;
-page-chosen subframe counts/heard cannot inflate it. The legacy, unacknowledged
+Verified meetings inventory includes only native-verified source facts from
+current frames, bound by both Chrome documentId and frameId. Native subframe
+facts may contribute real sources but never call admission: signal snapshots
+remain top-frame-only. Page-chosen subframe counts/heard cannot inflate either
+inventory shape for a trusted document-start frame. The legacy, unacknowledged
 inventory retains its older unverified subframe facts for compatibility. An
 unavailable native collector can likewise retain legacy/manual source facts;
 they are excluded from verified inventory and do not yield a verified source

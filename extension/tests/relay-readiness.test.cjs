@@ -266,10 +266,10 @@ for(const order of ['disconnect before pageshow','disconnect after pageshow'])
 test('persisted restore replaces a frozen port and drains once: '+order,()=>{
  const f=relay(),old=f.ports[0];old.onMessage.emit({type:'start',token:'old'});
  f.page({type:'packet',token:'old',request:17,packet:{type:'audio'}});
- for(const fn of f.handlers.get('pagehide'))fn({persisted:true});
+ for(const fn of f.handlers.get('pagehide'))fn({isTrusted:true,persisted:true});
  old.postMessage=()=>{throw Error('Attempting to use a disconnected port object.')};
  if(order==='disconnect before pageshow')old.onDisconnect.emit();
- for(const fn of [...f.handlers.get('pageshow')])fn({persisted:true});
+ for(const fn of [...f.handlers.get('pageshow')])fn({isTrusted:true,persisted:true});
  assert.equal(f.ports.length,2,'pageshow must not reuse the cached closed port');
  assert.equal(f.context.__cassiniRelay.valid(),true,'a live extension realm must not retire on the stale port');
  if(order==='disconnect after pageshow')old.onDisconnect.emit();
@@ -290,4 +290,22 @@ test('synthetic MessageEvent dispatch cannot claim hook readiness',()=>{
  assert.equal(port.sent.some(message=>message.type==='relayReady'),false);
  f.page({type:'hookReady',protocol:1,instanceId:'current'});
  assert.equal(port.sent.some(message=>message.type==='relayReady'),true);
+});
+
+
+test('synthetic pageshow/pagehide cannot reconnect or retire a live relay',()=>{
+ const f=relay(),port=f.ports[0];
+ port.onMessage.emit({type:'relayHello',protocol:1,instanceId:'current'});
+ f.page({type:'hookReady',protocol:1,instanceId:'current'});
+ const before=port.sent.length;
+ for(const name of ['pagehide','pageshow'])for(const listener of f.handlers.get(name))listener({isTrusted:false,persisted:true});
+ assert.equal(f.ports.length,1);assert.equal(port.disconnected,undefined);assert.equal(port.sent.length,before);
+ assert.equal(f.context.__cassiniRelay.valid(),true);
+});
+
+test('duplicate page hook-ready messages are forwarded only once per handshake',()=>{
+ const f=relay(),port=f.ports[0];
+ port.onMessage.emit({type:'relayHello',protocol:1,instanceId:'current'});
+ for(let i=0;i<200;i++)f.page({type:'hookReady',protocol:1,instanceId:'current'});
+ assert.equal(port.sent.filter(message=>message.type==='relayReady').length,1);
 });

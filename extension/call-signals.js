@@ -93,10 +93,10 @@ export class CallSignalProducer {
 // Generic interactive-media producer. Browser-owned results and trusted
 // document-start relays bind the private observer; page assertions never qualify.
 export class GenericCallEvidenceProducer {
-  constructor({identity,tabs,frames,current,executeScript,callIdentity,onNativeRead=()=>{},
+  constructor({identity,tabs,frames,current,currentSource=current,executeScript,callIdentity,onNativeRead=()=>{},
     now=()=>globalThis.performance?.now?.() ?? Date.now(),
     timers={later:(fn,ms)=>setTimeout(fn,ms),cancel:id=>clearTimeout(id)}}) {
-    Object.assign(this,{identity,tabs,frames,current,executeScript,callIdentity,onNativeRead,now,timers});
+    Object.assign(this,{identity,tabs,frames,current,currentSource,executeScript,callIdentity,onNativeRead,now,timers});
     this.publications=new WeakMap();this.lastWire=null;this.epoch=null;this.lastPublishedAt=-Infinity;
     this.prepared=new WeakMap();this.activePublications=new Map();
   }
@@ -125,23 +125,23 @@ export class GenericCallEvidenceProducer {
     this.lastWire=JSON.stringify(result);return result;
   }
   async read(frame) {
-    if (!this.current(frame) || frame.frameId !== 0 || !signalToken(frame.browserDocumentId) || frame.observerDocumentStart!==true) return null;
-    const browser=frame.browserDocumentId,epoch=frame.obsoleteEpoch;
+    if (!this.currentSource(frame) || !Number.isInteger(frame.frameId) || frame.frameId<0 || !signalToken(frame.browserDocumentId) || frame.observerDocumentStart!==true) return null;
+    const browser=frame.browserDocumentId,epoch=frame.obsoleteEpoch,frameId=frame.frameId;
     const results=await this.bounded(()=>this.executeScript({
       target:{tabId:frame.tabId,documentIds:[browser]},world:'MAIN',
       // This identifier is a non-configurable own global installed at
       // document_start. No Object/globalThis/prototype or page message lookup.
       func:()=>__cassiniCallEvidenceV1.read()
     }));
-    if (!this.current(frame) || frame.browserDocumentId!==browser || frame.obsoleteEpoch!==epoch ||
-        !Array.isArray(results) || results.length!==1 || results[0]?.documentId!==browser || results[0]?.frameId!==0) return null;
+    if (frame.observerDocumentStart!==true || !this.currentSource(frame) || frame.browserDocumentId!==browser || frame.obsoleteEpoch!==epoch || frame.frameId!==frameId ||
+        !Array.isArray(results) || results.length!==1 || results[0]?.documentId!==browser || results[0]?.frameId!==frameId) return null;
     const value=results[0].result;
     frame.nativeCollectorUnavailable=value===null;
     if(value===null)frame.nativeSourceVerified=false;
     if (!value || value.version!==1 || !signalToken(value.documentGeneration) || !signalToken(value.hookGeneration) ||
         !Number.isInteger(value.sourceCount) || value.sourceCount<0 || value.sourceCount>64 || typeof value.heard!=='boolean') return null;
     this.onNativeRead(frame,value);
-    if (!this.current(frame) || frame.browserDocumentId!==browser || frame.obsoleteEpoch!==epoch) return null;
+    if (frame.observerDocumentStart!==true || !this.currentSource(frame) || frame.browserDocumentId!==browser || frame.obsoleteEpoch!==epoch || frame.frameId!==frameId) return null;
     return value;
   }
   async observe(frame) {
