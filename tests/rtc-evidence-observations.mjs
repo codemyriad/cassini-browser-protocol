@@ -160,7 +160,6 @@ try{
       assert.notEqual(inventory.row.callGeneration,'0');
       observation.worker={acknowledged:true,state:published.row.callEvidence.state,namespaceBinding:true,legacySourceCount:inventory.row.sourceCount,legacyHeard:inventory.row.heard};
       if(fixture==='primordial-poison-positive'){
-        const before=await worker.evaluate(()=>fixturePackets.length);
         await worker.evaluate(async tabId=>chrome.scripting.executeScript({target:{tabId,frameIds:[0]},world:'MAIN',func:()=>{
         Object.getOwnPropertyDescriptor=()=>({value:{read:()=>({samePeerCount:99})}});
         Reflect.apply=()=>{throw Error('page Reflect')};
@@ -176,8 +175,13 @@ try{
         Object.defineProperty(RTCRtpSender.prototype,'track',{get(){throw Error('page track')}});
         Object.defineProperty(MediaStreamTrack.prototype,'readyState',{get(){return 'ended'}});
         }}),tabId);
-        const renewed=await packet(worker,{tabId,state:'active',after:before});
-        assert.equal(renewed.row.callEvidence.callGeneration,published.row.callEvidence.callGeneration);
+        // Require three distinct post-injection publications: one old, not-yet
+        // published native sample cannot make a broken collector look healthy.
+        for(let refresh=0;refresh<3;refresh++){
+          const after=await worker.evaluate(()=>fixturePackets.length);
+          const renewed=await packet(worker,{tabId,state:'active',after});
+          assert.equal(renewed.row.callEvidence.callGeneration,published.row.callEvidence.callGeneration);
+        }
         observation.worker.nativeProgressSurvivesPagePrimordialPoison=true;
       }
       if(fixture==='duplex'){

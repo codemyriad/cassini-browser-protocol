@@ -52,7 +52,11 @@ function fixture(){
   }
   const read=()=>context.__cassiniCallEvidenceV1.read();
   const advance=ms=>{now+=ms};
-  async function tick(peers){advance(1000);for(const {sender,receiver} of peers){sender.packets+=20;receiver.packets+=20}await timers[0]()}
+  async function tick(peers){advance(1000);for(const {sender,receiver} of peers){sender.packets+=20;receiver.packets+=20}const sampled=timers[0]();
+    // The host test realm must not assimilate the VM interval callback via its
+    // deliberately poisoned Promise.prototype.then/species. Browsers ignore
+    // an interval callback return value; this bridge waits intrinsically.
+    Object.defineProperty(sampled,'constructor',{value:Promise});await sampled;}
   return {context,window,listeners,messages,peer,read,advance,tick};
 }
 test('real capture provenance and proven clones require two fresh progress samples; preview and synthetic senders do not qualify',async()=>{
@@ -152,7 +156,7 @@ for(const failure of ['insecure','missing-peer','missing-uuid','throwing-capabil
  const values={isSecureContext:failure!=='insecure',RTCPeerConnection:failure==='missing-peer'?undefined:function(){},
   crypto:failure==='missing-uuid'?{}:{randomUUID:()=> 'doc'}};
  const context=vm.createContext(values);
- if(failure==='throwing-capability')vm.runInContext("Object.defineProperty(globalThis,'RTCPeerConnection',{get(){throw Error('missing capability')}})",context);
+ if(failure==='throwing-capability')context.crypto=Object.defineProperty({},'randomUUID',{get(){throw Error('missing capability')}});
  const run=()=>vm.runInContext(fs.readFileSync(path.join(__dirname,'../rtc-evidence.js'),'utf8'),context);
  if(failure==='throwing-capability')assert.throws(run,/missing capability/);else run();
  const descriptor=Object.getOwnPropertyDescriptor(context,'__cassiniCallEvidenceV1');
