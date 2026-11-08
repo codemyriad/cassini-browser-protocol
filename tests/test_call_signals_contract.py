@@ -16,6 +16,25 @@ class CallSignalContractTests(unittest.TestCase):
                     self.assertEqual(validator.is_valid(case['message']), accepted,
                                      list(validator.iter_errors(case['message'])))
 
+    def test_native_start_correlates_retired_automatic_and_later_manual_same_call(self):
+        for case in VECTORS['nativeStartCorrelation']['cases']:
+            with self.subTest(name=case['name']):
+                for command in case['commands']:
+                    schema('control-host').validate(command)
+                for packet in case['expectedNativeStarts']:
+                    schema('request').validate(packet)
+                starts = [command for command in case['commands'] if command['action'] == 'start']
+                native = case['expectedNativeStarts']
+                self.assertEqual([packet['requestId'] for packet in native],
+                                 [command['requestId'] for command in starts])
+                self.assertEqual(len({packet['callGeneration'] for packet in native}), 1)
+                self.assertNotEqual(case['retiredAutomaticRequestId'], case['pendingManualRequestId'])
+                arrival = [native[index]['requestId'] for index in case['nativeArrivalOrder']]
+                self.assertEqual(arrival, [case['expect']['acceptManualRequestId'],
+                                           case['expect']['rejectRetiredAutomaticRequestId']])
+                self.assertEqual(case['expect']['lateAutomaticInputs'], 0)
+                self.assertEqual(case['expect']['lateAutomaticOutputs'], 0)
+
     def test_unknown_call_and_remote_design_are_independent(self):
         message = copy.deepcopy(next(c['message'] for c in VECTORS['valid']
                                      if c['name'] == 'mixed-design-unknown-call'))

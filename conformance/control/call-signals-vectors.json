@@ -3348,5 +3348,134 @@
         "expectState": "unknown"
       }
     ]
+  },
+  "nativeStartCorrelation": {
+    "scope": "producer request binding plus consumer admission vector; actual host dispatch adoption tested downstream",
+    "cases": [
+      {
+        "name": "late-automatic-after-manual-same-call",
+        "commands": [
+          {
+            "type": "command",
+            "requestId": "automatic-1",
+            "action": "start",
+            "tabId": 2,
+            "independent": true,
+            "mode": "tracks",
+            "callGeneration": "call-A",
+            "captureLocal": false,
+            "microphone": false
+          },
+          {
+            "type": "command",
+            "requestId": "stop-automatic",
+            "action": "stop",
+            "tabId": 2,
+            "independent": true
+          },
+          {
+            "type": "command",
+            "requestId": "manual-2",
+            "action": "start",
+            "tabId": 2,
+            "independent": true,
+            "mode": "tracks",
+            "callGeneration": "call-A",
+            "captureLocal": false,
+            "microphone": false
+          }
+        ],
+        "expectedNativeStarts": [
+          {
+            "type": "start",
+            "version": 1,
+            "requestId": "automatic-1",
+            "callGeneration": "call-A",
+            "documentGeneration": "hook-A"
+          },
+          {
+            "type": "start",
+            "version": 1,
+            "requestId": "manual-2",
+            "callGeneration": "call-A",
+            "documentGeneration": "hook-A"
+          }
+        ],
+        "retiredAutomaticRequestId": "automatic-1",
+        "pendingManualRequestId": "manual-2",
+        "nativeArrivalOrder": [
+          1,
+          0
+        ],
+        "expect": {
+          "acceptManualRequestId": "manual-2",
+          "rejectRetiredAutomaticRequestId": "automatic-1",
+          "lateAutomaticInputs": 0,
+          "lateAutomaticOutputs": 0
+        }
+      },
+      {
+        "name": "numeric-zero-is-not-string-zero",
+        "commands": [
+          {
+            "type": "command",
+            "requestId": 0,
+            "action": "start",
+            "tabId": 2,
+            "independent": true,
+            "mode": "tracks",
+            "callGeneration": "call-A",
+            "captureLocal": false,
+            "microphone": false
+          },
+          {
+            "type": "command",
+            "requestId": "stop-automatic",
+            "action": "stop",
+            "tabId": 2,
+            "independent": true
+          },
+          {
+            "type": "command",
+            "requestId": "0",
+            "action": "start",
+            "tabId": 2,
+            "independent": true,
+            "mode": "tracks",
+            "callGeneration": "call-A",
+            "captureLocal": false,
+            "microphone": false
+          }
+        ],
+        "expectedNativeStarts": [
+          {
+            "type": "start",
+            "version": 1,
+            "requestId": 0,
+            "callGeneration": "call-A",
+            "documentGeneration": "hook-A"
+          },
+          {
+            "type": "start",
+            "version": 1,
+            "requestId": "0",
+            "callGeneration": "call-A",
+            "documentGeneration": "hook-A"
+          }
+        ],
+        "retiredAutomaticRequestId": 0,
+        "pendingManualRequestId": "0",
+        "nativeArrivalOrder": [
+          1,
+          0
+        ],
+        "expect": {
+          "acceptManualRequestId": "0",
+          "rejectRetiredAutomaticRequestId": 0,
+          "lateAutomaticInputs": 0,
+          "lateAutomaticOutputs": 0
+        }
+      }
+    ]
   }
 }

@@ -541,13 +541,13 @@ async function start(mode, tabId = null, options = {}) {
       const start = { type: "start", version: 1, title: tab.title || "Browser meeting", features: ["source-outcomes-v1"],
         callGeneration: session.callGeneration, documentGeneration: documentFor(tab.id) };
       if (session.independent) Object.assign(start, { independent: true, microphone: options.microphone !== false, captureId: session.token, timelineOriginMs: session.origin });
+      // Preserve the originating control ask across delayed native handshakes.
+      if (options.requestId !== undefined) start.requestId = options.requestId;
       if (target) {
         // A new native packet type fails closed on older hosts: an unknown
         // optional field on ordinary Start could create a second folder.
         start.type = "resume";
         start.features.push("resume-capture-v1");
-        // Names the ask a refused resume answers (only ever on resume packets).
-        if (options.requestId !== undefined) start.requestId = options.requestId;
         delete start.microphone; // The app retains its actual per-session selection.
       }
       const result = await session.host.send(start);

@@ -505,7 +505,9 @@ The first native packet is deliberately a distinct `type:"resume"`, version1,
 with independent:true, captureId, timelineOriginMs, callGeneration and features
 including resume-capture-v1. It otherwise uses the same transport as Start.
 Since extension 0.2.11 it also carries this command's `requestId`, so the app
-can tell which ask a refused resume answers; an ordinary Start never carries it.
+can tell which ask a refused resume answers. Since extension 0.2.26, ordinary
+native Start also carries its originating control command's requestId; see the
+verified-admission request binding below.
 An app that keys on it gives every resume ask a fresh, never reused requestId
 (see conformance/control/RESUME-CAPTURE.md).
 Older hosts must reject this unknown type before creating any folder. This is
@@ -1320,6 +1322,33 @@ checks. Revalidate at scheduling, immediately before dispatch, and before any
 fallback/input reservation. Unknown, stale or mismatched evidence cannot authorize
 pending work. Existing recording ownership, fixed route and120s evidence-loss
 grace remain app-owned; unknown is not an affirmative end.
+
+### Native Start request binding
+
+Since extension 0.2.26, every ordinary native `type:"start"` dispatched for a host
+control command echoes that command's `requestId`, unchanged in value AND JSON
+type, just as native resume already does. This applies to automatic and explicit
+manual control commands, on both legacy and verified connections. Zero is a valid
+ID; numeric `0` and string `"0"` are distinct. A popup-originated Start with no
+host command has no requestId; it must never be inferred to answer a host ask.
+No schema change or new native feature flag is needed.
+
+An adopting verified-auto-admission-v1 host gives every Start ask a fresh,
+never-reused requestId across automatic/manual asks and control reconnects. It
+retains the ask's origin (automatic or explicit manual), connection and bound
+browser/hook/background call identity in its own pending/retired-request ledger.
+Before reserving any native input or creating an output, match the incoming
+native Start to that exact ask; recheck the applicable current authorization and,
+for automatic work, fresh verified evidence. The requestId is correlation, not
+admission proof. A timeout retires that ask's authorization; a late automatic
+Start must be refused without input/output allocation, even if a later explicit
+manual ask names the same call. Never join by callGeneration alone, reclassify an
+old automatic packet as the newer manual ask, or renew authorization from native
+arrival. Unknown/missing IDs cannot satisfy a pending host command; any separate
+explicit popup/manual route needs its own authorization. Native and control
+transport delivery may be reordered. The shared nativeStartCorrelation vectors
+in conformance/control/call-signals-vectors.json cover a later manual packet
+arriving before the retired automatic packet for the exact same call.
 
 ### Numeric freshness and active-proof renewal
 
