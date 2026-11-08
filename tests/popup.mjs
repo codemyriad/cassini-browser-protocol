@@ -9,7 +9,7 @@ const {chromium} = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const server = createServer(async (request, response) => {
   const file = request.url?.slice(1);
-  if (!['popup.html', 'popup.js', 'popup-state.mjs'].includes(file)) {response.writeHead(404).end();return;}
+  if (!['popup.html', 'popup.js', 'popup-state.mjs', 'tab-evidence.mjs'].includes(file)) {response.writeHead(404).end();return;}
   response.setHeader('Content-Type', file.endsWith('.html') ? 'text/html' : 'text/javascript');
   response.end(await readFile(path.join(root,'extension',file)));
 });

@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import {createServer} from 'node:http';
 import {mkdir,mkdtemp,rm,writeFile} from 'node:fs/promises';
 import os from 'node:os';import path from 'node:path';
+import {fileURLToPath} from 'node:url';
 import {installRtcTopologyProbe,summarizeRtcTopology} from './rtc-topology-probe.mjs';
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
 const directory=await mkdtemp(path.join(os.tmpdir(),'cassini-rtc-evidence-'));
@@ -31,6 +32,16 @@ try{
     const context=await browser.newContext({permissions:['microphone']});
     try{
       await context.addInitScript(installRtcTopologyProbe);
+      await context.addInitScript({path:path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../extension/page-hook.js')});
+      await context.addInitScript(()=>{
+        globalThis.cassiniObservedDiscovery=null;
+        addEventListener('message',event=>{
+          if(event.source===window&&event.data?.channel==='cassini-page'&&event.data.type==='discovery'){
+            const value=event.data;
+            cassiniObservedDiscovery={sourceCount:value.sourceCount,heard:value.heard,hookCallGeneration:value.callGeneration};
+          }
+        });
+      });
       const caller=await context.newPage(),remote=await context.newPage();
       const url=`http://127.0.0.1:${server.address().port}/`;
       await Promise.all([caller.goto(url),remote.goto(url)]);
@@ -80,10 +91,21 @@ try{
         return rows.some(row=>grew(row,'inboundPackets'))&&(!sending||rows.some(row=>grew(row,'outboundPackets')));
       },{before,sending:!['passive-viewer','mic-preview'].includes(fixture)});
       const topology=summarizeRtcTopology(before,await caller.evaluate(()=>cassiniRtcTopology()));
+      await caller.waitForFunction(()=>globalThis.__cassiniCallEvidenceV1?.read().revision>=3);
+      const observed=await caller.evaluate(()=>{
+        const value=globalThis.__cassiniCallEvidenceV1.read();
+        return {revision:value.revision,ageMs:value.ageMs,receivedPeers:value.receivedPeers,
+          capturedSendingPeers:value.capturedSendingPeers,samePeerCount:value.samePeerCount,unboundReceiverCount:value.unboundReceiverCount};
+      });
       const candidateR1=topology.samePeerConnection;
       if(['passive-viewer','mic-preview','synthetic-sender','unrelated-mic-peer'].includes(fixture))assert.equal(candidateR1,false,fixture);
       if(['duplex','captured-clone'].includes(fixture))assert.equal(candidateR1,true,fixture);
-      report.cases.push({fixture,candidateR1,topology,
+      if(['passive-viewer','mic-preview','synthetic-sender','unrelated-mic-peer'].includes(fixture))assert.equal(observed.samePeerCount,0,'packaged hook '+fixture);
+      if(['duplex','captured-clone'].includes(fixture))assert.equal(observed.samePeerCount,1,'packaged hook '+fixture);
+      if(fixture==='passive-viewer')await caller.waitForFunction(()=>cassiniObservedDiscovery?.sourceCount===1&&cassiniObservedDiscovery.heard===true);
+      const legacySourceObservation=await caller.evaluate(()=>cassiniObservedDiscovery);
+      report.cases.push({fixture,candidateR1,topology,packagedHookObservation:observed,
+        legacySourceObservation,
         ...(fixture==='echo'||fixture==='unanswered-early-media'?{requiresCoordinatorReview:candidateR1}: {})});
     }finally{await context.close()}
   }

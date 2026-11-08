@@ -148,6 +148,72 @@
   let lastSourceCount = -1, lastHeard = null, latched = false, zeroSince = null, orphanedSince = null;
   let previousStats = new WeakMap(), packetProof = new WeakMap(), sampling = false;
   const evidenceTicks = [], owners = new Set();
+  // Candidate R1 observations are independent from the legacy heard latch.
+  // A connected/live receiver slot without fresh packets is not a positive.
+  const senderStats = globalThis.RTCRtpSender?.prototype?.getStats;
+  let senderBaselines = new WeakMap(), receiverBaselines = new WeakMap(), receivedProgress = new WeakMap();
+  let interactiveProof = null, interactiveRevision = 0;
+  // RTCStats.timestamp uses timeOrigin + now(), per w3.org/TR/webrtc-stats/.
+  const freshReport = report => typeof report.timestamp === 'number' && Number.isFinite(report.timestamp) &&
+    performance.timeOrigin + performance.now() - report.timestamp >= 0 &&
+    performance.timeOrigin + performance.now() - report.timestamp <= 2500;
+  const capturedSender = (pc, sender, track) => connected(pc) && sender.track === track &&
+    track?.kind === 'audio' && track.readyState === 'live' && track.enabled && !track.muted &&
+    knownLocalTracks.has(sourceRoot(track)) && getTransceivers(pc).some(transceiver =>
+      transceiver.sender === sender && ['sendonly','sendrecv'].includes(transceiver.currentDirection));
+  async function sampleInteractiveEvidence() {
+    const generation = callGeneration, candidates = [];
+    for (const pc of peers) if (connected(pc) && peerGenerations.get(pc) === generation) for (const sender of getSenders(pc)) {
+      const track = sender.track;
+      if (capturedSender(pc,sender,track) && typeof senderStats === 'function') candidates.push({pc,sender,track});
+    }
+    const proven = [];
+    await Promise.all(candidates.map(async candidate => {
+      let deadline;
+      try {
+        const reports = await Promise.race([
+          Reflect.apply(senderStats,candidate.sender,[]),
+          new Promise(resolve => { deadline = setTimeout(()=>resolve(null),750); })
+        ]);
+        if (generation !== callGeneration || !capturedSender(candidate.pc,candidate.sender,candidate.track)) return;
+        const previous = senderBaselines.get(candidate.sender);
+        const baseline = previous?.track === candidate.track ? previous.counts : new Map();
+        const next = new Map();
+        reports?.forEach(report => {
+          if (report?.type !== 'outbound-rtp' || (report.kind ?? report.mediaType) !== 'audio' ||
+              typeof report.id !== 'string' || !Number.isSafeInteger(report.packetsSent) || report.packetsSent < 0 || !freshReport(report)) return;
+          next.set(report.id,{count:report.packetsSent,at:report.timestamp});
+          const last = baseline.get(report.id);
+          if (last && report.timestamp > last.at && report.timestamp-last.at <= 2500 && report.packetsSent > last.count)
+            proven.push({...candidate,at:report.timestamp-performance.timeOrigin});
+        });
+        senderBaselines.set(candidate.sender,{track:candidate.track,counts:next});
+      } catch { /* Unavailable stats cannot supply admission evidence. */ }
+      finally { clearTimeout(deadline); }
+    }));
+    if (generation === callGeneration) interactiveProof = {generation,at:performance.now(),senders:proven,revision:++interactiveRevision};
+  }
+  // Read the closure through browser-owned executeScript results, not page
+  // postMessage claims. The snapshot contains no SDP, device IDs or content.
+  // Deliberately do not advertise verified admission while adversarial/lifecycle
+  // and split-PC review gates remain open.
+  try { Object.defineProperty(globalThis,'__cassiniCallEvidenceV1',{value:Object.freeze({read() {
+    refreshCall();
+    const proof = interactiveProof, age = proof ? performance.now()-proof.at : Infinity;
+    const current = discoverySources();
+    const receiving = new Set([...current.receivers].filter(([receiver,pc])=>{
+      const evidence = receivedProgress.get(receiver);
+      return evidence?.pc === pc && evidence.track === receiver.track &&
+        performance.now()-evidence.at <= 2500;
+    }).map(([,pc])=>pc));
+    const sending = new Set(proof?.generation === callGeneration && age <= 2500 ?
+      proof.senders.filter(({pc,sender,track,at})=>performance.now()-at <= 2500 && capturedSender(pc,sender,track)).map(value=>value.pc) : []);
+    const same = new Set([...sending].filter(pc=>receiving.has(pc)));
+    return {version:1,documentGeneration,hookGeneration:String(callGeneration),revision:proof?.revision ?? 0,
+      ageMs:Number.isFinite(age) ? Math.max(0,age) : null,receivedPeers:receiving.size,
+      capturedSendingPeers:sending.size,samePeerCount:same.size,
+      unboundReceiverCount:[...current.receivers.values()].filter(pc=>!same.has(pc)).length};
+  }})}); } catch { /* A conflicting pre-existing reader is not installed by this hook. */ }
   const connected = pc => !closed(pc) &&
     (pc.connectionState === "connected" || ["connected", "completed"].includes(pc.iceConnectionState));
   function discoverySources() {
@@ -168,6 +234,10 @@
     return { sourceCount: Math.min(64, sources.size), receivers };
   }
   function resetEvidence() {
+    interactiveProof = null;
+    senderBaselines = new WeakMap();
+    receiverBaselines = new WeakMap();
+    receivedProgress = new WeakMap();
     latched = false;
     orphanedSince = null;
     owners.clear();
@@ -225,6 +295,8 @@
       for (const [receiver, pc, stats] of reports) {
         if (current.receivers.get(receiver) !== pc || typeof stats?.forEach !== "function") continue;
         const previous = previousStats.get(receiver) || new Map();
+        const receiverBaseline = receiverBaselines.get(receiver);
+        const received = receiverBaseline?.track === receiver.track ? receiverBaseline.counts : new Map();
         stats.forEach(report => {
           if (report?.type !== "inbound-rtp" || (report.kind ?? report.mediaType) !== "audio" ||
               typeof report.id !== "string" || !Number.isSafeInteger(report.packetsReceived) || report.packetsReceived < 0) return;
@@ -234,9 +306,16 @@
             if (count - previous.get(report.id) >= 10) tick.voters.add(pc);
           }
           previous.set(report.id, count);
+          if (freshReport(report)) {
+            const last = received.get(report.id);
+            if (last && report.timestamp > last.at && report.timestamp-last.at <= 2500 && count > last.count)
+              receivedProgress.set(receiver,{pc,track:receiver.track,at:report.timestamp-performance.timeOrigin});
+            received.set(report.id,{count,at:report.timestamp});
+          }
         });
         // Missing reports keep their last baseline; first appearance never votes.
         previousStats.set(receiver, previous);
+        receiverBaselines.set(receiver,{track:receiver.track,counts:received});
       }
       const liveVoters = t => [...t.voters].filter(connected);
       if (!latched && evidenceTicks.filter(t => liveVoters(t).length).length >= 2) {
@@ -246,6 +325,7 @@
         for (const pc of tick.voters) owners.add(pc);
       }
       discover();
+      await sampleInteractiveEvidence();
     } finally { sampling = false; }
   }
   setInterval(sampleEvidence, 1000);
