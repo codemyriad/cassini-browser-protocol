@@ -1258,6 +1258,10 @@ then matched GNOME/Mac adoption, with legitimate Talk positives and passive-medi
 negatives. Deployed legacy exposure remains explicitly accepted until adoption;
 this amendment does not claim to fix old binaries through an ignored new field.
 
+Candidate extension 0.2.26 adds content-free popup diagnostics and strict
+negotiation/revocation fencing. Verified producer advertisement remains disabled
+until the real positive/negative and session-binding review gates pass.
+
 ### Qualification and negotiation
 
 Generic positive evidence requires live remote media on a connected RTC session
