@@ -63,3 +63,11 @@ test('a hung browser read withdraws positive evidence at a bounded deadline',asy
   expire();const row=(await pending).tabs[0];
   assert.equal(row.callEvidence.state,'unknown');assert.equal(row.callEvidence.callGeneration,null);
 });
+
+test('browser round-trip time consumes proof freshness instead of refreshing old media',async()=>{
+  const f=fixture();let clock=0;f.producer.now=()=>clock;
+  f.sample.ageMs=2000;
+  f.producer.executeScript=async()=>{clock=600;return [{frameId:0,documentId:'chrome-A',result:f.sample}]};
+  const row=(await f.producer.snapshot({verified:true})).tabs[0];
+  assert.equal(row.callEvidence.state,'unknown');assert.equal(row.callEvidence.callGeneration,null);
+});

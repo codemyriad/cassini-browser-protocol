@@ -94,8 +94,9 @@ export class CallSignalProducer {
 // session/lifecycle review gates pass. It never consumes page-posted evidence.
 export class GenericCallEvidenceProducer {
   constructor({identity,tabs,frames,current,executeScript,callIdentity,
+    now=()=>globalThis.performance?.now?.() ?? Date.now(),
     timers={later:(fn,ms)=>setTimeout(fn,ms),cancel:id=>clearTimeout(id)}}) {
-    Object.assign(this,{identity,tabs,frames,current,executeScript,callIdentity,timers});
+    Object.assign(this,{identity,tabs,frames,current,executeScript,callIdentity,now,timers});
   }
   async bounded(read) {
     let deadline;
@@ -107,6 +108,7 @@ export class GenericCallEvidenceProducer {
   async observe(frame) {
     if (!this.current(frame) || frame.frameId !== 0 || !signalToken(frame.browserDocumentId) || !signalToken(frame.documentGeneration) || !signalToken(frame.callGeneration)) return null;
     const binding={browser:frame.browserDocumentId,hook:frame.documentGeneration,generation:frame.callGeneration,epoch:frame.obsoleteEpoch};
+    const started=this.now();
     const results=await this.bounded(()=>this.executeScript({
       target:{tabId:frame.tabId,documentIds:[binding.browser]},world:'MAIN',
       func:()=>{
@@ -120,10 +122,10 @@ export class GenericCallEvidenceProducer {
         !Array.isArray(results) || results.length !== 1 || results[0]?.documentId !== binding.browser || results[0]?.frameId !== 0) return null;
     const value=results[0].result;
     if (!value || value.version !== 1 || value.documentGeneration !== binding.hook || value.hookGeneration !== binding.generation ||
-        !Number.isSafeInteger(value.revision) || value.revision <= 0 || typeof value.ageMs !== 'number' || !Number.isFinite(value.ageMs) || value.ageMs < 0 || value.ageMs > 2500 ||
+        !Number.isSafeInteger(value.revision) || value.revision <= 0 || typeof value.ageMs !== 'number' || !Number.isFinite(value.ageMs) || value.ageMs < 0 || value.ageMs+Math.max(0,this.now()-started) > 2500 ||
         !['receivedPeers','capturedSendingPeers','samePeerCount','unboundReceiverCount'].every(key=>Number.isSafeInteger(value[key])&&value[key]>=0&&value[key]<=64) ||
         value.samePeerCount > Math.min(value.receivedPeers,value.capturedSendingPeers)) return null;
-    return value;
+    return {facts:value,validUntil:started+2500-value.ageMs};
   }
   async snapshot({verified=false}={}) {
     const browserInstance=this.identity();
@@ -147,7 +149,8 @@ export class GenericCallEvidenceProducer {
       } catch { return null; }
       bindings.set(frame,{browser:frame.browserDocumentId,hook:frame.documentGeneration,
         generation:frame.callGeneration,epoch:frame.obsoleteEpoch,call:this.callIdentity(frame)});
-      const observed=await this.observe(frame);
+      const observation=await this.observe(frame),observed=observation?.facts;
+      bindings.get(frame).validUntil=observation?.validUntil ?? 0;
       if (!currentBinding(frame)) return null;
       const generation=this.callIdentity(frame);
       const active=observed?.samePeerCount===1 && signalToken(generation);
@@ -160,6 +163,12 @@ export class GenericCallEvidenceProducer {
     }));
     // All reads/Chrome lookups have completed: fence documents retired while a
     // different tab was still pending, before any snapshot can leave the worker.
-    return {browserInstance,tabs:rows.filter((row,index)=>row&&currentBinding(frames[index]))};
+    return {browserInstance,tabs:rows.flatMap((row,index)=>{
+      const frame=frames[index];
+      if (!row || !currentBinding(frame)) return [];
+      if (row.callEvidence.state==='active' && this.now()>bindings.get(frame).validUntil)
+        row.callEvidence={...row.callEvidence,state:'unknown',reason:'unverified',callGeneration:null};
+      return [row];
+    })};
   }
 }
