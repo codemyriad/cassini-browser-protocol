@@ -29,7 +29,7 @@ Receipts: coordination `REPLIES-EXTENSION-meet-observations-2026-11-08.md` and `
 
 ## Proposed minimal semantic change
 
-Keep existing sourceCount/sourceCountKnown/heard truthful and preserve explicit manual Start/record-all semantics. Require fresh **independent verified call/session evidence** for every automatic Start, including a system fallback following browser rejection. Missing, unknown, ambiguous or stale evidence never implicitly qualifies. Do not derive it from hostname, energy, playback, graph presence or receiver count. A connected PC plus microphone is still a candidate requiring D80.1's negative cases and explicit review, not a detector implemented by this draft.
+Keep existing sourceCount/sourceCountKnown/heard truthful and preserve explicit manual Start/record-all semantics. Require fresh **independent verified call/session evidence** for every automatic Start, including a system fallback following browser rejection. Missing, unknown, ambiguous or stale evidence never implicitly qualifies. Do not derive it from hostname, energy, playback, graph presence or receiver count. D80.4 accepts R1 as an interactive captured-media session, not proven answered human intent: echo/microphone tests and early media with a sent captured mic are intentional positives. Passive/preview/synthetic/unrelated-PC and stale-evidence negatives remain strict. The contract does not itself implement the producer.
 
 Use the existing `callSignals` evidence vocabulary, identity/fencing and separate remoteAudio classification where possible, rather than duplicate the same facts in an automaticEligible boolean with a different lifetime. A generic detector may carry a stable algorithm identifier/version in the existing adapter descriptor; it must not be a hostname registry or a page assertion. Whether that descriptor can be reused verbatim must be checked by GNOME and Mac consumers before amendment.
 
@@ -39,24 +39,47 @@ Correlate browser/profile, tab, current browser document and call generation. Do
 
 **Producer refusal alone is insufficient.** GNOME0.4.2 may respond to a browser Start rejection by opening a native fallback. Suppressing an unsupported Start in the extension without fixing consumer admission can therefore still produce an unwanted recording. No production fallback test opens a device for this work; the regression's factory is forbidden.
 
-## Compatibility decision required before implementation
+## Compatibility policy — older withholding proposal superseded by D80.3
 
 Adding an optional admission field to a legacy meeting is insufficient: existing consumers ignore it and still start from heardtrue. Redefining heard to mean call-active silently corrupts the source observation contract. Existing behavior cannot be made safe for every old consumer merely by an unknown extra field.
 
 Proposed additive negotiation, **name provisional**: `verified-auto-admission-v1`, carried by the existing hello/configure/configured capability mechanism alongside `call-signals-v1`. No new message type or public automatic Start flag is needed merely to express the guard. Proposed canonical schema/vector additions are now included for review; their runtime adoption still requires consumer/coordinator review.
 
-| Pairing | Proposed safety behavior / migration cost |
+**D80.3 is controlling.** The older mandatory legacy-inventory withholding and
+pre-ACK first-publication suppression proposal is superseded, not an
+alternative requirement for implementation. Retain truthful legacy/manual
+inventory and the negotiated legacy shape; accepted old-consumer exposure remains
+until matched adoption. Any future withholding requires separate explicit review.
+
+| Pairing | Controlling D80.3 behavior |
 | --- | --- |
-| New consumer + new producer, guard negotiated | Consumer may list source observations, but auto-starts only from fresh correlated positive call evidence. Preserve manual source-based actions. |
+| New consumer + new producer, both capabilities acknowledged | Consumer may list source observations, but every separated/browser or mixed/system automatic Start needs fresh correlated active evidence and the current source alias. Preserve manual source-based actions. |
 | New consumer + old producer, or missing acknowledgement/evidence | Automatic Start/fallback fails closed as unverified; manual workflows remain explicit. UI must disclose that automatic call detection is not verified instead of silently promising it. This intentionally tightens old auto behavior. |
-| Old consumer + new producer | Producer must not place unverified/passive observations into legacy auto-driving `meetings`; retain raw source facts in its observation/diagnostic model. Verified calls/existing recording control must remain safe. This may reduce the old client's source-only/manual inventory and needs explicit consumer/UX review. Do not call this migration behavior free. |
+| Old consumer + new producer | Preserve truthful legacy inventory/manual workflows and legacy negotiated shape before/without the stricter ACK. The old consumer retains the explicitly accepted legacy exposure. No silent withholding or blanket guard is authorized. |
 | Old consumer + old producer | The released failure remains; document the need for the reviewed producer/consumer update, not a claim that this draft fixes deployed binaries. |
 
-If the coordinator rejects the old-consumer projection cost, the alternative is an explicit supported consumer minimum with an upgrade/auto-disabled state. Do not choose an unsafe silent fallback to the old predicate. Consumers must review which migration to ship; this document is not authorization to remove legacy manual rows or upgrade user installations.
+**Superseded first-publication requirement:** the earlier instruction to withhold
+unverified legacy rows starting with the first publication, before ACK, is NOT a
+D80.3 requirement. Before/without stricter ACK, keep the compatible legacy shape
+and truthful inventory. An adopting new consumer independently refuses all new
+automatic Starts until both capabilities are acknowledged and fresh correlated
+proof arrives; it preserves explicit manual/status/control workflows. Old consumers
+retain the accepted exposure. Do not confuse capability-gated new fields with
+blanket legacy-inventory suppression.
 
-Fail closed from the **first publication**, before capability acknowledgement: never send auto-driving unverified legacy rows and retract them only after discovering an old consumer. New consumers keep automatic dispatch disabled while the stricter negotiation is pending or absent. Preserve existing recording status/control even when observations are withheld from an old client's automatic inventory; suppression is not a fabricated call-ended event or permission to start another recording.
+The canonical [D80.3 section](SPEC-CONTROL.md#d803-verified-generic-automatic-admission-and-explicit-document-binding)
+sets the numeric bounds: active proof age at publication <=2500 ms, active refresh
+interval <=2000 ms while qualifying progress continues, producer unknown withdrawal
+within5000 ms of either direction losing progress, and consumer expiry at5000 ms
+since the last accepted media-backed active row. Heartbeat/pong/status/inventory
+cannot renew proof. Every adopting automatic Start, including mixed/system and
+native fallback, requires the acknowledged capability pair and current non-null
+source alias. See the canonical rule for full-snapshot renewals and existing-owner
+grace; this draft does not override it.
 
-D80.3 overrides an interim blanket consumer guard: fast-track the generic producer/SPEC first, then matched consumer adoption and boundary regressions. Legacy inventory withholding/manual-UI cost remains an explicit rollout decision, not shipped by these documents. Do not advertise the new capability until both halves are implemented and conformance-tested. No companion version reservation is taken by a docs-only proposal.
+D80.3 rejects an interim blanket consumer guard: fast-track the generic
+producer/SPEC, then matched consumer adoption and boundary regressions. No
+capability advertisement or runtime change is enabled by this contract PR.
 
 ## Required literal cases / actual boundary regressions
 
@@ -65,7 +88,7 @@ D80.3 overrides an interim blanket consumer guard: fast-track the generic produc
 | Passive real RTP viewer | One source, heardtrue, healthy transport | Unknown, no interactive call proof | No browser Start and no native fallback/input; raw source facts retained |
 | WebAudio/AudioWorklet or ordinary media-only | Graph/media activity may be real | Unknown/non-call | No automatic Start, no graph browser capture |
 | Reviewed generic interactive separated session | Actual independent sources and delivery evidence | Fresh active with matching identity | One eligible browser Start, subject to existing app guards |
-| Active mixed session | Honest mixed capability | Fresh active with matching identity | No browser Start; app-owned system route only under existing policy |
+| Active mixed session | Honest mixed capability; no legacy/RTP row required | Both capabilities acknowledged; fresh active with non-null source alias/current binding | No browser Start; app-owned system route only under these verified gates and existing policy |
 | Active queued, then unknown/end/navigation | Source may still play | Admission withdrawn before dispatch | Cancel queued auto Start and fallback reservation |
 | Browser refuses while evidence becomes unknown | Source possibly present | Admission no longer valid | No native fallback/input |
 | Old document/generation active or late end | Source facts belong elsewhere | Does not match current association | No Start or termination of a newer recording |

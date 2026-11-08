@@ -1149,7 +1149,7 @@ Routing and admission are separate from recording state:
 
 | Evidence/classification | App behavior |
 | --- | --- |
-| active + mixed | Signal-only candidate; app may automatically start system-audio Others ONLY under its existing auto-record opt-in, permission/readiness and duplicate/Stop suppression rules |
+| active + mixed, verified-auto-admission-v1 acknowledged | Signal-only candidate; app may automatically start system-audio Others ONLY with the acknowledged capability pair, fresh current source alias/background-call binding and the existing auto-record opt-in, permission/readiness and duplicate/Stop suppression rules. No RTP/legacy meeting row is required for this signal-only route; no browser Start |
 | inactive or unknown + mixed | No new automatic recording; positive callEnded ends that association and stops the shared automatic recording when its last association ends, even if media still plays |
 | active + separated, with verified-auto-admission-v1 acknowledged | Automatic browser Start needs the explicit Chrome/hook/background binding below, current RTP readiness and existing app guards; RTP or a signal alone is insufficient |
 | separated legacy/non-adopted path | Existing deployed behavior is unchanged by this proposal; D80.3 accepts the interim exposure until the producer and app adoption land |
@@ -1208,7 +1208,7 @@ takeover. Check the existing stable owner BEFORE either signal or RTP admission,
 so a newly visible RTP row cannot create a second recording of that same call.
 Fresh active same-call evidence can maintain/reconcile the running
 association independently of a changed classification; admission of a NEW call
-still needs active+mixed and the existing auto-record opt-in. Separate-stream RTP
+still needs acknowledged verified-auto-admission-v1 plus call-signals-v1, fresh correlated active+mixed evidence with its current non-null source alias, and the existing auto-record opt-in. Separate-stream RTP
 policy/recovery remains unchanged for RTP owners. The extension never implements
 a 120-second timer, decides microphone policy or commands a system capture here.
 
@@ -1272,8 +1272,16 @@ can supply the missing capture-sender proof. Observation must not open a microph
 A listen-only call without an outbound captured sender remains unknown for this
 initial rule, with explicit manual recording preserved. Same-PC proof is preferred;
 a split publisher/subscriber topology needs a reviewed generic session binding,
-not arbitrary page-wide co-occurrence. Ringing/early-media, unrelated-mic and echo
-negatives must be evaluated before advertising verified semantics.
+not arbitrary page-wide co-occurrence.
+
+**D80.4: active means an interactive captured-media session, not proven answered
+human intent.** Echo/microphone-test pages and unanswered early media qualify when
+they satisfy R1: live remote progress and an actually sent page-captured mic in
+the bound session. These are intentional positives, not detection failures to hide
+with labels or hostname exceptions. The app keeps recording visible, manual Stop
+available, and the existing end/evidence-loss/ownership rules. This accepted cost
+does not relax passive-media, preview, synthetic-sender, unrelated-PC or stale/
+forged-evidence negatives. An unanswered UI alone neither admits nor denies R1.
 
 A producer implementing this contract advertises `verified-auto-admission-v1`
 alongside `call-signals-v1`. It does not advertise the stricter feature merely
@@ -1288,13 +1296,73 @@ that control connection; before acknowledgement or after revocation, retain the
 legacy negotiated shape and make no verified-admission claim. No new
 automaticEligible boolean is added.
 
-Fresh correlated callEvidence active is REQUIRED for every adopting automatic
-Start, including a native/system fallback after browser rejection. It supplements,
+The acknowledged pair (`verified-auto-admission-v1` AND `call-signals-v1`) and
+fresh correlated callEvidence active are REQUIRED for **every** adopting automatic
+Start: the separated browser route, the D74 mixed/system route, and any automatic
+native/system fallback after browser rejection. Mixed routing has no D74-only
+acknowledgement exception. It supplements,
 not replaces, opt-in/application/permission/busy/manual-Stop/transport and route
 checks. Revalidate at scheduling, immediately before dispatch, and before any
 fallback/input reservation. Unknown, stale or mismatched evidence cannot authorize
 pending work. Existing recording ownership, fixed route and120s evidence-loss
 grace remain app-owned; unknown is not an affirmative end.
+
+### Numeric freshness and active-proof renewal
+
+These bounds apply identically to separated/browser and mixed/system automatic
+admission. Use monotonic elapsed time locally; the two endpoints do not need a
+shared clock. This amendment adds no wire timestamp/TTL field: the producer owns
+media-progress verification, and the consumer owns the receipt-time expiry below.
+
+| Bound | Required value |
+| --- | --- |
+| Maximum age of each direction's native qualifying progress when publishing active | 2500 ms, including asynchronous collection/read delay |
+| Maximum interval between media-backed active refresh snapshots while qualifying progress continues | 2000 ms |
+| Producer deadline to post unknown after either direction stops progressing | 5000 ms after the older of the last qualifying received-progress and captured-sender-progress times |
+| Consumer active-proof expiry | 5000 ms after receipt of the last accepted media-backed active row; expired at elapsed >=5000 ms |
+
+Each active refresh MUST earn fresh qualifying counter progress in BOTH directions
+since that row's preceding active publication, with current live tracks/session and
+identity rechecked. A newer collector poll/revision, unchanged counter, cached
+boolean, increased snapshot sequence, or healthy transport alone is insufficient.
+The 2500 ms age check also applies at actual publication after async reads/queues;
+those delays cannot reset the proof's age. Missing/hung samples, disabled/ended
+tracks or failed identity checks withdraw admission; never refresh from cache.
+
+Every active row included in a full replacement snapshot follows this rule,
+including unchanged rows copied alongside another tab's update. Coalesce updates
+within the bounds, or publish that row as unknown if it cannot earn a renewal;
+never let another tab's activity renew its cached proof. Send renewed active
+snapshots with strictly advancing control sequence even when their serialized
+admission fields are unchanged; ordinary snapshot deduplication must not suppress
+these media-backed renewals. Unknown withdrawal cannot be delayed beyond the
+5000 ms producer bound. If the worker/page/transport freezes and cannot withdraw,
+the consumer expiry remains authoritative.
+
+A consumer renews the 5000 ms receipt-time lease ONLY from an accepted,
+strictly-new-sequence callSignals snapshot carrying that bound active row under
+the acknowledged pair. By the producer rule above, such a row represents newly
+earned progress, not replayed state. Duplicate/older sequences never renew it.
+Heartbeat/ping/pong, hello, configured, status, meetings, sourceCount/heard updates,
+PCM traffic, another tab's proof or a timer tick MUST NOT renew active admission.
+Clear proof immediately on unknown/inactive, missing row/alias, identity conflict,
+supersession, reconnect, revocation or downgrade. Before the first accepted active
+row there is no lease, including after capability acknowledgement.
+
+Check this monotonic expiry at scheduling, final Start/write dispatch, and every
+native input/fallback reservation boundary. At the exact 5000 ms deadline a
+pending automatic Start is ineligible even if pong just arrived. The producer
+withdrawal bound and consumer receipt-time expiry are separate guarantees; do not
+mistake either for an end-to-end bound from an unshared media timestamp.
+
+Expiry/unknown is loss of new admission, not affirmative callEnded or an immediate
+Stop of an existing owner. The existing fixed route/ownership and 120000 ms
+recording-evidence-loss grace remain separate. Start that loss handling when proof
+is withdrawn/expires; heartbeat/audio cannot extend its existing loss deadline.
+Explicit manual recording remains subject to its existing controls, not this
+automatic-admission lease. Shared freshness vectors cover exact boundaries,
+healthy-heartbeat expiry, cached refresh refusal, media-backed renewal, revocation
+and unchanged owner/route behavior.
 
 ### Three namespaces and the wire mapping
 
@@ -1337,6 +1405,17 @@ For a separated source row, consumers require all of the following together:
 6. Evidence is fresh/active, capability and current RTP capture readiness permit
    the browser route, and all existing app guards still pass.
 
+For the mixed/system signal-only route, the acknowledged capability pair and
+freshness bounds are equally mandatory. Require current profile/connection, tab,
+Chrome documentGeneration, non-null sourceDocumentGeneration and the
+background-owned evidence.callGeneration from the producer's same ledger. Recheck
+that complete binding against the candidate captured for pending dispatch/input
+reservation; any changed component invalidates that pending action. A mixed row
+may legitimately have no recordable legacy meetings row or RTP readiness. Do not
+invent one, require heard/sourceCount for the system route, or bypass the source
+alias/strict acknowledgement because the chosen input is native. If legacy
+metadata exists for correlation, compare only corresponding namespaces as above.
+
 Never compare legacy documentGeneration directly to D74 documentGeneration.
 Neither equality of two raw strings nor a hook epoch matching a background token
 establishes a binding. Equal strings without the ledger/current aliases are
@@ -1365,7 +1444,8 @@ passive RTP. Do not zero heard, suppress the raw source observation or filter a
 magic hook generation to make the negative pass. For adopted separated automatic
 routing, the old RTP-only policy is superseded by active+explicit binding+RTP
 readiness. An active signal without RTP capture readiness is still insufficient.
-Mixed active evidence retains D74's app-owned system route; it does not permit
+Mixed active evidence retains D74's app-owned system route ONLY after the same
+strict acknowledgement, fresh proof and current binding checks; it does not permit
 browser graph/mixed capture. Unknown classification does not authorize a route.
 
 The shared `separated-existing-rtp-ready` vector now carries a generic active
