@@ -149,16 +149,28 @@ try{
           isolated:(await chrome.scripting.executeScript({target:{tabId,frameIds:[0]},world:'ISOLATED',func:()=>({repair:globalThis.__cassiniRepairInjection,valid:globalThis.__cassiniRelay?.valid(),trusted:globalThis.__cassiniRelay?.observerDocumentStart})}))[0]?.result
         }),tabId);throw error;
       });
-      assert.equal(published.row.sourceDocumentGeneration,await caller.evaluate(()=>__cassiniCallEvidenceV1.read().documentGeneration));
+      const trusted=fixture!=='repaired-frame-positive-media';
+      const hookDocument=await caller.evaluate(()=>__cassiniCallEvidenceV1.read().documentGeneration);
+      assert.equal(published.row.sourceDocumentGeneration,trusted?hookDocument:null);
       assert.notEqual(published.row.documentGeneration,published.row.sourceDocumentGeneration);
-      const inventory=await packet(worker,{type:'meetings',tabId,after});
-      assert.equal(inventory.row.browserDocumentId,published.row.documentGeneration);
-      assert.equal(inventory.row.documentGeneration,published.row.sourceDocumentGeneration);
+      let inventory;
+      if(trusted){
+        inventory=await packet(worker,{type:'meetings',tabId,after});
+        assert.equal(inventory.row.browserDocumentId,published.row.documentGeneration);
+        assert.equal(inventory.row.documentGeneration,published.row.sourceDocumentGeneration);
+      }else{
+        const verified=(await packet(worker,{type:'meetings',after})).packet;
+        assert.equal(verified.meetings.some(row=>row.tabId===tabId),false,'unattested sources cannot inflate verified inventory');
+        const legacy=await worker.evaluate(()=>{const index=fixturePackets.length;fixtureControlPort.onMessage.emit({type:'configure',capabilities:['call-signals-v1']});return index});
+        inventory=await packet(worker,{type:'meetings',tabId,sourceCount:1,after:legacy});
+        assert.equal(inventory.row.documentGeneration,hookDocument,'legacy RTP facts remain truthful without claiming verified binding');
+        await packet(worker,{tabId,state:'unknown',after:await barrier(worker)});
+      }
       assert.equal(inventory.row.sourceCount,1);assert.equal(inventory.row.heard,true);
       if(expected==='active')assert.equal(inventory.row.callGeneration,published.row.callEvidence.callGeneration);
       else assert.equal(published.row.callEvidence.callGeneration,null);
       assert.notEqual(inventory.row.callGeneration,'0');
-      observation.worker={acknowledged:true,state:published.row.callEvidence.state,namespaceBinding:true,legacySourceCount:inventory.row.sourceCount,legacyHeard:inventory.row.heard};
+      observation.worker={acknowledged:true,state:published.row.callEvidence.state,namespaceBinding:trusted,legacySourceCount:inventory.row.sourceCount,legacyHeard:inventory.row.heard};
       if(fixture==='primordial-poison-positive'){
         await worker.evaluate(async tabId=>chrome.scripting.executeScript({target:{tabId,frameIds:[0]},world:'MAIN',func:()=>{
         Object.getOwnPropertyDescriptor=()=>({value:{read:()=>({samePeerCount:99})}});
