@@ -89,7 +89,9 @@ try {
   await page.locator('#copy').click();
   await page.getByText('Diagnostics copied.',{exact:true}).waitFor();
   const report=JSON.parse(await page.evaluate(()=>navigator.clipboard.readText()));
-  assert.equal(report.currentTabId,7);
+  assert.equal(report.schemaVersion,1);
+  assert.equal(report.callEvidence.state,'unknown');
+  assert.equal('currentTabId' in report,false,'copied diagnostics exclude tab and document identities');
   assert.doesNotMatch(JSON.stringify(report),/private|Generated meeting/);
   await mkdir(path.join(root,'artifacts'),{recursive:true});
   await page.screenshot({path:path.join(root,'artifacts/popup-idle.png'),fullPage:true});
