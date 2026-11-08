@@ -1279,7 +1279,11 @@ only when hello advertises them; configured acknowledges the accepted pair.
 Requesting/acknowledging the stricter feature alone is invalid. Empty configure
 revokes both; reconnect starts unconfigured and requires fresh acknowledged proof.
 The schemas bound configure/configured to these two unique capabilities. Existing
-single-feature consumers remain valid. No new automaticEligible boolean is added.
+single-feature consumers remain valid. Publish the new binding aliases and the
+generic verified signal shape only after the stricter feature is acknowledged on
+that control connection; before acknowledgement or after revocation, retain the
+legacy negotiated shape and make no verified-admission claim. No new
+automaticEligible boolean is added.
 
 Fresh correlated callEvidence active is REQUIRED for every adopting automatic
 Start, including a native/system fallback after browser rejection. It supplements,
