@@ -183,37 +183,45 @@
   }
   function read(){
     refresh();const instant=now();let sourceCount=0,receivedPeers=0,capturedSendingPeers=0,samePeerCount=0,
-      unboundReceiverCount=0,received=0,sent=0,oldest=Infinity,heardNow=false;
+      received=0,sent=0,receiveAt=0,sendAt=0,heardNow=false;
+    const members=list();
     for(let i=0;i<peers.length;i++){
       const entry=peers[i];if(entry.generation!==generation||!connected(entry.pc))continue;
-      let receiving=false,sendingNow=false,receiveAt=0,sendAt=0,receiveRevision=0,sendRevision=0;
+      let receiving=false,sendingNow=false;
       const slots=nativeSlots(entry.pc),captured=list();
       for(let j=0;j<slots.length;j++){
         const slot=slots[j],receiver=get(transceiverReceiver,slot),track=get(receiverTrack,receiver),sender=get(transceiverSender,slot),out=get(senderTrack,sender);
         if(receive(entry.pc,receiver,track,slot)){
           sourceCount++;const proof=find(entry.receivers,receiver);
           if(proof?.track===track&&proof.votes>=2)entry.heard=true;
-          if(proof?.track===track&&instant-proof.at<=2500){receiving=true;if(proof.at>receiveAt)receiveAt=proof.at;if(proof.progress>receiveRevision)receiveRevision=proof.progress}
+          if(proof?.track===track&&instant-proof.at<=2500){receiving=true;if(proof.progress>received){received=proof.progress;receiveAt=proof.at}}
         }
         if(sending(entry.pc,sender,out,slot)){
           const proof=find(entry.senders,sender);
-          if(proof?.track===out&&instant-proof.at<=2500){sendingNow=true;if(proof.at>sendAt)sendAt=proof.at;if(proof.progress>sendRevision)sendRevision=proof.progress;add(captured,out)}
+          if(proof?.track===out&&instant-proof.at<=2500){sendingNow=true;if(proof.progress>sent){sent=proof.progress;sendAt=proof.at}add(captured,out)}
         }
       }
       if(entry.heard)heardNow=true;
       if(receiving)receivedPeers++;if(sendingNow)capturedSendingPeers++;
-      if(receiving&&sendingNow){
-        samePeerCount++;if(receiveRevision>received)received=receiveRevision;if(sendRevision>sent)sent=sendRevision;
-        const older=receiveAt<sendAt?receiveAt:sendAt;if(older<oldest)oldest=older;
-        let endpoint=null;for(let j=0;j<qualified.length;j++)if(qualified[j].pc===entry.pc)endpoint=qualified[j];
-        if(endpoint)endpoint.tracks=captured;else if(qualified.length<64)add(qualified,{pc:entry.pc,tracks:captured});
-      }else if(receiving)unboundReceiverCount++;
+      if(receiving&&sendingNow)samePeerCount++;
+      if(receiving||sendingNow)add(members,{pc:entry.pc,tracks:captured});
     }
-    const age=samePeerCount?instant-oldest:0;
-    return assign(create(null),{version:1,documentGeneration,hookGeneration:''+generation,revision,ageMs:age,
+    // D80.5: all these native peers belong to this one document/frame collector.
+    // Never combine observations from another collector, document or relay port.
+    const cohortQualified=!overflow&&receivedPeers>0&&capturedSendingPeers>0;
+    if(cohortQualified)for(let i=0;i<members.length;i++){
+      const member=members[i];let endpoint=null;
+      for(let j=0;j<qualified.length;j++)if(qualified[j].pc===member.pc)endpoint=qualified[j];
+      // Retain previously observed capture endpoints through mute/replacement
+      // until a native terminal/new-session boundary, as in the same-PC path.
+      if(endpoint){if(member.tracks.length)endpoint.tracks=member.tracks}
+      else if(qualified.length<64)add(qualified,member);
+    }
+    const older=receiveAt<sendAt?receiveAt:sendAt,age=cohortQualified?instant-older:0;
+    return assign(create(null),{version:2,documentGeneration,hookGeneration:''+generation,revision,ageMs:age,cohortQualified,
       sourceCount:sourceCount>64?64:sourceCount,heard:sourceCount>0&&heardNow,
       receivedPeers,capturedSendingPeers,samePeerCount:overflow?0:samePeerCount,
-      receivedVersion:received,sentVersion:sent,unboundReceiverCount,ended:terminal()});
+      receivedVersion:received,sentVersion:sent,ended:terminal()});
   }
   call(nativeInterval,timerTarget,[sample,1000]);
   collector=read;

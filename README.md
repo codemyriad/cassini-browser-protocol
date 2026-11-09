@@ -183,9 +183,13 @@ microphone actually sent on the same peer connection, with current document/call
 binding. This describes interactive media, not proven answered human intent: echo,
 microphone tests and early media can qualify. Passive viewing, media playback,
 preview-only capture, synthetic senders and unrelated/cross-frame peers do not.
-Listen-only and unverified split-PC sessions stay unknown; manual recording remains.
-Talk's measured split-PC topology needs a separately reviewed generic cohort before
-it qualifies; existing Talk source capture remains covered by CI.
+Listen-only, stale or unbound observations stay unknown; manual recording remains.
+D80.5 binds the cohort to one current browser document/frame and relay port:
+fresh page-captured sending and remote received progress may be on different PCs.
+The real split-PC Talk flow must publish acknowledged active evidence in CI.
+A microphone preview, synthetic sender, passive viewer, or combination across
+documents/frames cannot qualify; unrelated split PCs within one document/frame
+are intentional interactive-media positives, like echo.
 
 Apps must acknowledge both call-signals-v1 and verified-auto-admission-v1 and adopt
 SPEC-CONTROL.md's freshness/identity rules. Heartbeat is transport health, not media

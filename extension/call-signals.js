@@ -138,7 +138,7 @@ export class GenericCallEvidenceProducer {
     const value=results[0].result;
     frame.nativeCollectorUnavailable=value===null;
     if(value===null)frame.nativeSourceVerified=false;
-    if (!value || value.version!==1 || !signalToken(value.documentGeneration) || !signalToken(value.hookGeneration) ||
+    if (!value || value.version!==2 || !signalToken(value.documentGeneration) || !signalToken(value.hookGeneration) ||
         !Number.isInteger(value.sourceCount) || value.sourceCount<0 || value.sourceCount>64 || typeof value.heard!=='boolean') return null;
     this.onNativeRead(frame,value);
     if (frame.observerDocumentStart!==true || !this.currentSource(frame) || frame.browserDocumentId!==browser || frame.obsoleteEpoch!==epoch || frame.frameId!==frameId) return null;
@@ -146,11 +146,12 @@ export class GenericCallEvidenceProducer {
   }
   async observe(frame) {
     const started=this.now(),value=await this.read(frame);
-    if (!value || value.version !== 1 || value.documentGeneration !== frame.documentGeneration || value.hookGeneration !== frame.callGeneration ||
-        typeof value.ended!=='boolean' ||
+    if (!value || value.version !== 2 || value.documentGeneration !== frame.documentGeneration || value.hookGeneration !== frame.callGeneration ||
+        typeof value.ended!=='boolean' || typeof value.cohortQualified!=='boolean' ||
+        (value.cohortQualified&&(value.receivedPeers===0||value.capturedSendingPeers===0)) ||
         !['receivedVersion','sentVersion'].every(key=>Number.isSafeInteger(value[key])&&value[key]>=0) ||
         (!value.ended && (!Number.isSafeInteger(value.revision) || value.revision <= 0 || typeof value.ageMs !== 'number' || !Number.isFinite(value.ageMs) || value.ageMs < 0 || value.ageMs+Math.max(0,this.now()-started) > 2500)) ||
-        !['receivedPeers','capturedSendingPeers','samePeerCount','unboundReceiverCount'].every(key=>Number.isSafeInteger(value[key])&&value[key]>=0&&value[key]<=64) ||
+        !['receivedPeers','capturedSendingPeers','samePeerCount'].every(key=>Number.isSafeInteger(value[key])&&value[key]>=0&&value[key]<=64) ||
         value.samePeerCount > Math.min(value.receivedPeers,value.capturedSendingPeers)) return null;
     return {facts:value,validUntil:value.ended?Infinity:started+2500-value.ageMs};
   }
@@ -185,18 +186,20 @@ export class GenericCallEvidenceProducer {
       if (!currentPublication() || !currentBinding(frame)) return null;
       bindings.get(frame).call=this.callIdentity(frame);
       const generation=this.callIdentity(frame);
-      const active=observed?.samePeerCount===1 && observed.receivedVersion>0 && observed.sentVersion>0 && signalToken(generation);
+      const active=observed?.cohortQualified===true && observed.receivedVersion>0 && observed.sentVersion>0 && signalToken(generation);
       bindings.get(frame).proof=observed;
       bindings.get(frame).active=active;
       const previous=this.publications.get(frame);
       bindings.get(frame).renewed=active&&(!previous||generation!==previous.call||observed.receivedVersion>previous.received&&observed.sentVersion>previous.sent);
-      const captureReady=observed?.sourceCount>0 && (!active || observed.unboundReceiverCount===0);
+      const foreignSources=[...this.frames()].some(other=>other!==frame&&other.tabId===frame.tabId&&
+        other.nativeSourceVerified===true&&other.sourceCount>0&&this.currentSource(other));
+      const captureReady=observed?.sourceCount>0 && (!active || !foreignSources);
       return {tabId:frame.tabId,url:tab.url,documentGeneration:frame.browserDocumentId,
         sourceDocumentGeneration:observed?.documentGeneration ||
           (frame.observerDocumentStart===true&&frame.nativeSourceVerified===true&&signalToken(frame.documentGeneration)?frame.documentGeneration:null),
         remoteAudio:captureReady?'separated':'unknown',
         callEvidence:{state:active?'active':observed?.ended?'inactive':'unknown',reason:active?'activeCall':observed?.ended?'callEnded':'unverified',
-          adapter:{name:'webrtc-interactive',version:'1'},callGeneration:active||observed?.ended?generation:null}};
+          adapter:{name:'webrtc-interactive',version:'2'},callGeneration:active||observed?.ended?generation:null}};
     }));
     // All reads/Chrome lookups have completed: fence documents retired while a
     // different tab was still pending, before any snapshot can leave the worker.

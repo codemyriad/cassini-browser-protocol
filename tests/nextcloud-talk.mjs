@@ -29,8 +29,8 @@ const {publicKey}=generateKeyPairSync('rsa',{modulusLength:2048});const key=publ
 manifest.key=key.toString('base64');await writeFile(manifestPath,JSON.stringify(manifest));
 const id=[...createHash('sha256').update(key).digest('hex').slice(0,32)].map(c=>String.fromCharCode(97+parseInt(c,16))).join('');
 assert.notEqual(id,'pcafdaahfhjiolfpfnlhmljfgoabbaij');
-const socket=path.join(temporary,'control.sock');let control;const events=[],pageErrors=[];
-const server=createServer(peer=>{control=peer;let pending='';peer.setEncoding('utf8');peer.on('data',data=>{pending+=data;for(let end;(end=pending.indexOf('\n'))>=0;){events.push(JSON.parse(pending.slice(0,end)));pending=pending.slice(end+1);}})});
+const socket=path.join(temporary,'control.sock');let control;const events=[],pageErrors=[],controlListeners=new Set();
+const server=createServer(peer=>{control=peer;let pending='';peer.setEncoding('utf8');peer.on('data',data=>{pending+=data;for(let end;(end=pending.indexOf('\n'))>=0;){events.push(JSON.parse(pending.slice(0,end)));pending=pending.slice(end+1);for(const notify of [...controlListeners])notify();}})});
 await new Promise(resolve=>server.listen(socket,resolve));
 for(const [name,fixture]of [['io.codemyriad.cassini','browser_host_fixture.py'],['io.codemyriad.cassini.control','control_host_fixture.py']]){
   const host=path.join(temporary,name+'.py');
@@ -43,6 +43,13 @@ async function wave(frequency){
  const file=path.join(temporary,'input-'+frequency+'.wav');await writeFile(file,data);return file;
 }
 async function until(check,label,timeout=30000){const deadline=Date.now()+timeout;while(Date.now()<deadline){const value=await check();if(value)return value;await new Promise(resolve=>setTimeout(resolve,50));}throw Error('Timed out: '+label);}
+// Native-control receipt waits are driven by socket messages, never a delay.
+function controlEvent(check,label,timeout=30000){return new Promise((resolve,reject)=>{
+ const finish=(value,error)=>{clearTimeout(timer);controlListeners.delete(changed);error?reject(error):resolve(value)};
+ const changed=()=>{try{const value=check();if(value)finish(value)}catch(error){finish(null,error)}};
+ const timer=setTimeout(()=>finish(null,Error('Timed out: '+label)),timeout);
+ controlListeners.add(changed);changed();
+});}
 const inventory=()=>events.filter(e=>e.type==='meetings').at(-1)?.meetings||[];
 const sharedArgs=['--autoplay-policy=no-user-gesture-required','--disable-audio-output','--use-fake-device-for-media-stream','--use-fake-ui-for-media-stream'];
 const userAgent='Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Safari/537.36';
@@ -135,7 +142,25 @@ try{
  report.rtcTopology=summarizeRtcTopology(topologyBefore,await waitRtcTopology(meeting,{previous:topologyBefore,sending:'captured'}));
  assert.ok(report.rtcTopology.sendingPeers>0&&report.rtcTopology.receivingPeers>0,'Talk measurement requires real bidirectional packet progress');
  report.rtcCohortCandidates=await meeting.evaluate(()=>cassiniRtcCohortFacts());
- report.cases.push('D80.3 actual captured sender and remote receiver topology measured; no inferred split-PC binding');
+ assert.equal(report.rtcTopology.samePeerConnection,false,'real Talk must exercise split publisher/subscriber PCs');
+ // D80.5 product gate: the SHIPPED native collector and worker must publish
+ // fresh active evidence for this same-document/frame cohort, not only a probe.
+ const proofStart=events.length;
+ control.write(JSON.stringify({type:'configure',capabilities:['call-signals-v1','verified-auto-admission-v1']})+'\n');
+ const ack=await controlEvent(()=>events.slice(proofStart).find(event=>event.type==='configured'),'verified capability acknowledgement');
+ assert.deepEqual([...ack.capabilities].sort(),['call-signals-v1','verified-auto-admission-v1'].sort());
+ const qualified=await controlEvent(()=>events.slice(proofStart).filter(event=>event.type==='callSignals').flatMap(event=>event.tabs).find(tab=>tab.tabId===row.tabId&&tab.callEvidence.state==='active'),'real Talk verified active publication');
+ assert.equal(qualified.remoteAudio,'separated');assert.equal(qualified.callEvidence.adapter.version,'2');
+ const verified=await controlEvent(()=>inventory().find(item=>item.tabId===row.tabId&&item.browserDocumentId===qualified.documentGeneration),'correlated verified RTP inventory');
+ assert.equal(verified.documentGeneration,qualified.sourceDocumentGeneration);assert.equal(verified.callGeneration,qualified.callEvidence.callGeneration);
+ assert.notEqual(qualified.documentGeneration,qualified.sourceDocumentGeneration);
+ await popup.getByRole('heading',{name:'Interactive media session detected',exact:true}).waitFor();
+ report.d805Admission={state:qualified.callEvidence.state,remoteAudio:qualified.remoteAudio,acknowledged:true,namespaceBinding:true,
+   adapterVersion:qualified.callEvidence.adapter.version,splitPeerConnection:true,
+   collector:await meeting.evaluate(()=>{const value=__cassiniCallEvidenceV1.read();return {version:value.version,
+     cohortQualified:value.cohortQualified,samePeerCount:value.samePeerCount,receivedPeers:value.receivedPeers,capturedSendingPeers:value.capturedSendingPeers}})};
+ assert.equal(report.d805Admission.collector.cohortQualified,true);assert.equal(report.d805Admission.collector.samePeerCount,0);
+ report.cases.push('D80.5 real split-PC Talk qualifies through native collector and worker as one fresh document/frame cohort');
  // Compare actual native fields against another room on the SAME backend.
  // A common SFU certificate/CNAME/stream placeholder is not room identity.
  // Retain only numeric facts plus a private in-browser reference table, then

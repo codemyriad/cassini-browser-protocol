@@ -1260,7 +1260,7 @@ then matched GNOME/Mac adoption, with legitimate Talk positives and passive-medi
 negatives. Deployed legacy exposure remains explicitly accepted until adoption;
 this amendment does not claim to fix old binaries through an ignored new field.
 
-The extension 0.2.26 implements the same-PC R1 producer, advertises the verified
+The extension 0.2.26 implements the D80.5 document/frame cohort producer, advertises the verified
 capability pair after persistent profile identity is available, and adds the
 content-free popup/Copy diagnostics model. The worker reads the private MAIN
 collector only through browser-owned script results bound to a current relay
@@ -1269,10 +1269,12 @@ fresh document loads; manual source capture remains available. Publication uses
 new bidirectional progress, bounded reads and per-configuration fencing, with
 periodic media-backed refresh/withdrawal under the numeric rules below.
 
-Split-PC sessions remain unknown until a generic cohort binding is reviewed.
-The measured Talk topology has one sending and two receiving PCs; its existing
-source/capture CI stays supported, but this is not a generic-admission positive.
-No hostname/label registry supplies evidence or routing in the 0.2.26 producer.
+D80.5 supersedes the earlier same-PC-only qualification gate. The measured Talk
+publisher/subscriber topology qualifies when its captured sending and received
+progress belong to the same current browser document and frame. The producer's
+`webrtc-interactive` adapter version `2` denotes this revised rule; the private
+native snapshot is version 2 and older snapshot versions cannot grant admission.
+No hostname/label registry or SDP/server-identity join supplies evidence or routing.
 
 ### Qualification and negotiation
 
@@ -1286,9 +1288,32 @@ proven clone, not a permission grant, preview, allocated sendonly slot or synthe
 MediaStreamDestination. No hostname, label, graph, energy, playback or RTP count
 can supply the missing capture-sender proof. Observation must not open a microphone.
 A listen-only call without an outbound captured sender remains unknown for this
-initial rule, with explicit manual recording preserved. Same-PC proof is preferred;
-a split publisher/subscriber topology needs a reviewed generic session binding,
-not arbitrary page-wide co-occurrence.
+rule, with explicit manual recording preserved.
+
+**D80.5 cohort identity is one browser document and frame, on the current relay
+port incarnation.** At least one connected PC in that collector must actually
+send a live page-captured microphone/root-or-clone with native send progress;
+at least one connected PC there must have live received-media progress in the
+same fresh observation window. These may be the same PC or separate PCs. The
+window is the existing 2500 ms maximum for BOTH directional progress proofs;
+expiry uses the older of the two selected proofs, including browser read latency.
+A newly progressing receiver cannot renew an old sender, or vice versa.
+
+The worker binds each protected read to Chrome's exact `documentId` and `frameId`,
+the current frame/port object and its epoch, and the existing hook/background
+identity ledger below. It never pools facts from separate reads/collectors to
+construct a cohort. Cross-document, cross-frame and retired-port combinations
+never qualify, even for same-origin frames, a common backend/certificate, or
+matching page-chosen labels/SDP/stats identifiers. Current signal publication
+remains top-frame-only; authenticated child source facts alone do not admit the
+tab. A captured track obtained only in a different frame does not supply this
+collector's capture-root provenance.
+
+All observed qualifying peers and captured endpoints in the cohort participate
+in the existing native terminal/new-session fence. Losing one direction withdraws
+active proof; it is not an affirmative call end. Complete native terminal end
+retains the generation for `callEnded`, and the next native episode rotates it.
+This rule observes native media without opening a microphone.
 
 **D80.4: active means an interactive captured-media session, not proven answered
 human intent.** Echo/microphone-test pages and unanswered early media qualify when
@@ -1296,8 +1321,13 @@ they satisfy R1: live remote progress and an actually sent page-captured mic in
 the bound session. These are intentional positives, not detection failures to hide
 with labels or hostname exceptions. The app keeps recording visible, manual Stop
 available, and the existing end/evidence-loss/ownership rules. This accepted cost
-does not relax passive-media, preview, synthetic-sender, unrelated-PC or stale/
-forged-evidence negatives. An unanswered UI alone neither admits nor denies R1.
+preserves passive-media, preview, synthetic-sender and stale/forged-evidence
+negatives. D80.5 intentionally accepts a document that sends a captured mic on
+one PC while receiving media on another, even when they are not the same human
+call. The formerly negative unrelated-mic/same-backend case is a documented
+positive, like echo; a shared backend is neither required nor evidence. Cross-
+document and cross-frame combinations remain negative. An unanswered UI alone
+neither admits nor denies the rule.
 
 A producer implementing this contract advertises `verified-auto-admission-v1`
 alongside `call-signals-v1`. It does not advertise the stricter feature merely
@@ -1373,7 +1403,10 @@ cached discovery message.
 Verified meetings inventory includes only native-verified source facts from
 current frames, bound by both Chrome documentId and frameId. Native subframe
 facts may contribute real sources but never call admission: signal snapshots
-remain top-frame-only. Page-chosen subframe counts/heard cannot inflate either
+remain top-frame-only. If another current frame contributes source facts outside
+the qualifying cohort, the producer keeps those facts truthful but reports the
+separated capture route unknown rather than widening automatic capture to them.
+Page-chosen subframe counts/heard cannot inflate either
 inventory shape for a trusted document-start frame. The legacy, unacknowledged
 inventory retains its older unverified subframe facts for compatibility. An
 unavailable native collector can likewise retain legacy/manual source facts;
@@ -1382,7 +1415,7 @@ alias. A page
 can fabricate those legacy facts, and a legacy consumer using them alone can
 still misclassify a page before adoption. They are not admission proof. Consumers
 must adopt the acknowledged verified contract before using automatic Start; the
-separate Talk-positive product gate still applies before that adoption.
+real split-PC Talk-positive CI gate still applies before that adoption.
 
 ### Native Start request binding
 

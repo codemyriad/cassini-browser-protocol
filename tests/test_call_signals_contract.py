@@ -177,17 +177,30 @@ class CallSignalContractTests(unittest.TestCase):
                         self.assertEqual(fresh, step['expect']['newAdmissionEligible'])
                         self.assertEqual(must_withdraw, step['expect']['producerMustWithdraw'])
 
-    def test_d804_active_means_interactive_media_including_echo_and_early_media(self):
+    def test_d805_document_frame_port_cohort_accepts_split_media_but_never_crosses_identity(self):
         meaning = VECTORS['qualificationMeaning']
-        self.assertEqual(meaning['decision'], 'D80.4')
+        self.assertEqual(meaning['decision'], 'D80.5')
         cases = {case['name']: case for case in meaning['cases']}
         for case in cases.values():
-            active = all(case[field] for field in ['connectedSession', 'liveReceivedProgress',
-                         'pageCapturedRootOrClone', 'capturedTrackActuallySent', 'sameSessionBound'])
+            bound = all(case['receiverBinding'][field] == case['senderBinding'][field]
+                        for field in ['browserDocumentId', 'frameId', 'portIncarnation'])
+            fresh = all(0 <= case[field] <= VECTORS['freshness']['nativeProgressMaxAgeMs']
+                        for field in ['receivedProgressAgeMs', 'sentProgressAgeMs'])
+            active = bound and fresh and all(case[field] for field in ['connectedSession', 'liveReceivedProgress',
+                         'pageCapturedRootOrClone', 'capturedTrackActuallySent'])
             self.assertEqual('active' if active else 'unknown', case['expectState'])
-        for name in ['echo-or-microphone-test', 'unanswered-early-media']:
+        for name in ['echo-or-microphone-test', 'unanswered-early-media', 'unrelated-sending-pc',
+                     'split-publisher-subscriber', 'unrelated-mic-same-backend']:
             self.assertEqual(cases[name]['expectState'], 'active')
         self.assertEqual(cases['passive-webrtc-viewer']['expectState'], 'unknown')
+        for name in ['cross-document-split', 'cross-frame-split', 'retired-port-split',
+                     'stale-received-half', 'stale-sent-half', 'mic-preview', 'synthetic-sender']:
+            self.assertEqual(cases[name]['expectState'], 'unknown')
+        for route in VECTORS['routing']:
+            if 'qualificationCase' in route:
+                state = cases[route['qualificationCase']]['expectState']
+                self.assertEqual(route['signal']['tabs'][0]['callEvidence']['state'], state)
+                self.assertEqual(route['expect']['browserStart'], state == 'active')
 
     @staticmethod
     def binding_matches(case):

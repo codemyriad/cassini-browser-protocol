@@ -94,9 +94,9 @@ export function summarizeRtcTopology(before, after) {
 // getStats is asynchronous. Await each sample before testing it, and return
 // that exact sample. An async waitForFunction predicate can resolve its first
 // Promise to false instead of polling the eventual state.
-export async function waitRtcTopology(page,{previous=null,sending='none'}={}) {
-  await page.bringToFront(); // Only a disposable headless fixture page.
-  return page.evaluate(async({previous,sending})=>{
+export async function waitRtcTopology(page,{previous=null,sending='none',receiving=true}={}) {
+  await (page.bringToFront ? page : page.page()).bringToFront(); // Disposable fixture only.
+  return page.evaluate(async({previous,sending,receiving})=>{
     const deadline=performance.now()+30000;
     let latest=[];
     while(performance.now()<deadline){
@@ -106,11 +106,11 @@ export async function waitRtcTopology(page,{previous=null,sending='none'}={}) {
       const received=rows.some(row=>row.connected&&grows(row,'inboundPackets'));
       const sent=sending==='none'||rows.some(row=>row.connected&&grows(row,'outboundPackets')&&
         (sending!=='captured'||row.liveCapturedSenders>0));
-      if(received&&sent)return rows;
+      if((!receiving||received)&&sent)return rows;
       await new Promise(resolve=>requestAnimationFrame(resolve));
     }
     throw Error('Timed out waiting for real RTC packet progress: '+JSON.stringify(latest));
-  },{previous,sending});
+  },{previous,sending,receiving});
 }
 
 // Compare only opaque integer groups produced with one private in-browser table.

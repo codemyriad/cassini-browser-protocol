@@ -8,8 +8,8 @@ const Generic=context.Generic;
 function fixture(){
   const frame={tabId:2,frameId:0,browserUrl:'https://neutral.invalid/call',browserDocumentId:'chrome-A',
     documentGeneration:'hook-A',callGeneration:'hook-session-A',obsoleteEpoch:0,observerDocumentStart:true,sourceCount:1,heard:true};
-  const sample={version:1,documentGeneration:'hook-A',hookGeneration:'hook-session-A',revision:2,ageMs:10,
-    receivedPeers:1,capturedSendingPeers:1,samePeerCount:1,unboundReceiverCount:0,receivedVersion:1,sentVersion:1,ended:false,sourceCount:1,heard:true};
+  const sample={version:2,cohortQualified:true,documentGeneration:'hook-A',hookGeneration:'hook-session-A',revision:2,ageMs:10,
+    receivedPeers:1,capturedSendingPeers:1,samePeerCount:1,receivedVersion:1,sentVersion:1,ended:false,sourceCount:1,heard:true};
   let live=true,identity='background-A',reads=0;
   const producer=new Generic({identity:()=> 'profile-A',tabs:{async query(){return [{id:2,url:frame.browserUrl}]}},
     frames:()=>[frame],current:value=>value===frame&&live,callIdentity:()=>identity,
@@ -24,11 +24,11 @@ test('only acknowledged generic snapshots expose unequal mapped IDs and the back
   assert.equal(row.callEvidence.callGeneration,'background-A');assert.equal(row.callEvidence.state,'active');
   assert.equal(row.remoteAudio,'separated');assert.notEqual(row.documentGeneration,row.sourceDocumentGeneration);
 });
-test('passive, split-PC, stale and malformed observations remain unknown while real source facts are untouched',async()=>{
-  for(const [index,mutation] of [s=>{s.samePeerCount=0;s.capturedSendingPeers=0;s.unboundReceiverCount=1},
-    s=>{s.samePeerCount=0;s.receivedPeers=2;s.unboundReceiverCount=2},s=>{s.ageMs=2501},
+test('passive, sender-only, stale and malformed observations remain unknown while real source facts are untouched',async()=>{
+  for(const [index,mutation] of [s=>{s.cohortQualified=false;s.samePeerCount=0;s.capturedSendingPeers=0},
+    s=>{s.cohortQualified=false;s.samePeerCount=0;s.receivedPeers=0},s=>{s.ageMs=2501},
     s=>{s.documentGeneration='chrome-A'},s=>{s.hookGeneration='retired-hook-session'},
-    s=>{s.samePeerCount=2},s=>{s.revision=0},s=>{s.ageMs=NaN}].entries()){
+    s=>{s.samePeerCount=2},s=>{s.revision=0},s=>{s.ageMs=NaN},s=>{s.version=1},s=>{s.cohortQualified='true'},s=>{s.capturedSendingPeers=0}].entries()){
     const f=fixture();mutation(f.sample);
     const row=(await f.producer.snapshot({verified:true})).tabs[0];
     assert.equal(row.callEvidence.state,'unknown');assert.equal(row.callEvidence.callGeneration,null);
@@ -36,10 +36,38 @@ test('passive, split-PC, stale and malformed observations remain unknown while r
     assert.equal(row.remoteAudio,index<2?'separated':'unknown');
   }
 });
-test('an unbound additional receiver prevents claiming a scoped separated capture route',async()=>{
-  const f=fixture();f.sample.unboundReceiverCount=1;f.sample.receivedPeers=2;
+test('D80.5 split PCs in one frame qualify without a same-PC or backend identity match',async()=>{
+  const f=fixture();Object.assign(f.sample,{samePeerCount:0,receivedPeers:2,sourceCount:2});
+  const row=(await f.producer.snapshot({verified:true})).tabs[0];
+  assert.equal(row.callEvidence.state,'active');assert.equal(row.remoteAudio,'separated');
+  assert.equal(row.callEvidence.adapter.version,'2');
+});
+test('multiple duplex PCs still form one document cohort',async()=>{
+  const f=fixture();Object.assign(f.sample,{samePeerCount:2,receivedPeers:2,capturedSendingPeers:2});
+  assert.equal((await f.producer.snapshot({verified:true})).tabs[0].callEvidence.state,'active');
+});
+test('a receiver in another frame prevents claiming a scoped separated capture route',async()=>{
+  const f=fixture(),child={...f.frame,frameId:2,browserDocumentId:'chrome-child',nativeSourceVerified:true,sourceCount:1};
+  f.producer.frames=()=>[f.frame,child];f.producer.currentSource=value=>value===f.frame||value===child;
   const row=(await f.producer.snapshot({verified:true})).tabs[0];
   assert.equal(row.callEvidence.state,'active');assert.equal(row.remoteAudio,'unknown');
+});
+test('sender-only child facts cannot complete a receiving-only top-frame cohort',async()=>{
+  const f=fixture(),child={...f.frame,frameId:2,browserDocumentId:'chrome-child',nativeSourceVerified:true,sourceCount:0};
+  Object.assign(f.sample,{cohortQualified:false,samePeerCount:0,capturedSendingPeers:0,sentVersion:0});
+  f.producer.frames=()=>[f.frame,child];f.producer.currentSource=value=>value===f.frame||value===child;
+  assert.equal((await f.producer.snapshot({verified:true})).tabs[0].callEvidence.state,'unknown');
+});
+test('receiving and sending observations in separate documents are never pooled',async()=>{
+  const f=fixture(),other={...f.frame,tabId:3,browserDocumentId:'chrome-B',documentGeneration:'hook-B'};
+  Object.assign(f.sample,{cohortQualified:false,samePeerCount:0,capturedSendingPeers:0,sentVersion:0});
+  f.producer.frames=()=>[f.frame,other];f.producer.current=value=>value===f.frame||value===other;
+  f.producer.currentSource=f.producer.current;
+  f.producer.tabs.query=async()=>[f.frame,other].map(frame=>({id:frame.tabId,url:frame.browserUrl}));
+  f.producer.executeScript=async request=>{const second=request.target.documentIds[0]==='chrome-B';return [{frameId:0,
+    documentId:second?'chrome-B':'chrome-A',result:second?{...f.sample,documentGeneration:'hook-B',receivedPeers:0,capturedSendingPeers:1,receivedVersion:0,sentVersion:1}:f.sample}]};
+  const result=await f.producer.snapshot({verified:true});assert.equal(result.tabs.length,2);
+  assert.ok(result.tabs.every(row=>row.callEvidence.state==='unknown'));
 });
 test('fenced port, Chrome/hook identity and background-generation changes cannot complete an old read',async()=>{
   for(const mutate of [f=>f.retire(),f=>{f.frame.browserDocumentId='chrome-B'},f=>{f.frame.documentGeneration='hook-B'},
@@ -74,7 +102,7 @@ test('browser round-trip time consumes proof freshness instead of refreshing old
 
 test('a superseded configuration cannot consume the new initial snapshot via the dedup cache',async()=>{
   const f=fixture(),queries=[];
-  Object.assign(f.sample,{samePeerCount:0,capturedSendingPeers:0,unboundReceiverCount:1});
+  Object.assign(f.sample,{cohortQualified:false,samePeerCount:0,capturedSendingPeers:0});
   f.producer.tabs.query=()=>new Promise(resolve=>queries.push(resolve));
   const old=f.producer.snapshot({verified:true,epoch:1,configurationEpoch:1});
   const fresh=f.producer.snapshot({verified:true,epoch:1,configurationEpoch:2});

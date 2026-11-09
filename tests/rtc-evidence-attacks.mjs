@@ -94,8 +94,8 @@ try{
    }
    await page.evaluate(()=>{
     globalThis.forgedDescriptorReads=0;globalThis.forgedRevision=100;
-    const forged=()=>({version:1,documentGeneration:'X',hookGeneration:'Y',revision:++forgedRevision,ageMs:0,
-     receivedPeers:1,capturedSendingPeers:1,samePeerCount:1,unboundReceiverCount:0,receivedVersion:forgedRevision,sentVersion:forgedRevision,
+    const forged=()=>({version:2,cohortQualified:true,documentGeneration:'X',hookGeneration:'Y',revision:++forgedRevision,ageMs:0,
+     receivedPeers:1,capturedSendingPeers:1,samePeerCount:1,receivedVersion:forgedRevision,sentVersion:forgedRevision,
      ended:false,sessionEpoch:999,sourceCount:1,heard:true});
     try{Object.defineProperty(globalThis,'__cassiniCallEvidenceV1',{value:{read:forged}})}catch{}
     Object.getOwnPropertyDescriptor=()=>{forgedDescriptorReads++;return {value:{read:forged}}};

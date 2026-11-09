@@ -8,8 +8,8 @@ async function fixture(trusted=true){
   const port=app.frame(2,1,0,'chrome-A');
   const hello=port.sent.find(message=>message.type==='relayHello');
   port.onMessage.emit({...hello,type:'relayReady',observerDocumentStart:trusted});
-  const raw={version:1,documentGeneration:'hook-A',hookGeneration:'0',revision:2,ageMs:0,
-    receivedPeers:1,capturedSendingPeers:1,samePeerCount:1,unboundReceiverCount:0,
+  const raw={version:2,cohortQualified:true,documentGeneration:'hook-A',hookGeneration:'0',revision:2,ageMs:0,
+    receivedPeers:1,capturedSendingPeers:1,samePeerCount:1,
     receivedVersion:1,sentVersion:1,ended:false,sourceCount:1,heard:true};
   app.chrome.scripting={async executeScript(request){
     if(request.world==='MAIN'){reads++;return [{frameId:0,documentId:'chrome-A',result:{...raw}}]}
@@ -70,11 +70,11 @@ test('explicit terminal endpoint end retains generation for callEnded; a new obs
   const f=await fixture();
   try{
     await f.configure();const first=f.last().tabs[0];
-    f.raw.ended=true;f.raw.samePeerCount=0;f.raw.receivedPeers=0;f.raw.capturedSendingPeers=0;f.raw.ageMs=null;
+    f.raw.ended=true;f.raw.cohortQualified=false;f.raw.samePeerCount=0;f.raw.receivedPeers=0;f.raw.capturedSendingPeers=0;f.raw.ageMs=null;
     f.setClock(3000);await f.publish();const end=f.last().tabs[0];
     assert.equal(end.callEvidence.state,'inactive');assert.equal(end.callEvidence.reason,'callEnded');
     assert.equal(end.callEvidence.callGeneration,first.callEvidence.callGeneration);
-    Object.assign(f.raw,{ended:false,hookGeneration:'1',samePeerCount:1,receivedPeers:1,capturedSendingPeers:1,ageMs:0,receivedVersion:2,sentVersion:2});
+    Object.assign(f.raw,{ended:false,cohortQualified:true,hookGeneration:'1',samePeerCount:1,receivedPeers:1,capturedSendingPeers:1,ageMs:0,receivedVersion:2,sentVersion:2});
     f.port.onMessage.emit({type:'discovery',sourceCount:1,heard:true,documentGeneration:'forged',callGeneration:'forged'});
     await until(()=>[...f.app.api.frames].some(frame=>frame.callGeneration==='1'));
     f.setClock(4000);await f.publish();const next=f.last().tabs[0];
@@ -205,8 +205,8 @@ test('a discovery flood coalesces to one native read per second with one trailin
 
 test('pre-attestation discovery cannot seed identities, fence a real generation, or poison later genuine proof',async()=>{
  const app=await setup(0);app.pages[0].onDisconnect.emit();
- const raw={version:1,documentGeneration:'hook-real',hookGeneration:'0',revision:0,ageMs:0,
-  receivedPeers:0,capturedSendingPeers:0,samePeerCount:0,unboundReceiverCount:0,
+ const raw={version:2,cohortQualified:false,documentGeneration:'hook-real',hookGeneration:'0',revision:0,ageMs:0,
+  receivedPeers:0,capturedSendingPeers:0,samePeerCount:0,
   receivedVersion:0,sentVersion:0,ended:false,sourceCount:0,heard:false};
  const port={name:'cassini-frame',sender:{id:'extension',tab:{id:2},frameId:0,documentId:'chrome-real',url:app.tabs.get(2).url},
   onMessage:event(),onDisconnect:event(),sent:[],postMessage(message){this.sent.push(message)}};
@@ -222,7 +222,7 @@ test('pre-attestation discovery cannot seed identities, fence a real generation,
   port.onMessage.emit({...hello,type:'relayReady',observerDocumentStart:true});
   await until(()=>frame.nativeSourceVerified===true);
   assert.equal(frame.callGeneration,'0');assert.equal(frame.fencedGenerations.size,0);assert.equal(frame.sourceCount,0);
-  Object.assign(raw,{revision:2,receivedPeers:1,capturedSendingPeers:1,samePeerCount:1,receivedVersion:1,sentVersion:1,sourceCount:1,heard:true});
+  Object.assign(raw,{cohortQualified:true,revision:2,receivedPeers:1,capturedSendingPeers:1,samePeerCount:1,receivedVersion:1,sentVersion:1,sourceCount:1,heard:true});
   app.api.appControl.port.onMessage.emit({type:'configure',capabilities:pair});
   await until(()=>app.ports[0].sent.some(message=>message.type==='callSignals'&&message.tabs.some(row=>row.callEvidence.state==='active')));
   assert.equal(app.api.callInfo(2).generation,generation,'a forged pre-handshake epoch cannot rotate the real call');

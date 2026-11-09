@@ -63,7 +63,7 @@ test('real capture provenance and proven clones require two fresh progress sampl
   for(const kind of ['captured','clone','synthetic']){
     const f=fixture(),peer=await f.peer(kind);
     await f.tick([peer]);assert.equal(f.read().samePeerCount,0);
-    await f.tick([peer]);assert.equal(f.read().samePeerCount,kind==='synthetic'?0:1);
+    await f.tick([peer]);assert.equal(f.read().samePeerCount,kind==='synthetic'?0:1);assert.equal(f.read().cohortQualified,kind!=='synthetic');
     peer.pc.slots[0].currentDirection='recvonly';assert.equal(f.read().samePeerCount,0);
   }
 });
@@ -71,7 +71,7 @@ test('expired, disabled, replaced or ended captured tracks withdraw proof immedi
   for(const mutate of [f=>f.advance(2501),(_f,p)=>{p.track.enabled=false},(_f,p)=>{p.track.readyState='ended'},
     (_f,p)=>{p.sender.track=p.track.clone()},(_f,p)=>p.pc.close()]){
     const f=fixture(),peer=await f.peer();await f.tick([peer]);await f.tick([peer]);
-    assert.equal(f.read().samePeerCount,1);mutate(f,peer);assert.equal(f.read().samePeerCount,0);
+    assert.equal(f.read().samePeerCount,1);mutate(f,peer);assert.equal(f.read().samePeerCount,0);assert.equal(f.read().cohortQualified,false);
   }
 });
 test('stale stats timestamps never qualify even as counters increase and legacy source/heard remain truthful',async()=>{
@@ -83,13 +83,14 @@ test('stale stats timestamps never qualify even as counters increase and legacy 
     assert.equal(discovery.sourceCount,1);assert.equal(discovery.heard,true);
   }
 });
-test('split PCs, forged page messages and mutable returned snapshots cannot supply a same-PC proof',async()=>{
+test('D80.5 split PCs qualify in one frame while forged messages cannot alter the private cohort',async()=>{
   const f=fixture(),sending=await f.peer(),receiving=await f.peer('synthetic');
   sending.pc.slots[0].currentDirection='sendonly';receiving.pc.slots[0].currentDirection='recvonly';
   await f.tick([sending,receiving]);await f.tick([sending,receiving]);
   for(const listener of f.listeners)listener({source:f.window,data:{channel:'cassini-page',type:'discovery',samePeerCount:1,callEvidence:{state:'active'}}});
-  const copy=f.read();copy.samePeerCount=1;
-  assert.equal(f.read().samePeerCount,0);
+  assert.equal(f.read().cohortQualified,true);
+  const copy=f.read();copy.samePeerCount=1;copy.cohortQualified=false;
+  assert.equal(f.read().samePeerCount,0);assert.equal(f.read().cohortQualified,true);
   const descriptor=Object.getOwnPropertyDescriptor(f.context,'__cassiniCallEvidenceV1');
   assert.equal(descriptor.writable,false);assert.equal(descriptor.configurable,false);
 });
@@ -163,4 +164,36 @@ for(const failure of ['insecure','missing-peer','missing-uuid','throwing-capabil
  assert.equal(descriptor.configurable,false);assert.equal(descriptor.writable,false);assert.equal(Object.isFrozen(descriptor.value),true);
  assert.equal(descriptor.value.read(),null);
  assert.throws(()=>Object.defineProperty(context,'__cassiniCallEvidenceV1',{value:{read:()=>({samePeerCount:1})}}));
+});
+
+
+test('split cohort expiry is the older directional proof and cannot combine non-overlapping windows',async()=>{
+ const f=fixture(),sending=await f.peer(),receiving=await f.peer('synthetic');
+ sending.pc.slots[0].currentDirection='sendonly';receiving.pc.slots[0].currentDirection='recvonly';
+ await f.tick([sending,receiving]);await f.tick([sending,receiving]);
+ assert.equal(f.read().cohortQualified,true);assert.equal(f.read().ageMs,0);
+ await f.tick([receiving]);await f.tick([receiving]);
+ assert.equal(f.read().cohortQualified,true);assert.equal(f.read().ageMs,2000);
+ await f.tick([receiving]);assert.equal(f.read().cohortQualified,false);
+ // Let receiving expire before a newly progressing sender is sampled.
+ f.advance(2501);await f.tick([sending]);
+ assert.equal(f.read().cohortQualified,false);
+});
+test('split cohort terminal end retains the native generation and the next episode rotates once',async()=>{
+ const f=fixture(),sending=await f.peer(),receiving=await f.peer('synthetic');
+ sending.pc.slots[0].currentDirection='sendonly';receiving.pc.slots[0].currentDirection='recvonly';
+ await f.tick([sending,receiving]);await f.tick([sending,receiving]);assert.equal(f.read().cohortQualified,true);
+ sending.pc.close();receiving.pc.close();assert.equal(f.read().ended,false,'live captured endpoint is uncertain');
+ sending.track.readyState='ended';assert.equal(f.read().ended,true);assert.equal(f.read().hookGeneration,'0');
+ const next=await f.peer();await f.tick([next]);await f.tick([next]);
+ assert.equal(f.read().cohortQualified,true);assert.equal(f.read().hookGeneration,'1');
+});
+test('separate private frame collectors never combine microphone and receiver progress',async()=>{
+ const sendingFrame=fixture(),receivingFrame=fixture();
+ const sending=await sendingFrame.peer(),receiving=await receivingFrame.peer('synthetic');
+ sending.pc.slots[0].currentDirection='sendonly';receiving.pc.slots[0].currentDirection='recvonly';
+ await sendingFrame.tick([sending]);await receivingFrame.tick([receiving]);
+ await sendingFrame.tick([sending]);await receivingFrame.tick([receiving]);
+ assert.equal(sendingFrame.read().capturedSendingPeers,1);assert.equal(receivingFrame.read().receivedPeers,1);
+ assert.equal(sendingFrame.read().cohortQualified,false);assert.equal(receivingFrame.read().cohortQualified,false);
 });
