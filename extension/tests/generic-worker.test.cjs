@@ -4,6 +4,7 @@ const {setup,until,event}=require('./support/app-control-harness.cjs');
 const pair=['call-signals-v1','verified-auto-admission-v1'];
 async function fixture(trusted=true){
   const app=await setup(0);let clock=0,reads=0;
+  app.api.discoveryTimers.now=()=>clock;
   app.pages[0].onDisconnect.emit();
   const port=app.frame(2,1,0,'chrome-A');
   const hello=port.sent.find(message=>message.type==='relayHello');
@@ -138,6 +139,7 @@ test('a trusted native new call uses callChanged: prior recording ends and its s
   await f.configure();const generation=f.last().tabs[0].callEvidence.callGeneration;
   assert.equal((await f.app.command({type:'command',requestId:'old-call',action:'start',mode:'tracks',tabId:2,
    independent:true,callGeneration:generation,captureLocal:false,keepOnNavigation:true})).ok,true);
+  f.setClock(1000); // Advance the fixture clock through the discovery rate window.
   Object.assign(f.raw,{hookGeneration:'1',receivedVersion:2,sentVersion:2});
   f.port.onMessage.emit({type:'discovery',sourceCount:64,heard:true,documentGeneration:'forged',callGeneration:'forged'});
   await until(()=>f.app.audio[0].sent.some(packet=>packet.type==='stop'));
