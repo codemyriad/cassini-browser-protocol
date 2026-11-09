@@ -33,8 +33,9 @@ export function installRtcTopologyProbe() {
   const local=descriptor(Native.prototype,'localDescription')?.get;
   const remote=descriptor(Native.prototype,'remoteDescription')?.get;
   const sdp=descriptor(RTCSessionDescription.prototype,'sdp')?.get;
-  window.cassiniRtcCohortFacts=()=>{
-    const groups=new Map();
+  window.cassiniRtcCohortFacts=(groups=new Map())=>{
+    // A same-origin disposable peer window may share this private table for
+    // cross-room comparison. Only integer references enter the returned facts.
     const reference=(kind,value)=>{
       if(!value||value==='-')return null;
       let values=groups.get(kind);if(!values){values=new Map();groups.set(kind,values)}
@@ -110,4 +111,16 @@ export async function waitRtcTopology(page,{previous=null,sending='none'}={}) {
     }
     throw Error('Timed out waiting for real RTC packet progress: '+JSON.stringify(latest));
   },{previous,sending});
+}
+
+// Compare only opaque integer groups produced with one private in-browser table.
+// Shared fields are candidate measurements, never proof of an interactive session.
+export function summarizeRtcCohortComparison(first, second) {
+  const fields = ['originSession', 'sessionName', 'iceUsername', 'fingerprint', 'rtcpCname', 'streamId'];
+  const values = (facts, field) => new Set(facts.peers.flatMap(peer => peer.remote[field]));
+  return {notAdmissionRule:true, scope:'same backend, different disposable rooms; shared private equality table',
+    first, second, sharedRemoteGroups:Object.fromEntries(fields.map(field => {
+      const other = values(second, field);
+      return [field, [...values(first, field)].filter(value => other.has(value))];
+    }))};
 }

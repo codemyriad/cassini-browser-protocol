@@ -35,7 +35,7 @@ async function gathered(page,index) {
   },index);
 }
 try{
-  for(const fixture of ['duplex','passive-viewer','mic-preview','synthetic-sender','captured-clone','unrelated-mic-peer','echo','unanswered-early-media','unanswered-ringing-no-capture','cross-frame-capture','forged-page-evidence','repaired-frame-positive-media','primordial-poison-positive'].filter(name=>!process.env.CASSINI_RTC_CASE||name===process.env.CASSINI_RTC_CASE)){
+  for(const fixture of ['duplex','passive-viewer','mic-preview','synthetic-sender','captured-clone','unrelated-mic-peer','unrelated-mic-same-backend','echo','unanswered-early-media','unanswered-ringing-no-capture','cross-frame-capture','forged-page-evidence','repaired-frame-positive-media','primordial-poison-positive'].filter(name=>!process.env.CASSINI_RTC_CASE||name===process.env.CASSINI_RTC_CASE)){
     report.runningFixture=fixture;
     console.log("RTC fixture:",fixture);
     const context=await chromium.launchPersistentContext(path.join(directory,'profile-'+fixture),{channel:'chromium',headless:true,
@@ -67,22 +67,23 @@ try{
           await new Promise(resolve=>{iframe.onload=resolve;document.body.append(iframe)});
           window.capture=await iframe.contentWindow.navigator.mediaDevices.getUserMedia({audio:true});
         }
-        if(fixture==='unrelated-mic-peer')peers.push(new RTCPeerConnection());
+        if(fixture.startsWith('unrelated-mic-'))peers.push(new RTCPeerConnection());
         if(fixture==='synthetic-sender'){
           window.audio=new AudioContext();const tone=audio.createOscillator(),output=audio.createMediaStreamDestination();tone.connect(output);tone.start();await audio.resume();
           peers[0].addTrack(output.stream.getAudioTracks()[0]);
-        }else if(capture&&!['mic-preview','unrelated-mic-peer'].includes(fixture)){
+        }else if(capture&&!['mic-preview','unrelated-mic-peer','unrelated-mic-same-backend'].includes(fixture)){
           const track=capture.getAudioTracks()[0];peers[0].addTrack(fixture==='captured-clone'?track.clone():track);
-        }else if(fixture==='unrelated-mic-peer')peers[1].addTrack(capture.getAudioTracks()[0]);
+        }else if(fixture.startsWith('unrelated-mic-'))peers[1].addTrack(capture.getAudioTracks()[0]);
         peers[0].addTransceiver('audio',{direction:'recvonly'});
       },fixture);
       await remote.evaluate(()=>{window.peers=[];window.audio=new AudioContext()});
-      const peerCount=fixture==='unrelated-mic-peer'?2:1;
+      const peerCount=fixture.startsWith('unrelated-mic-')?2:1;
       async function negotiate(){for(let index=0;index<peerCount;index++){
         await caller.evaluate(async index=>{await peers[index].setLocalDescription(await peers[index].createOffer())},index);
         const offer=await gathered(caller,index);
         await remote.evaluate(async({index,offer,fixture})=>{
-          const pc=new RTCPeerConnection();peers[index]=pc;
+          if(fixture==='unrelated-mic-same-backend')window.fixtureCertificate??=await RTCPeerConnection.generateCertificate({name:'ECDSA',namedCurve:'P-256'});
+          const pc=new RTCPeerConnection(fixture==='unrelated-mic-same-backend'?{certificates:[window.fixtureCertificate]}:undefined);peers[index]=pc;
           await pc.setRemoteDescription(offer);
           if(index===0){
             let stream;
@@ -120,15 +121,27 @@ try{
           capturedSendingPeers:value.capturedSendingPeers,samePeerCount:value.samePeerCount,unboundReceiverCount:value.unboundReceiverCount};
       });
       const candidateR1=topology.samePeerConnection;
+      if(fixture==='unrelated-mic-same-backend'){
+        const sharedRemoteCertificate=await caller.evaluate(async()=>{
+          const fingerprints=await Promise.all(peers.map(async pc=>{
+            const stats=await pc.getStats();
+            const transport=[...stats.values()].find(value=>value.type==='transport'&&value.dtlsState==='connected');
+            return stats.get(transport?.remoteCertificateId)?.fingerprint;
+          }));
+          return fingerprints.length===2&&fingerprints.every(value=>typeof value==='string'&&value.length>0)&&new Set(fingerprints).size===1;
+        });
+        assert.equal(sharedRemoteCertificate,true,'the unrelated microphone and passive receiver really share a native remote DTLS identity');
+      }
       // Preserve the actual observed values even when a required positive or
       // negative fails, so fixture/algorithm failures remain diagnosable.
       const legacySourceObservation=await caller.evaluate(()=>cassiniObservedDiscovery);
       const observation={fixture,candidateR1,topology,packagedHookObservation:observed,legacySourceObservation,
+        ...(fixture==='unrelated-mic-same-backend'?{nativeRemoteIdentityShared:true}:{}),
         ...(fixture==='echo'||fixture==='unanswered-early-media'?{acceptedPositive:'D80.4 interactive captured-media session'}: {})};
       report.cases.push(observation);
-      if(['passive-viewer','mic-preview','synthetic-sender','unrelated-mic-peer','unanswered-ringing-no-capture','cross-frame-capture','forged-page-evidence'].includes(fixture))assert.equal(candidateR1,false,fixture);
+      if(['passive-viewer','mic-preview','synthetic-sender','unrelated-mic-peer','unrelated-mic-same-backend','unanswered-ringing-no-capture','cross-frame-capture','forged-page-evidence'].includes(fixture))assert.equal(candidateR1,false,fixture);
       if(['duplex','captured-clone','echo','unanswered-early-media','repaired-frame-positive-media','primordial-poison-positive'].includes(fixture))assert.equal(candidateR1,true,fixture);
-      if(['passive-viewer','mic-preview','synthetic-sender','unrelated-mic-peer','unanswered-ringing-no-capture','cross-frame-capture','forged-page-evidence'].includes(fixture))assert.equal(observed.samePeerCount,0,'packaged hook '+fixture);
+      if(['passive-viewer','mic-preview','synthetic-sender','unrelated-mic-peer','unrelated-mic-same-backend','unanswered-ringing-no-capture','cross-frame-capture','forged-page-evidence'].includes(fixture))assert.equal(observed.samePeerCount,0,'packaged hook '+fixture);
       if(['duplex','captured-clone','echo','unanswered-early-media','repaired-frame-positive-media','primordial-poison-positive'].includes(fixture))assert.equal(observed.samePeerCount,1,'packaged hook '+fixture);
       if(fixture==='passive-viewer')await caller.waitForFunction(()=>cassiniObservedDiscovery?.sourceCount===1&&cassiniObservedDiscovery.heard===true);
       observation.legacySourceObservation=await caller.evaluate(()=>cassiniObservedDiscovery);

@@ -7,13 +7,18 @@ import {generateKeyPairSync,createHash} from 'node:crypto';
 import {cp,mkdir,mkdtemp,readFile,writeFile,chmod,rm} from 'node:fs/promises';
 import os from 'node:os';import path from 'node:path';import {fileURLToPath} from 'node:url';
 import {joinNextcloudTalk,talkMediaState} from '../scenarios/nextcloud-talk.mjs';
-import {installRtcTopologyProbe,summarizeRtcTopology,waitRtcTopology} from './rtc-topology-probe.mjs';
+import {installRtcTopologyProbe,summarizeRtcTopology,waitRtcTopology,summarizeRtcCohortComparison} from './rtc-topology-probe.mjs';
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const callURL=process.env.NEXTCLOUD_TEST_CALL_URL;
 assert.ok(callURL,'NEXTCLOUD_TEST_CALL_URL must name a disposable local Talk room');
 const room=new URL(callURL);
 assert.ok(['127.0.0.1','localhost','[::1]'].includes(room.hostname),'Automated recording tests must not join public or production rooms');
+const otherCallURL=process.env.NEXTCLOUD_TEST_OTHER_CALL_URL;
+assert.ok(otherCallURL,'NEXTCLOUD_TEST_OTHER_CALL_URL must name another disposable room');
+const otherRoom=new URL(otherCallURL);
+assert.equal(otherRoom.origin,room.origin,'cohort comparison requires the same disposable backend');
+assert.notEqual(otherRoom.pathname,room.pathname,'cohort comparison requires different rooms');
 const temporary=await mkdtemp(path.join(os.tmpdir(),'cassini-nextcloud-'));
 const extension=path.join(temporary,'extension'),profile=path.join(temporary,'profile');
 const audioRoot=path.join(temporary,'recordings'),hosts=path.join(profile,'NativeMessagingHosts');
@@ -131,6 +136,32 @@ try{
  assert.ok(report.rtcTopology.sendingPeers>0&&report.rtcTopology.receivingPeers>0,'Talk measurement requires real bidirectional packet progress');
  report.rtcCohortCandidates=await meeting.evaluate(()=>cassiniRtcCohortFacts());
  report.cases.push('D80.3 actual captured sender and remote receiver topology measured; no inferred split-PC binding');
+ // Compare actual native fields against another room on the SAME backend.
+ // A common SFU certificate/CNAME/stream placeholder is not room identity.
+ // Retain only numeric facts plus a private in-browser reference table, then
+ // leave A before joining B so Talk's one-call-per-session UI cannot interfere.
+ await meeting.evaluate(()=>{
+   const groups=new Map(),first=cassiniRtcCohortFacts(groups);
+   window.cassiniCompareOtherRoom=()=>({first,second:window.cassiniCohortOther.cassiniRtcCohortFacts(groups)});
+ });
+ const leaveFirst=meeting.getByRole('button',{name:'Leave call',exact:true});
+ await leaveFirst.click();await leaveFirst.waitFor({state:'hidden'});
+ const otherPageEvent=meeting.waitForEvent('popup');
+ await meeting.evaluate(()=>{window.cassiniCohortOther=window.open('about:blank')});
+ const otherMeeting=await otherPageEvent;
+ otherMeeting.on('pageerror',error=>pageErrors.push(error.message));
+ await joinNextcloudTalk(otherMeeting,{url:otherCallURL,name:'Alice',muted:false});
+ const otherContext=await participants[0].newContext({permissions:['microphone','camera'],userAgent});
+ await joinNextcloudTalk(await otherContext.newPage(),{url:otherCallURL,name:'Bob'});
+ const otherBefore=await waitRtcTopology(otherMeeting,{sending:'captured'});
+ report.otherRoomRtcTopology=summarizeRtcTopology(otherBefore,await waitRtcTopology(otherMeeting,{previous:otherBefore,sending:'captured'}));
+ assert.ok(report.otherRoomRtcTopology.sendingPeers>0&&report.otherRoomRtcTopology.receivingPeers>0,'other-room comparison requires actual captured sending and remote progress');
+ const comparison=await meeting.evaluate(()=>cassiniCompareOtherRoom());
+ for(const facts of [comparison.first,comparison.second])assert.ok(facts.peers.some(peer=>peer.remote.fingerprint.length>0),'both native room descriptions must be available for comparison');
+ report.rtcCrossRoomCohortCandidates=summarizeRtcCohortComparison(comparison.first,comparison.second);
+ report.cases.push('D80.3 same-backend/different-room native cohort comparison measured; no admission rule inferred');
+ await otherContext.close();await otherMeeting.close();
+
  assert.deepEqual(pageErrors,[]);report.cases.push('DOM participant names match isolated remote PCM and persisted provenance, no microphone or tone cross-mixing');report.manifest=final;
  console.log('PASS real Nextcloud Talk: Hypatia=440Hz and Ibn al-Haytham=880Hz, distinct sources, DOM provenance, separate remote WAVs and finalization');success=true;
 }finally{
