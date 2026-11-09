@@ -1329,6 +1329,16 @@ positive, like echo; a shared backend is neither required nor evidence. Cross-
 document and cross-frame combinations remain negative. An unanswered UI alone
 neither admits nor denies the rule.
 
+A mic-permitted page, including a dictation or microphone-test page, can also
+create a synthetic received half: generated audio can traverse a real connected
+loopback/peer connection and produce genuine native receive progress. If the
+same document/frame is actually sending a live page-captured mic with fresh send
+progress, that combination can look active without another human participant.
+This is an accepted D80.4/D80.5 cost of the interactive captured-media definition,
+not proof of answered-call intent or a remotely originated human voice. It does
+not admit a synthetic **outbound** sender without captured-mic provenance, a
+permission grant without actual sending, or a passive viewer without that sender.
+
 A producer implementing this contract advertises `verified-auto-admission-v1`
 alongside `call-signals-v1`. It does not advertise the stricter feature merely
 because it can publish D74 signals. An adopting consumer sends both capabilities
