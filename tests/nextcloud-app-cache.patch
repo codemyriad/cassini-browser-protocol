@@ -10,8 +10,8 @@
  import tarfile
 @@ -146,7 +147,14 @@
      (out / "env.sh").write_text("".join(f"export {k}={shlex.quote(v)}\n" for k, v in values.items()))
- 
- 
+
+
 -def download(url, destination):
 +def download(url, destination, expected_sha=None):
 +    cache = os.environ.get("CASSINI_COMPAT_APP_CACHE")
