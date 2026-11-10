@@ -11,8 +11,9 @@
    440/880 Hz peers and 660 Hz replacement verify spectral separation (<1% power bleed),
    persisted-sample mute, shared timeline (<400 ms), sender detach/restore, 3-second host
    SIGSTOP, 35-second idle/explicit worker termination, iframe capture, navigation and real
-   stereo tabCapture/offscreen cleanup. Fixed waits create the intentional idle/stall/mute
-   intervals; readiness/finalization use observed states and recorded frame counts.
+   stereo tabCapture/offscreen cleanup. Legacy idle/stall/mute stimuli still include fixed
+   waits tracked by D88. Converted checks use frame counts, protocol/device events or virtual
+   time; timeouts only guard hangs. Readiness/finalization use observed states and recorded frame counts.
 4. Native Swift sink uses injectable writer and synthetic AVAudioPCMBuffers: one hour ±50 ppm,
    per-source bounded stalls/tail silence, quantization/NaN, planar/interleaved 1/2/4 channels,
    format change, failure once and late callbacks. Loader tests include GNOME timestamps,
@@ -519,3 +520,5 @@ Apps'120s loss grace, fixed route, shared owner and Details provenance remain ap
 adoption work under D74.1. Real site evidence readers are separate reviewed PRs;
 WhatsApp markers stay unknown until coordinator approves a disposable test account.
 No release, installed-worktree change, UI action or new graph/native capture path.
+
+D88 separates the frozen-evidence policy deadline from host scheduling. The actual worker/AppControl unit harness advances its virtual clock and invokes the registered publisher timer while repeated pings receive pongs; it must withdraw unchanged proof by 3000 ms, with refresh intervals at most 1000 ms. The real Chromium fixture still freezes the shipped MAIN collector, waits for unknown evidence, and verifies request-correlated pongs on the same native-control port before and after withdrawal. Its elapsed withdrawal value is diagnostic only; the existing packet timeout only guards a hang. No real media/security cases are skipped.
