@@ -540,3 +540,12 @@ sleep or elapsed-time pass condition. The original negative-only baseline from
 #75 was incorporated into the call-signals implementation; this follow-up keeps
 those assertions and replaces its packet polling. No explicit capture request,
 new adapter or graph-capture capability is introduced.
+
+D88 BFCache waits observe native socket packets, worker console and port events,
+real pageshow, and recording-directory changes, with an initial retained-state
+read after subscription. Async reads serialize and recheck publications received
+in flight; atomic manifest replacement stays observable. Seven fast event-helper
+unit cases run in npm test, including virtual hang-guard cleanup. The real idle
+and Linux retained-native cases keep their document/hook/handshake, session
+identity, no-Stop/no-loss and non-silent PCM assertions. No polling sleep or
+wall-clock elapsed pass criterion remains in this fixture.
