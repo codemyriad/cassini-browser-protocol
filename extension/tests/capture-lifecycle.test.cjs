@@ -307,15 +307,16 @@ for(const first of ['io','retired'])test(`source-local ${first} refusal retries 
   if(p.id==='B'&&p.type==='audio')return new Promise((resolve,reject)=>{
    pending.push({resolve,reject});if(pending.length===4)admitted();
   });
-  if(p.id==='A'&&p.type==='audio'){
-   const count=packets.filter(packet=>packet.id==='A'&&packet.type==='audio').length;
-   if(count===1)firstHealthy();if(count===2)secondHealthy();
-  }
   if(p.id==='B'&&p.type==='trackEnd')throw ended();
  };
  const options={stream:{},reportOutcomes:true,label:'Guest',kind:'local',origin:100000,workletURL:'',sharedContext:context,
   clock:time.now,schedule:time.schedule,cancel:time.cancel,send,fail:m=>failures.push(m)};
- const a=await capture({...options,id:'A',sourceTrackId:'root-A'});
+ let healthyA=0;
+ const a=await capture({...options,id:'A',sourceTrackId:'root-A',onAudio:()=>{
+  healthyA++;
+  if(healthyA===1)firstHealthy();
+  if(healthyA===2)secondHealthy();
+ }});
  const b=await capture({...options,id:'B',sourceTrackId:'root-B',nextSpanId:()=> 'B-retry',warn:(m,d)=>{
   warnings.push(d.kind);if(d.kind==='retry')retried();if(d.kind==='recovered')recovered();
  }});
@@ -330,7 +331,11 @@ for(const first of ['io','retired'])test(`source-local ${first} refusal retries 
  await time.advance(retryDelay(0));
  assert.equal(nodes.length,3);emit(nodes[2],512);emit(nodes[0],128);await Promise.all([recovery,healthySecond]);
  assert.equal(b.state,'recording');assert.equal(a.state,'recording');
- assert.ok(packets.findIndex(p=>p.type==='trackEnd'&&p.id==='B') < packets.findIndex(p=>p.type==='track'&&p.id==='B-retry'));
+ const closed=packets.findIndex(p=>p.type==='trackEnd'&&p.id==='B');
+ const opened=packets.findIndex(p=>p.type==='track'&&p.id==='B-retry');
+ assert.ok(closed>=0&&closed<opened,'old span must emit trackEnd before its replacement opens');
+ assert.equal(packets[closed].reason,first==='retired'?'ended':'retry');
+ assert.equal(nodes[1].disconnected,true);
  assert.equal(packets.filter(p=>p.type==='audio'&&p.id==='A').length,2);
  assert.equal(packets.filter(p=>p.type==='audio'&&p.id==='B-retry').length,1);
  assert.deepEqual(failures,[]);assert.deepEqual(warnings,['retry','recovered']);
