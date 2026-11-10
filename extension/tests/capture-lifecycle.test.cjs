@@ -234,7 +234,7 @@ test('source connects only after render readiness and PCM arms only after the na
 
 for(const recover of [false,true])test(`a timed-out source stays visible through relay/status/retries (${recover?'recovered':'still failing'}) while healthy audio continues`,async()=>mocked(async({capture,nodes,contexts,renderers,Context})=>{
  const vm=require('node:vm'),{setup,event}=require('./support/app-control-harness.cjs');
- const {eventValue}=await import('../../tests/support/event-value.mjs');
+ const {eventValue}=await import('./support/event-value.mjs');
  const pageFixture=require('./support/page-capture-harness.cjs');
  const readinessTimer=event(),workletDeadlines=new Map();
  const time=clock(ms=>{
