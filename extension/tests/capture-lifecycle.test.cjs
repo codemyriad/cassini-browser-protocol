@@ -295,29 +295,40 @@ for(const recover of [false,true])test(`a timed-out source stays visible through
  }finally{app.close()}
 }));
 
-for(const first of ['io','retired'])test(`source-local ${first} refusal retries a new span after retired cleanup while healthy PCM continues`,async()=>mocked(async({capture,nodes,Context,retryDelay})=>{
+for(const first of ['io','retired'])test(`source-local ${first} refusal retries a new span after retired cleanup while healthy PCM continues`,{timeout:10000},async()=>mocked(async({capture,nodes,Context,retryDelay})=>{
  const time=clock(),packets=[],pending=[],warnings=[],failures=[],context=new Context();
+ let admitted,retried,recovered,firstHealthy,secondHealthy;
+ const fourInFlight=new Promise(resolve=>{admitted=resolve}),retrying=new Promise(resolve=>{retried=resolve});
+ const recovery=new Promise(resolve=>{recovered=resolve});
+ const healthyFirst=new Promise(resolve=>{firstHealthy=resolve}),healthySecond=new Promise(resolve=>{secondHealthy=resolve});
  const ended=()=>Object.assign(new Error('Only this source span ended'),{code:'state',scope:'source',retired:true});
  const send=async p=>{
   packets.push(p);
-  if(p.id==='B'&&p.type==='audio')return new Promise((resolve,reject)=>pending.push({resolve,reject}));
+  if(p.id==='B'&&p.type==='audio')return new Promise((resolve,reject)=>{
+   pending.push({resolve,reject});if(pending.length===4)admitted();
+  });
+  if(p.id==='A'&&p.type==='audio'){
+   const count=packets.filter(packet=>packet.id==='A'&&packet.type==='audio').length;
+   if(count===1)firstHealthy();if(count===2)secondHealthy();
+  }
   if(p.id==='B'&&p.type==='trackEnd')throw ended();
  };
  const options={stream:{},reportOutcomes:true,label:'Guest',kind:'local',origin:100000,workletURL:'',sharedContext:context,
   clock:time.now,schedule:time.schedule,cancel:time.cancel,send,fail:m=>failures.push(m)};
  const a=await capture({...options,id:'A',sourceTrackId:'root-A'});
- const b=await capture({...options,id:'B',sourceTrackId:'root-B',nextSpanId:()=> 'B-retry',warn:(m,d)=>warnings.push(d.kind)});
+ const b=await capture({...options,id:'B',sourceTrackId:'root-B',nextSpanId:()=> 'B-retry',warn:(m,d)=>{
+  warnings.push(d.kind);if(d.kind==='retry')retried();if(d.kind==='recovered')recovered();
+ }});
  const emit=(node,frame)=>node.port.onmessage({data:{pcm:new ArrayBuffer(256),frame}});
  for(let i=0;i<4;i++)emit(nodes[1],i*128);
- const deadline=Date.now()+2000;
- while(pending.length<4){assert.ok(Date.now()<deadline,'Four admitted source chunks were not in flight');await tick();}
+ await fourInFlight;assert.equal(pending.length,4,'Four admitted source chunks must be in flight');
  pending[0].reject(first==='io'?Object.assign(new Error('B disk full'),{code:'io',scope:'source'}):ended());
  pending[1].resolve();pending[2].reject(ended());pending[3].reject(ended());
- while(b.state!=='retrying'){assert.ok(Date.now()<deadline,'B did not enter retry state');await tick();}
- emit(nodes[0],0);await tick();
+ await retrying;assert.equal(b.state,'retrying');
+ emit(nodes[0],0);await healthyFirst;
  assert.equal(a.state,'recording');assert.equal(time.timers.size,1);
  await time.advance(retryDelay(0));
- assert.equal(nodes.length,3);emit(nodes[2],512);emit(nodes[0],128);await tick();
+ assert.equal(nodes.length,3);emit(nodes[2],512);emit(nodes[0],128);await Promise.all([recovery,healthySecond]);
  assert.equal(b.state,'recording');assert.equal(a.state,'recording');
  assert.ok(packets.findIndex(p=>p.type==='trackEnd'&&p.id==='B') < packets.findIndex(p=>p.type==='track'&&p.id==='B-retry'));
  assert.equal(packets.filter(p=>p.type==='audio'&&p.id==='A').length,2);
