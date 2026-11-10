@@ -522,3 +522,21 @@ WhatsApp markers stay unknown until coordinator approves a disposable test accou
 No release, installed-worktree change, UI action or new graph/native capture path.
 
 D88 separates the frozen-evidence policy deadline from host scheduling. The actual worker/AppControl unit harness advances its virtual clock and invokes the registered publisher timer while repeated pings receive pongs; it must withdraw unchanged proof by 3000 ms, with refresh intervals at most 1000 ms. The real Chromium fixture still freezes the shipped MAIN collector, waits for unknown evidence, and verifies request-correlated pongs on the same native-control port before and after withdrawal. Its elapsed withdrawal value is diagnostic only; the existing packet timeout only guards a hang. No real media/security cases are skipped.
+
+
+## D73 Web Audio baseline: automatic admission stays negative
+
+`npm run test:webaudio` runs the same five passive-media cases included in
+`npm test`: AudioWorklet alone and synthetic YouTube/video and WhatsApp
+voice/status/video playback. Real graph RMS and media playback are required.
+With verified-auto-admission-v1 negotiated, every observed call-evidence row
+remains unknown, the meeting inventory stays empty, and no Start or PCM is sent.
+These synthetic vendor pages establish no real-site compatibility.
+
+Native inventory and negotiated snapshots are awaited through packet-publication
+events with a retained-snapshot check, including packets published before the
+waiter subscribes. The 15-second timeout only guards hangs; there is no settle
+sleep or elapsed-time pass condition. The original negative-only baseline from
+#75 was incorporated into the call-signals implementation; this follow-up keeps
+those assertions and replaces its packet polling. No explicit capture request,
+new adapter or graph-capture capability is introduced.
