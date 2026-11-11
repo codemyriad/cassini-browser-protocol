@@ -21,9 +21,10 @@ async function setup(sourceCount = 3, previous = {}, hostFeatures = [], nativeFa
     runtime: { id: 'extension', getManifest:()=>JSON.parse(fs.readFileSync(path.resolve(__dirname,'../../manifest.json'),'utf8')), onConnect: event(), onMessage: event(), onInstalled: event(), onStartup: event(), getURL: name => 'chrome-extension://extension/' + name,
       getContexts: async () => [], connectNative(name) {
         if (name === 'io.codemyriad.cassini' && nativeFactory) { const port = nativeFactory(); audio.push(port); return port; }
-        const port = { name, sent: [], closed: false, onMessage: event(), onDisconnect: event(),
+        const port = { name, sent: [], closed: false, onMessage: event(), onDisconnect: event(), onPost: event(),
           postMessage(packet) {
             this.sent.push(JSON.parse(JSON.stringify(packet)));
+            this.onPost.emit();
             if (name === 'io.codemyriad.cassini') queueMicrotask(() => this.onMessage.emit(packet.type === 'start' ? { type: 'started', path: '/test/Recording-example', features: hostFeatures.filter(x=>packet.features?.includes(x)) } : packet.type === 'stop' ? { type: 'stopped', path: '/test/Recording-example' } : { type: 'ack' }));
           }, disconnect() { if (!this.closed) { this.closed = true; this.onDisconnect.emit(); } }
         };
