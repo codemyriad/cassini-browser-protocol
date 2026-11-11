@@ -12,9 +12,9 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
   launcher-paths:
-    # Light gate for launcher-macos: did this change touch the launcher, the relay, their
-    # tests, what those tests import or read, the capture graph (D68.1), or this gate/job?
-    # Unknown base: run both.
+    # Light gate for launcher-macos on pull requests: did the PR touch the launcher, the relay,
+    # their tests, what those tests import or read, the capture graph or npm install inputs (D68.1),
+    # or this gate/job? Pushes to main and unknown bases always run both steps.
     # A light job: a constant GitHub-hosted label (the CM_RUNNER selector stays the contract job's).
     runs-on: ubuntu-24.04
     timeout-minutes: 5

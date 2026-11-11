@@ -270,29 +270,79 @@ class CiHygieneTests(unittest.TestCase):
             {'launcher': False, 'capture': False, 'changed': False},
         )
 
-        # Capture real-time inputs trigger capture only, never launcher unit tests.
+        # Capture real-time and npm install inputs trigger capture only, never launcher unit tests.
         for rel in ('extension/capture.js', 'extension/pcm-worklet.js', 'tests/capture-real-time.mjs',
-                    'package-lock.json'):
+                    'package-lock.json', 'npm-shrinkwrap.json', '.npmrc', 'sub/.npmrc'):
             with self.subTest(capture_input=rel):
                 self.assertEqual(
                     lp.classify_changes([rel]),
                     {'launcher': False, 'capture': True, 'changed': True},
                 )
 
-        # package.json "scripts"-only edits (new Linux tests) skip launcher-macos completely,
-        # whereas devDependencies/type edits trigger the affected macOS step(s).
+        # package.json ordinary test-script edits (create, modify, delete) skip launcher-macos completely,
+        # whereas npm lifecycle hooks (preinstall, install, postinstall, prepare) and dependency/type
+        # edits trigger the affected macOS step(s).
         base_pkg = (ROOT / 'package.json').read_text(encoding='utf-8')
-        scripts_pkg = json.loads(base_pkg)
-        scripts_pkg['scripts']['test'] += ' && node tests/new-linux-test.mjs'
-        self.assertEqual(
-            lp.classify_changes(
-                ['package.json', 'tests/bfcache.mjs', 'SHA256SUMS'],
-                read_rev_file=lambda rev, _p: base_pkg if rev == 'B' else json.dumps(scripts_pkg),
-                base_rev='B',
-                head_rev='H',
-            ),
-            {'launcher': False, 'capture': False, 'changed': False},
-        )
+        scripts_modified = json.loads(base_pkg)
+        scripts_modified['scripts']['test'] += ' && node tests/new-linux-test.mjs'
+        scripts_created = json.loads(base_pkg)
+        scripts_created['scripts']['test:bfcache'] = 'node tests/bfcache.mjs'
+        scripts_deleted = json.loads(base_pkg)
+        del scripts_deleted['scripts']['test:signals']
+        for label, candidate in (
+            ('modify-test', scripts_modified),
+            ('create-test-colon', scripts_created),
+            ('delete-test-colon', scripts_deleted),
+        ):
+            with self.subTest(script_case=label):
+                self.assertEqual(
+                    lp.classify_changes(
+                        ['package.json', 'tests/bfcache.mjs', 'SHA256SUMS'],
+                        read_rev_file=lambda rev, _p, c=candidate: base_pkg if rev == 'B' else json.dumps(c),
+                        base_rev='B',
+                        head_rev='H',
+                    ),
+                    {'launcher': False, 'capture': False, 'changed': False},
+                )
+
+        for hook in ('preinstall', 'install', 'postinstall', 'preprepare', 'prepare', 'postprepare', 'prepublish'):
+            with_hook = json.loads(base_pkg)
+            with_hook['scripts'][hook] = 'node scripts/hook-v1.mjs'
+            modified_hook = json.loads(base_pkg)
+            modified_hook['scripts'][hook] = 'node scripts/hook-v2.mjs'
+            with self.subTest(hook=hook, op='create'):
+                self.assertEqual(
+                    lp.classify_changes(
+                        ['package.json'],
+                        read_rev_file=lambda rev, _p, wh=with_hook: base_pkg if rev == 'B' else json.dumps(wh),
+                        base_rev='B',
+                        head_rev='H',
+                    ),
+                    {'launcher': False, 'capture': True, 'changed': True},
+                )
+            with self.subTest(hook=hook, op='modify'):
+                self.assertEqual(
+                    lp.classify_changes(
+                        ['package.json'],
+                        read_rev_file=lambda rev, _p, wh=with_hook, mh=modified_hook: (
+                            json.dumps(wh) if rev == 'B' else json.dumps(mh)
+                        ),
+                        base_rev='B',
+                        head_rev='H',
+                    ),
+                    {'launcher': False, 'capture': True, 'changed': True},
+                )
+            with self.subTest(hook=hook, op='delete'):
+                self.assertEqual(
+                    lp.classify_changes(
+                        ['package.json'],
+                        read_rev_file=lambda rev, _p, wh=with_hook: json.dumps(wh) if rev == 'B' else base_pkg,
+                        base_rev='B',
+                        head_rev='H',
+                    ),
+                    {'launcher': False, 'capture': True, 'changed': True},
+                )
+
         deps_pkg = json.loads(base_pkg)
         deps_pkg['devDependencies']['playwright'] = '1.99.0'
         self.assertEqual(
@@ -348,20 +398,152 @@ class CiHygieneTests(unittest.TestCase):
 
             git('init', '-b', 'main')
             (repo / 'README.md').write_text('v1\n', encoding='utf-8')
+            (repo / '.github/workflows').mkdir(parents=True)
+            base_ci = (WORKFLOWS / 'ci.yml').read_text(encoding='utf-8')
+            (repo / '.github/workflows/ci.yml').write_text(base_ci, encoding='utf-8')
+            (repo / 'package.json').write_text((ROOT / 'package.json').read_text(encoding='utf-8'), encoding='utf-8')
             (repo / 'extension').mkdir()
             (repo / 'extension/capture.js').write_text('// v1\n', encoding='utf-8')
+            (repo / 'scenarios').mkdir()
+            (repo / 'scenarios/native-launcher.mjs').write_text('// launcher v1\n', encoding='utf-8')
             git('add', '.')
             git('commit', '-m', 'init')
             base_sha = git('rev-parse', 'HEAD')
 
             # Unknown or zero base runs both safely.
-            res, resolved = lp.evaluate_git(repo, event_name='push', base_sha='0' * 40)
+            res, resolved = lp.evaluate_git(repo, event_name='pull_request', base_sha='0' * 40)
             self.assertIsNone(resolved)
             self.assertEqual(res, {'launcher': True, 'capture': True, 'changed': True})
+
+            # Pushes to main ALWAYS return all outputs true, even with a known base on docs-only or workflow-only commits.
+            (repo / 'README.md').write_text('docs push on main\n', encoding='utf-8')
+            git('commit', '-am', 'docs push')
+            docs_push_sha = git('rev-parse', 'HEAD')
+            res, resolved = lp.evaluate_git(repo, event_name='push', base_sha=base_sha, head=docs_push_sha)
+            self.assertIsNone(resolved)
+            self.assertEqual(res, {'launcher': True, 'capture': True, 'changed': True})
+
+            contract_ci = base_ci.replace('timeout-minutes: 25', 'timeout-minutes: 30', 1)
+            (repo / '.github/workflows/ci.yml').write_text(contract_ci, encoding='utf-8')
+            git('commit', '-am', 'workflow push')
+            wf_push_sha = git('rev-parse', 'HEAD')
+            res, resolved = lp.evaluate_git(repo, event_name='push', base_sha=docs_push_sha, head=wf_push_sha)
+            self.assertIsNone(resolved)
+            self.assertEqual(res, {'launcher': True, 'capture': True, 'changed': True})
+            git('reset', '--hard', base_sha)
+
+            # Real Git PR lifecycle (creation, modification, deletion, rename-out-of-gate) for:
+            # - launcher input (scenarios/native-launcher.mjs)
+            # - capture input (extension/capture.js)
+            # - .npmrc and npm-shrinkwrap.json
+            # - package.json installation lifecycle hook (postinstall)
+            def assert_pr_commit(commit_base, expected):
+                head_sha = git('rev-parse', 'HEAD')
+                actual, actual_base = lp.evaluate_git(
+                    repo, event_name='pull_request', base_sha=commit_base, head=head_sha
+                )
+                self.assertEqual(actual_base, commit_base)
+                self.assertEqual(actual, expected)
+
+            for gated_path, moved_path, expected in (
+                (
+                    'conformance/live-folder/new-case.json',
+                    'docs-untracked-case.txt',
+                    {'launcher': True, 'capture': False, 'changed': True},
+                ),
+                (
+                    '.npmrc',
+                    'npmrc.disabled',
+                    {'launcher': False, 'capture': True, 'changed': True},
+                ),
+                (
+                    'npm-shrinkwrap.json',
+                    'shrinkwrap.disabled',
+                    {'launcher': False, 'capture': True, 'changed': True},
+                ),
+            ):
+                with self.subTest(git_lifecycle=gated_path):
+                    git('checkout', '-B', 'case', base_sha)
+                    target = repo / gated_path
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    # 1. Creation
+                    target.write_text('{"v": 1}\n', encoding='utf-8')
+                    git('add', gated_path)
+                    git('commit', '-m', f'create {gated_path}')
+                    created_sha = git('rev-parse', 'HEAD')
+                    assert_pr_commit(base_sha, expected)
+                    # 2. Modification
+                    target.write_text('{"v": 2}\n', encoding='utf-8')
+                    git('commit', '-am', f'modify {gated_path}')
+                    modified_sha = git('rev-parse', 'HEAD')
+                    assert_pr_commit(created_sha, expected)
+                    # 3. Rename out of gate (--no-renames -z must still report the removed gated source path!)
+                    git('mv', gated_path, moved_path)
+                    git('commit', '-m', f'rename {gated_path} -> {moved_path}')
+                    assert_pr_commit(modified_sha, expected)
+                    # 4. Deletion
+                    git('checkout', '-B', 'case-del', modified_sha)
+                    git('rm', gated_path)
+                    git('commit', '-m', f'delete {gated_path}')
+                    assert_pr_commit(modified_sha, expected)
+
+            # Rename-out-of-gate and deletion on existing tracked launcher and capture inputs.
+            for existing_path, moved_path, expected in (
+                (
+                    'scenarios/native-launcher.mjs',
+                    'scenarios/untracked-helper.mjs',
+                    {'launcher': True, 'capture': False, 'changed': True},
+                ),
+                (
+                    'extension/capture.js',
+                    'extension/capture-moved.js',
+                    {'launcher': False, 'capture': True, 'changed': True},
+                ),
+            ):
+                with self.subTest(rename_existing=existing_path):
+                    git('checkout', '-B', 'case-existing', base_sha)
+                    (repo / existing_path).write_text('// modified\n', encoding='utf-8')
+                    git('commit', '-am', f'modify {existing_path}')
+                    assert_pr_commit(base_sha, expected)
+
+                    git('checkout', '-B', 'case-rename', base_sha)
+                    git('mv', existing_path, moved_path)
+                    git('commit', '-m', f'rename {existing_path} -> {moved_path}')
+                    assert_pr_commit(base_sha, expected)
+
+                    git('checkout', '-B', 'case-delete', base_sha)
+                    git('rm', existing_path)
+                    git('commit', '-m', f'delete {existing_path}')
+                    assert_pr_commit(base_sha, expected)
+
+            # Real Git PR lifecycle for package.json installation lifecycle hook (postinstall) + rename-out + delete.
+            git('checkout', '-B', 'pkg-hook', base_sha)
+            pkg_obj = json.loads((repo / 'package.json').read_text(encoding='utf-8'))
+            pkg_obj['scripts']['postinstall'] = 'node -e "process.exit(0)"'
+            (repo / 'package.json').write_text(json.dumps(pkg_obj, indent=2) + '\n', encoding='utf-8')
+            git('commit', '-am', 'add postinstall hook')
+            hook_sha = git('rev-parse', 'HEAD')
+            assert_pr_commit(base_sha, {'launcher': False, 'capture': True, 'changed': True})
+
+            pkg_obj['scripts']['postinstall'] = 'node -e "console.log(1)"'
+            (repo / 'package.json').write_text(json.dumps(pkg_obj, indent=2) + '\n', encoding='utf-8')
+            git('commit', '-am', 'modify postinstall hook')
+            assert_pr_commit(hook_sha, {'launcher': False, 'capture': True, 'changed': True})
+
+            git('checkout', '-B', 'pkg-rename', base_sha)
+            git('mv', 'package.json', 'package.json.disabled')
+            git('commit', '-m', 'rename package.json out of gate')
+            assert_pr_commit(base_sha, {'launcher': True, 'capture': True, 'changed': True})
+
+            git('checkout', '-B', 'pkg-delete', base_sha)
+            git('rm', 'package.json')
+            git('commit', '-m', 'delete package.json')
+            assert_pr_commit(base_sha, {'launcher': True, 'capture': True, 'changed': True})
 
             # PR branch changes only README.md, while main advances on extension/capture.js;
             # GitHub's synthetic PR merge commit (HEAD^1=main_tip, HEAD^2=pr_tip) must NOT
             # false-trigger launcher-macos on main's already-landed capture.js change.
+            git('checkout', 'main')
             git('checkout', '-b', 'pr')
             (repo / 'README.md').write_text('v2 from pr\n', encoding='utf-8')
             git('commit', '-am', 'docs only')

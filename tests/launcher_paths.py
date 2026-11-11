@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Classify whether a diff requires launcher-macos unit tests and/or the D68.1 capture clock check."""
+"""Classify whether a PR diff requires launcher-macos unit tests and/or the D68.1 capture clock check."""
 
 from __future__ import annotations
 
@@ -33,8 +33,10 @@ LAUNCHER_FILES = frozenset(
 
 CAPTURE_FILES = frozenset(
     {
+        '.npmrc',
         'extension/capture.js',
         'extension/pcm-worklet.js',
+        'npm-shrinkwrap.json',
         'package-lock.json',
         'tests/capture-real-time.mjs',
         'tests/launcher_paths.py',
@@ -74,6 +76,20 @@ def workflow_gate_or_macos_changed(base_text: str | None, head_text: str | None)
     return False
 
 
+def _is_ordinary_test_script(name: str) -> bool:
+    """Only `test` and `test:*` scripts are exempt; npm lifecycle hooks (preinstall, postinstall, prepare, etc.) run during `npm ci`."""
+    return name == 'test' or name.startswith('test:')
+
+
+def _non_test_scripts(pkg: dict[str, object]) -> object:
+    if 'scripts' not in pkg:
+        return {}
+    scripts = pkg['scripts']
+    if not isinstance(scripts, dict):
+        return ('__invalid_scripts__', scripts)
+    return {name: cmd for name, cmd in scripts.items() if not _is_ordinary_test_script(name)}
+
+
 def package_json_effects(base_text: str | None, head_text: str | None) -> tuple[bool, bool]:
     """Return (launcher_needed, capture_needed) for a package.json change."""
     if base_text is None or head_text is None:
@@ -88,7 +104,8 @@ def package_json_effects(base_text: str | None, head_text: str | None) -> tuple[
 
     base_non_scripts = {k: v for k, v in base_pkg.items() if k != 'scripts'}
     head_non_scripts = {k: v for k, v in head_pkg.items() if k != 'scripts'}
-    capture_needed = base_non_scripts != head_non_scripts
+    lifecycle_scripts_changed = _non_test_scripts(base_pkg) != _non_test_scripts(head_pkg)
+    capture_needed = (base_non_scripts != head_non_scripts) or lifecycle_scripts_changed
 
     base_launcher = {k: base_pkg.get(k) for k in LAUNCHER_PACKAGE_KEYS if k in base_pkg}
     head_launcher = {k: head_pkg.get(k) for k in LAUNCHER_PACKAGE_KEYS if k in head_pkg}
@@ -109,7 +126,7 @@ def classify_changes(
             launcher = True
         if path.startswith('conformance/live-folder/') and not path.endswith('.md'):
             launcher = True
-        if path in CAPTURE_FILES:
+        if path in CAPTURE_FILES or path.endswith('/.npmrc'):
             capture = True
         if path == 'package.json':
             pkg_launcher, pkg_capture = package_json_effects(
@@ -149,18 +166,17 @@ def git_stdout(repo: pathlib.Path, *args: str) -> str | None:
     return proc.stdout if proc.returncode == 0 else None
 
 
-def resolve_compare_base(repo: pathlib.Path, event_name: str, base_sha: str, head: str = 'HEAD') -> str | None:
-    if event_name == 'pull_request' and git_ok(repo, 'rev-parse', '--verify', '--quiet', f'{head}^2^{{commit}}'):
+def resolve_compare_base(repo: pathlib.Path, base_sha: str, head: str = 'HEAD') -> str | None:
+    if git_ok(repo, 'rev-parse', '--verify', '--quiet', f'{head}^2^{{commit}}'):
         parent = git_stdout(repo, 'rev-parse', '--verify', f'{head}^1^{{commit}}')
         if parent:
             return parent.strip()
     if not base_sha or set(base_sha) == {'0'} or not git_ok(repo, 'cat-file', '-e', f'{base_sha}^{{commit}}'):
         return None
-    if event_name == 'pull_request':
-        merged = git_stdout(repo, 'merge-base', base_sha, head)
-        if merged:
-            return merged.strip()
-    return base_sha
+    merged = git_stdout(repo, 'merge-base', base_sha, head)
+    if merged:
+        return merged.strip()
+    return None
 
 
 def evaluate_git(
@@ -170,13 +186,16 @@ def evaluate_git(
     base_sha: str,
     head: str = 'HEAD',
 ) -> tuple[dict[str, bool], str | None]:
-    compare_base = resolve_compare_base(repo, event_name, base_sha, head)
+    # Pushes to main (and any non-PR event) always run full macOS coverage before inspecting diffs.
+    if event_name != 'pull_request':
+        return {'launcher': True, 'capture': True, 'changed': True}, None
+    compare_base = resolve_compare_base(repo, base_sha, head)
     if compare_base is None:
         return {'launcher': True, 'capture': True, 'changed': True}, None
-    diff_out = git_stdout(repo, 'diff', '--name-only', compare_base, head)
+    diff_out = git_stdout(repo, 'diff', '--no-renames', '--name-only', '-z', compare_base, head)
     if diff_out is None:
         return {'launcher': True, 'capture': True, 'changed': True}, None
-    changed_files = [line for line in diff_out.splitlines() if line]
+    changed_files = [entry for entry in diff_out.split('\0') if entry]
     result = classify_changes(
         changed_files,
         read_rev_file=lambda rev, rel: git_stdout(repo, 'show', f'{rev}:{rel}'),
@@ -206,10 +225,11 @@ def main(argv: list[str] | None = None) -> int:
         args.github_output.parent.mkdir(parents=True, exist_ok=True)
         with args.github_output.open('a', encoding='utf-8') as handle:
             handle.write('\n'.join(lines) + '\n')
+    base_label = f'event:{args.event_name or "non-pr"}' if args.event_name != 'pull_request' else (compare_base or 'unknown')
     print(
         f"launcher-macos: changed={str(result['changed']).lower()} "
         f"(launcher={str(result['launcher']).lower()}, capture={str(result['capture']).lower()}, "
-        f"base={compare_base or 'unknown'})"
+        f'base={base_label})'
     )
     return 0
 
