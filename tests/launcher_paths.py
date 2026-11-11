@@ -34,6 +34,7 @@ LAUNCHER_FILES = frozenset(
 CAPTURE_FILES = frozenset(
     {
         '.npmrc',
+        'binding.gyp',
         'extension/capture.js',
         'extension/pcm-worklet.js',
         'npm-shrinkwrap.json',

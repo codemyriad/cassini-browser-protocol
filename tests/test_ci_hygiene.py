@@ -272,7 +272,7 @@ class CiHygieneTests(unittest.TestCase):
 
         # Capture real-time and npm install inputs trigger capture only, never launcher unit tests.
         for rel in ('extension/capture.js', 'extension/pcm-worklet.js', 'tests/capture-real-time.mjs',
-                    'package-lock.json', 'npm-shrinkwrap.json', '.npmrc', 'sub/.npmrc'):
+                    'package-lock.json', 'npm-shrinkwrap.json', 'binding.gyp', '.npmrc', 'sub/.npmrc'):
             with self.subTest(capture_input=rel):
                 self.assertEqual(
                     lp.classify_changes([rel]),
@@ -435,7 +435,7 @@ class CiHygieneTests(unittest.TestCase):
             # Real Git PR lifecycle (creation, modification, deletion, rename-out-of-gate) for:
             # - launcher input (scenarios/native-launcher.mjs)
             # - capture input (extension/capture.js)
-            # - .npmrc and npm-shrinkwrap.json
+            # - .npmrc, npm-shrinkwrap.json, and binding.gyp
             # - package.json installation lifecycle hook (postinstall)
             def assert_pr_commit(commit_base, expected):
                 head_sha = git('rev-parse', 'HEAD')
@@ -459,6 +459,11 @@ class CiHygieneTests(unittest.TestCase):
                 (
                     'npm-shrinkwrap.json',
                     'shrinkwrap.disabled',
+                    {'launcher': False, 'capture': True, 'changed': True},
+                ),
+                (
+                    'binding.gyp',
+                    'binding.gyp.disabled',
                     {'launcher': False, 'capture': True, 'changed': True},
                 ),
             ):
