@@ -1,20 +1,27 @@
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { eventValue } from '../tests/support/event-value.mjs';
 
 export async function stopRecordingWorker(context, meetingPage, extensionId) {
   const session = await context.newCDPSession(meetingPage);
+  const versionEvent = 'ServiceWorker.workerVersionUpdated';
   let versions = [];
-  session.on('ServiceWorker.workerVersionUpdated', event => { versions = event.versions; });
-  await session.send('ServiceWorker.enable');
-  const deadline = Date.now() + 5000;
-  let worker;
-  while (!(worker = versions.find(item => item.scriptURL === `chrome-extension://${extensionId}/background.js` && item.runningStatus === 'running'))) {
-    assert.ok(Date.now() < deadline, 'recording worker did not appear in CDP');
-    await new Promise(resolve => setTimeout(resolve, 25));
+  const remember = event => { versions = event.versions; };
+  // Enable can publish the running version before its command reply.
+  session.on(versionEvent, remember);
+  try {
+    await session.send('ServiceWorker.enable');
+    const worker = await eventValue(changed => {
+      session.on(versionEvent, changed);
+      return () => session.off(versionEvent, changed);
+    }, () => versions.find(item => item.scriptURL === `chrome-extension://${extensionId}/background.js` &&
+      item.runningStatus === 'running'), { label: 'recording worker in CDP', timeout: 5000 });
+    await session.send('ServiceWorker.stopWorker', { versionId: worker.versionId });
+  } finally {
+    session.off(versionEvent, remember);
+    await session.detach();
   }
-  await session.send('ServiceWorker.stopWorker', { versionId: worker.versionId });
-  await session.detach();
 }
 
 // Shared by both app adapters; the meeting page must already have an audible generated source.
