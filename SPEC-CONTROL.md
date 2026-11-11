@@ -245,13 +245,16 @@ claims that PCM capture survived termination. The status adds an `interrupted`
 list of those saved statuses after recovery; `sessions` still contains only live captures.
 
 Independent starts may include `captureLocal` (default true) and `microphone`
-(default true). `captureLocal: false` excludes page sender/microphone-preview
-sources. Apps that supply their own per-session microphone copy set it false,
-so that copy is not duplicated by the page sender. The background passes the
+(default true). Separated WebRTC meeting starts keep `captureLocal: true` so
+`"Me"` is captured from the call's own WebRTC sender (`kind: "local"`,
+respecting the user's in-call microphone choice and mute state, while excluding
+`getDisplayMedia` screen- or tab-share audio since extension 0.2.27) rather than opening a raw OS
+microphone tap. `captureLocal: false` excludes page sender/microphone-preview
+sources for callers that explicitly omit page senders. The background passes the
 microphone choice to the native host in its start message, along with
 `independent: true`, `captureId` (the background token, an opaque string of
 at most128 characters) and `timelineOriginMs` (its Date.now() session origin), which
-lets the platform's own microphone share the source timeline. These optional
+lets the platform's own inputs share the source timeline. These optional
 start fields do not change the version1 PCM transport; legacy hosts ignore them.
 No page controls the choice or supplies an output path. Invalid option types are
 refused before any audio side effect.
@@ -467,7 +470,7 @@ how often an app may ask to resume a system/lost fallback (once per loss and
 control connection, D52.5) is under "Control heartbeat" below.
 
 ```json
-{"type":"command","requestId":"join-stand-in","action":"start","mode":"tracks","tabId":2,"independent":true,"callGeneration":"call-A","captureLocal":false,"keepOnNavigation":true,"resumeCapture":{"captureId":"stand-in-F","timelineOriginMs":1793500000000,"lostAtMs":0}}
+{"type":"command","requestId":"join-stand-in","action":"start","mode":"tracks","tabId":2,"independent":true,"callGeneration":"call-A","captureLocal":true,"keepOnNavigation":true,"resumeCapture":{"captureId":"stand-in-F","timelineOriginMs":1793500000000,"lostAtMs":0}}
 ```
 
 `keepOnNavigation:true` (page-state-v1) applies to a resume Start as to any
