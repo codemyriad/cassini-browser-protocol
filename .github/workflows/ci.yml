@@ -56,8 +56,9 @@ jobs:
           npx playwright install chromium
           node tests/capture-real-time.mjs
   contract:
-    # CM_RUNNER=hetzner moves the job to the cm-hetzner runners; any other value keeps ubuntu-24.04.
-    runs-on: ${{ vars.CM_RUNNER == 'hetzner' && fromJSON('["self-hosted","cm-hetzner"]') || 'ubuntu-24.04' }}
+    # CM_RUNNER=hetzner moves trusted runs (push, schedule, workflow_dispatch, or same-repo PR) to
+    # cm-hetzner; any other value, fork PR, or unallowlisted event keeps ubuntu-24.04.
+    runs-on: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CM_RUNNER == 'hetzner' && fromJSON('["self-hosted","cm-hetzner"]') || 'ubuntu-24.04' }}
     # p95 3.2 min over 178 green runs (2026-10-29..11-04), slowest 6.1 min: 10 min is about 3x p95.
     timeout-minutes: 10
     steps:
