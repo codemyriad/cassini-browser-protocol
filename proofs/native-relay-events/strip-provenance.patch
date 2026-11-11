@@ -1,0 +1,7 @@
+--- a/extension/background.js
++++ b/extension/background.js
+@@ -612,3 +612,3 @@
+   if (packet?.type !== "track") return packet;
+-  const { documentGeneration: _ignored, ...track } = packet;
++  const { documentGeneration: _ignored, labelSource: _dropped, ...track } = packet;
+   return validDocument(documentGeneration) ? { ...track, documentGeneration } : track;
