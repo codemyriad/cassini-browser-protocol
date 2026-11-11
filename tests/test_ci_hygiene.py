@@ -4,6 +4,7 @@ import json
 import pathlib
 import re
 import unittest
+from types import SimpleNamespace
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 WORKFLOWS = ROOT / '.github/workflows'
@@ -16,13 +17,43 @@ def jobs(workflow):
             yield match.group(1), block
 
 
-# CM_RUNNER moves a job to the cm-hetzner runners only when it is exactly "hetzner". The labels are a
-# constant and the variable is never parsed, so any other value (unset, empty, a typo, JSON) keeps the
-# GitHub-hosted image instead of failing the expression or queueing for labels no runner has.
+# CM_RUNNER moves a job to the cm-hetzner runners only when it is exactly "hetzner" and the event
+# is in the explicit trusted allow-list (push, schedule, workflow_dispatch, or a same-repo
+# pull_request). The labels are a constant and the variable is never parsed, so any other value,
+# any fork PR (including deleted forks), or any unallowlisted event keeps ubuntu-24.04.
 CM_HETZNER = ['self-hosted', 'cm-hetzner']
+EVENT_ALLOWLIST = (
+    r"\(github\.event_name == 'push' \|\| github\.event_name == 'schedule' \|\| "
+    r"github\.event_name == 'workflow_dispatch' \|\| "
+    r"\(github\.event_name == 'pull_request' && "
+    r"github\.event\.pull_request\.head\.repo\.full_name == github\.repository\)\)"
+)
 RUNNER_SELECTOR = re.compile(
-    r"^\$\{\{ vars\.CM_RUNNER == 'hetzner' && "
+    rf"^\$\{{\{{ {EVENT_ALLOWLIST} && vars\.CM_RUNNER == 'hetzner' && "
     r"fromJSON\('(?P<labels>\[\"self-hosted\",\"cm-hetzner\"\])'\) \|\| '(?P<default>ubuntu-24\.04)' \}\}$")
+
+
+class _CIString(str):
+    """GitHub Actions string comparison (`==` / `!=`) is case-insensitive."""
+
+    def __eq__(self, other):
+        return isinstance(other, str) and self.casefold() == other.casefold()
+
+    def __ne__(self, other):
+        return not self.__eq__(other)
+
+
+class _NullContext:
+    """GitHub Actions dereferences missing/null context properties to null instead of raising."""
+
+    def __getattr__(self, _name):
+        return self
+
+    def __bool__(self):
+        return False
+
+
+_NULL = _NullContext()
 
 
 def runs_on_values():
@@ -39,14 +70,28 @@ def runs_on_values():
                 yield workflow.name, '\n'.join(v for v in value if v)
 
 
-def select_runner(runs_on, variables):
-    """What GitHub picks for runs-on given the repository variables: a model of the expression
-    above (`==` compares strings case-insensitively; an unset variable reads as '')."""
-    match = RUNNER_SELECTOR.match(runs_on)
-    if match is None:
+def select_runner(
+    runs_on,
+    variables,
+    *,
+    event_name='push',
+    head_repo='codemyriad/cassini-browser-protocol',
+    repository='codemyriad/cassini-browser-protocol',
+):
+    """Evaluate a job's runs-on expression under GitHub Actions event, repo, and vars contexts."""
+    if not (runs_on.startswith('${{') and runs_on.endswith('}}')):
         return runs_on
-    on = (variables.get('CM_RUNNER') or '').casefold() == 'hetzner'
-    return json.loads(match['labels']) if on else match['default']
+    expr = runs_on.removeprefix('${{').removesuffix('}}').strip()
+    expr = expr.replace('&&', ' and ').replace('||', ' or ')
+    repo_obj = _NULL if head_repo is None else SimpleNamespace(full_name=_CIString(head_repo))
+    event = SimpleNamespace(pull_request=SimpleNamespace(head=SimpleNamespace(repo=repo_obj)))
+    github = SimpleNamespace(
+        event_name=_CIString(event_name),
+        repository=_CIString(repository),
+        event=event if event_name in ('pull_request', 'pull_request_target') else _NULL,
+    )
+    vars_ns = SimpleNamespace(CM_RUNNER=_CIString(variables.get('CM_RUNNER') or ''))
+    return eval(expr, {'__builtins__': {}}, {'github': github, 'vars': vars_ns, 'fromJSON': json.loads})
 
 
 class CiHygieneTests(unittest.TestCase):
@@ -98,18 +143,61 @@ class CiHygieneTests(unittest.TestCase):
             with self.subTest(workflow=name):
                 self.assertTrue(hosted.match(value) or RUNNER_SELECTOR.match(value), value)
 
-    def test_runner_selection_falls_back_to_github_for_every_other_value(self):
+    def test_runner_selection_falls_back_to_github_for_every_other_value_and_for_fork_prs(self):
         for name, value in runs_on_values():
             if 'vars.' not in value:
                 continue
-            for setting in (None, '', ' ', 'garbage{', '["self-hosted","cm-hetzner"]',
-                            '["self-hosted","cm-hetzne"]', 'hetzner-typo', 'true'):
-                variables = {} if setting is None else {'CM_RUNNER': setting}
-                with self.subTest(workflow=name, value=setting):
-                    self.assertEqual(select_runner(value, variables), 'ubuntu-24.04')
-            for setting in ('hetzner', 'Hetzner'):
-                with self.subTest(workflow=name, value=setting):
-                    self.assertEqual(select_runner(value, {'CM_RUNNER': setting}), CM_HETZNER)
+            for event_name, head_repo in (
+                ('push', None),
+                ('schedule', None),
+                ('workflow_dispatch', None),
+                ('pull_request', 'codemyriad/cassini-browser-protocol'),
+            ):
+                for setting in (None, '', ' ', 'garbage{', '["self-hosted","cm-hetzner"]',
+                                '["self-hosted","cm-hetzne"]', 'hetzner-typo', 'true', 'github'):
+                    variables = {} if setting is None else {'CM_RUNNER': setting}
+                    with self.subTest(workflow=name, event=event_name, value=setting):
+                        self.assertEqual(
+                            select_runner(value, variables, event_name=event_name, head_repo=head_repo),
+                            'ubuntu-24.04',
+                        )
+                for setting in ('hetzner', 'Hetzner'):
+                    with self.subTest(workflow=name, event=event_name, value=setting):
+                        self.assertEqual(
+                            select_runner(value, {'CM_RUNNER': setting}, event_name=event_name, head_repo=head_repo),
+                            CM_HETZNER,
+                        )
+            for untrusted_head in ('fork/cassini-browser-protocol', 'codemyriad/other-repo', '', None):
+                with self.subTest(workflow=name, untrusted_head=untrusted_head):
+                    self.assertEqual(
+                        select_runner(
+                            value,
+                            {'CM_RUNNER': 'hetzner'},
+                            event_name='pull_request',
+                            head_repo=untrusted_head,
+                        ),
+                        'ubuntu-24.04',
+                    )
+            for prohibited_event in (
+                'pull_request_target',
+                'workflow_run',
+                'issue_comment',
+                'pull_request_review',
+                'pull_request_review_comment',
+                'discussion_comment',
+                'release',
+                'merge_group',
+            ):
+                with self.subTest(workflow=name, event=prohibited_event):
+                    self.assertEqual(
+                        select_runner(
+                            value,
+                            {'CM_RUNNER': 'hetzner'},
+                            event_name=prohibited_event,
+                            head_repo='codemyriad/cassini-browser-protocol',
+                        ),
+                        'ubuntu-24.04',
+                    )
 
 
 if __name__ == '__main__':
