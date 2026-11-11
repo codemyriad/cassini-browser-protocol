@@ -1,13 +1,25 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 """D66: one CI run per PR push, superseded PR runs cancelled, main never cancelled, every job bounded."""
+import importlib.util
 import json
+import os
 import pathlib
 import re
+import subprocess
+import sys
+import tempfile
 import unittest
 from types import SimpleNamespace
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 WORKFLOWS = ROOT / '.github/workflows'
+
+
+def _load_launcher_paths():
+    spec = importlib.util.spec_from_file_location('launcher_paths', ROOT / 'tests/launcher_paths.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
 
 
 def jobs(workflow):
@@ -198,6 +210,463 @@ class CiHygieneTests(unittest.TestCase):
                         ),
                         'ubuntu-24.04',
                     )
+
+    def test_launcher_macos_workflow_gates_each_step_on_its_own_output(self):
+        ci_jobs = dict(jobs(WORKFLOWS / 'ci.yml'))
+        gate = ci_jobs['launcher-paths']
+        macos = ci_jobs['launcher-macos']
+        for out in ('changed', 'launcher', 'capture'):
+            self.assertIn(f'{out}: ${{{{ steps.paths.outputs.{out} }}}}', gate)
+        self.assertIn('python3 tests/launcher_paths.py --github-output "$GITHUB_OUTPUT"', gate)
+        self.assertIn("if: needs.launcher-paths.outputs.changed == 'true'", macos)
+        self.assertIn(
+            "- name: Live-folder driver and control relay unit tests on macOS\n"
+            "        if: needs.launcher-paths.outputs.launcher == 'true'\n"
+            "        run: node --test tests/live-folder-driver.test.mjs tests/control-relay.test.mjs",
+            macos,
+        )
+        self.assertIn(
+            "- name: A capture over 30 s keeps real time (D68.1)\n"
+            "        if: needs.launcher-paths.outputs.capture == 'true'\n"
+            "        run: |\n"
+            "          npm ci",
+            macos,
+        )
+
+    def test_launcher_paths_covers_every_transitive_import_and_skips_unrelated_changes(self):
+        lp = _load_launcher_paths()
+
+        # Walk live JS relative imports of both macOS test entrypoints so new imports cannot slip past.
+        queue = [ROOT / 'tests/live-folder-driver.test.mjs', ROOT / 'tests/control-relay.test.mjs']
+        seen_launcher_js = set()
+        while queue:
+            cur = queue.pop(0).resolve()
+            rel = cur.relative_to(ROOT).as_posix()
+            if rel in seen_launcher_js:
+                continue
+            seen_launcher_js.add(rel)
+            for match in re.finditer(r"""from\s+['"](\.[^'"]+)['"]""", cur.read_text(encoding='utf-8')):
+                target = (cur.parent / match.group(1)).resolve()
+                queue.append(target)
+        for rel in sorted(seen_launcher_js):
+            with self.subTest(imported=rel):
+                self.assertEqual(
+                    lp.classify_changes([rel]),
+                    {'launcher': True, 'capture': False, 'changed': True},
+                )
+
+        # Live-folder oracle files (except markdown docs) trigger launcher only, never 45s capture-real-time.
+        for rel in ('conformance/live-folder/check.py', 'conformance/live-folder/make.py',
+                    'conformance/live-folder/scenario.json', 'conformance/multistream/corpus.json',
+                    'conformance/check-session-events.py', 'conformance/gaps/gaps.py', 'conformance/pcm.py',
+                    'schemas/session.schema.json'):
+            with self.subTest(oracle_input=rel):
+                self.assertEqual(
+                    lp.classify_changes([rel]),
+                    {'launcher': True, 'capture': False, 'changed': True},
+                )
+        self.assertEqual(
+            lp.classify_changes(['conformance/live-folder/README.md', 'TESTING.md', 'SHA256SUMS']),
+            {'launcher': False, 'capture': False, 'changed': False},
+        )
+
+        # Capture real-time and npm install inputs trigger capture only, never launcher unit tests.
+        for rel in ('extension/capture.js', 'extension/pcm-worklet.js', 'tests/capture-real-time.mjs',
+                    'package-lock.json', 'npm-shrinkwrap.json', 'binding.gyp', '.npmrc', 'sub/.npmrc'):
+            with self.subTest(capture_input=rel):
+                self.assertEqual(
+                    lp.classify_changes([rel]),
+                    {'launcher': False, 'capture': True, 'changed': True},
+                )
+
+        # package.json ordinary test-script edits (create, modify, delete) skip launcher-macos completely,
+        # whereas npm lifecycle hooks (preinstall, install, postinstall, prepare) and dependency/type
+        # edits trigger the affected macOS step(s).
+        base_pkg = (ROOT / 'package.json').read_text(encoding='utf-8')
+        scripts_modified = json.loads(base_pkg)
+        scripts_modified['scripts']['test'] += ' && node tests/new-linux-test.mjs'
+        scripts_created = json.loads(base_pkg)
+        scripts_created['scripts']['test:bfcache'] = 'node tests/bfcache.mjs'
+        scripts_deleted = json.loads(base_pkg)
+        del scripts_deleted['scripts']['test:signals']
+        for label, candidate in (
+            ('modify-test', scripts_modified),
+            ('create-test-colon', scripts_created),
+            ('delete-test-colon', scripts_deleted),
+        ):
+            with self.subTest(script_case=label):
+                self.assertEqual(
+                    lp.classify_changes(
+                        ['package.json', 'tests/bfcache.mjs', 'SHA256SUMS'],
+                        read_rev_file=lambda rev, _p, c=candidate: base_pkg if rev == 'B' else json.dumps(c),
+                        base_rev='B',
+                        head_rev='H',
+                    ),
+                    {'launcher': False, 'capture': False, 'changed': False},
+                )
+
+        for hook in ('preinstall', 'install', 'postinstall', 'preprepare', 'prepare', 'postprepare', 'prepublish'):
+            with_hook = json.loads(base_pkg)
+            with_hook['scripts'][hook] = 'node scripts/hook-v1.mjs'
+            modified_hook = json.loads(base_pkg)
+            modified_hook['scripts'][hook] = 'node scripts/hook-v2.mjs'
+            with self.subTest(hook=hook, op='create'):
+                self.assertEqual(
+                    lp.classify_changes(
+                        ['package.json'],
+                        read_rev_file=lambda rev, _p, wh=with_hook: base_pkg if rev == 'B' else json.dumps(wh),
+                        base_rev='B',
+                        head_rev='H',
+                    ),
+                    {'launcher': False, 'capture': True, 'changed': True},
+                )
+            with self.subTest(hook=hook, op='modify'):
+                self.assertEqual(
+                    lp.classify_changes(
+                        ['package.json'],
+                        read_rev_file=lambda rev, _p, wh=with_hook, mh=modified_hook: (
+                            json.dumps(wh) if rev == 'B' else json.dumps(mh)
+                        ),
+                        base_rev='B',
+                        head_rev='H',
+                    ),
+                    {'launcher': False, 'capture': True, 'changed': True},
+                )
+            with self.subTest(hook=hook, op='delete'):
+                self.assertEqual(
+                    lp.classify_changes(
+                        ['package.json'],
+                        read_rev_file=lambda rev, _p, wh=with_hook: json.dumps(wh) if rev == 'B' else base_pkg,
+                        base_rev='B',
+                        head_rev='H',
+                    ),
+                    {'launcher': False, 'capture': True, 'changed': True},
+                )
+
+        deps_pkg = json.loads(base_pkg)
+        deps_pkg['devDependencies']['playwright'] = '1.99.0'
+        self.assertEqual(
+            lp.classify_changes(
+                ['package.json'],
+                read_rev_file=lambda rev, _p: base_pkg if rev == 'B' else json.dumps(deps_pkg),
+                base_rev='B',
+                head_rev='H',
+            ),
+            {'launcher': False, 'capture': True, 'changed': True},
+        )
+
+        # Editing contract or nextcloud-talk in ci.yml skips launcher-macos; editing launcher-macos runs both.
+        base_ci = (WORKFLOWS / 'ci.yml').read_text(encoding='utf-8')
+        contract_ci = base_ci.replace('timeout-minutes: 25', 'timeout-minutes: 30', 1)
+        self.assertNotEqual(base_ci, contract_ci)
+        self.assertEqual(
+            lp.classify_changes(
+                ['.github/workflows/ci.yml'],
+                read_rev_file=lambda rev, _p: base_ci if rev == 'B' else contract_ci,
+                base_rev='B',
+                head_rev='H',
+            ),
+            {'launcher': False, 'capture': False, 'changed': False},
+        )
+        macos_ci = base_ci.replace('runs-on: macos-15', 'runs-on: macos-15 # touched', 1)
+        self.assertEqual(
+            lp.classify_changes(
+                ['.github/workflows/ci.yml'],
+                read_rev_file=lambda rev, _p: base_ci if rev == 'B' else macos_ci,
+                base_rev='B',
+                head_rev='H',
+            ),
+            {'launcher': True, 'capture': True, 'changed': True},
+        )
+
+    def test_launcher_paths_git_evaluation_handles_unknown_base_and_synthetic_pr_merges(self):
+        lp = _load_launcher_paths()
+        with tempfile.TemporaryDirectory() as temp:
+            repo = pathlib.Path(temp)
+            env = {
+                **os.environ,
+                'GIT_AUTHOR_NAME': 'Test',
+                'GIT_AUTHOR_EMAIL': 'test@example.invalid',
+                'GIT_COMMITTER_NAME': 'Test',
+                'GIT_COMMITTER_EMAIL': 'test@example.invalid',
+            }
+
+            def git(*args):
+                return subprocess.check_output(
+                    ['git', '-C', str(repo), *args], text=True, stderr=subprocess.DEVNULL, env=env
+                ).strip()
+
+            git('init', '-b', 'main')
+            (repo / 'README.md').write_text('v1\n', encoding='utf-8')
+            (repo / '.github/workflows').mkdir(parents=True)
+            base_ci = (WORKFLOWS / 'ci.yml').read_text(encoding='utf-8')
+            (repo / '.github/workflows/ci.yml').write_text(base_ci, encoding='utf-8')
+            (repo / 'package.json').write_text((ROOT / 'package.json').read_text(encoding='utf-8'), encoding='utf-8')
+            (repo / 'extension').mkdir()
+            (repo / 'extension/capture.js').write_text('// v1\n', encoding='utf-8')
+            (repo / 'scenarios').mkdir()
+            (repo / 'scenarios/native-launcher.mjs').write_text('// launcher v1\n', encoding='utf-8')
+            git('add', '.')
+            git('commit', '-m', 'init')
+            base_sha = git('rev-parse', 'HEAD')
+
+            # Unknown or zero base runs both safely.
+            res, resolved = lp.evaluate_git(repo, event_name='pull_request', base_sha='0' * 40)
+            self.assertIsNone(resolved)
+            self.assertEqual(res, {'launcher': True, 'capture': True, 'changed': True})
+
+            # Pushes to main ALWAYS return all outputs true, even with a known base on docs-only or workflow-only commits.
+            (repo / 'README.md').write_text('docs push on main\n', encoding='utf-8')
+            git('commit', '-am', 'docs push')
+            docs_push_sha = git('rev-parse', 'HEAD')
+            res, resolved = lp.evaluate_git(repo, event_name='push', base_sha=base_sha, head=docs_push_sha)
+            self.assertIsNone(resolved)
+            self.assertEqual(res, {'launcher': True, 'capture': True, 'changed': True})
+
+            contract_ci = base_ci.replace('timeout-minutes: 25', 'timeout-minutes: 30', 1)
+            (repo / '.github/workflows/ci.yml').write_text(contract_ci, encoding='utf-8')
+            git('commit', '-am', 'workflow push')
+            wf_push_sha = git('rev-parse', 'HEAD')
+            res, resolved = lp.evaluate_git(repo, event_name='push', base_sha=docs_push_sha, head=wf_push_sha)
+            self.assertIsNone(resolved)
+            self.assertEqual(res, {'launcher': True, 'capture': True, 'changed': True})
+            git('reset', '--hard', base_sha)
+
+            # Real Git PR lifecycle (creation, modification, deletion, rename-out-of-gate) for:
+            # - launcher input (scenarios/native-launcher.mjs)
+            # - capture input (extension/capture.js)
+            # - .npmrc, npm-shrinkwrap.json, and binding.gyp
+            # - package.json installation lifecycle hook (postinstall)
+            def assert_pr_commit(commit_base, expected):
+                head_sha = git('rev-parse', 'HEAD')
+                actual, actual_base = lp.evaluate_git(
+                    repo, event_name='pull_request', base_sha=commit_base, head=head_sha
+                )
+                self.assertEqual(actual_base, commit_base)
+                self.assertEqual(actual, expected)
+
+            for gated_path, moved_path, expected in (
+                (
+                    'conformance/live-folder/new-case.json',
+                    'docs-untracked-case.txt',
+                    {'launcher': True, 'capture': False, 'changed': True},
+                ),
+                (
+                    '.npmrc',
+                    'npmrc.disabled',
+                    {'launcher': False, 'capture': True, 'changed': True},
+                ),
+                (
+                    'npm-shrinkwrap.json',
+                    'shrinkwrap.disabled',
+                    {'launcher': False, 'capture': True, 'changed': True},
+                ),
+                (
+                    'binding.gyp',
+                    'binding.gyp.disabled',
+                    {'launcher': False, 'capture': True, 'changed': True},
+                ),
+            ):
+                with self.subTest(git_lifecycle=gated_path):
+                    git('checkout', '-B', 'case', base_sha)
+                    target = repo / gated_path
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    # 1. Creation
+                    target.write_text('{"v": 1}\n', encoding='utf-8')
+                    git('add', gated_path)
+                    git('commit', '-m', f'create {gated_path}')
+                    created_sha = git('rev-parse', 'HEAD')
+                    assert_pr_commit(base_sha, expected)
+                    # 2. Modification
+                    target.write_text('{"v": 2}\n', encoding='utf-8')
+                    git('commit', '-am', f'modify {gated_path}')
+                    modified_sha = git('rev-parse', 'HEAD')
+                    assert_pr_commit(created_sha, expected)
+                    # 3. Rename out of gate (--no-renames -z must still report the removed gated source path!)
+                    git('mv', gated_path, moved_path)
+                    git('commit', '-m', f'rename {gated_path} -> {moved_path}')
+                    assert_pr_commit(modified_sha, expected)
+                    # 4. Deletion
+                    git('checkout', '-B', 'case-del', modified_sha)
+                    git('rm', gated_path)
+                    git('commit', '-m', f'delete {gated_path}')
+                    assert_pr_commit(modified_sha, expected)
+
+            # Rename-out-of-gate and deletion on existing tracked launcher and capture inputs.
+            for existing_path, moved_path, expected in (
+                (
+                    'scenarios/native-launcher.mjs',
+                    'scenarios/untracked-helper.mjs',
+                    {'launcher': True, 'capture': False, 'changed': True},
+                ),
+                (
+                    'extension/capture.js',
+                    'extension/capture-moved.js',
+                    {'launcher': False, 'capture': True, 'changed': True},
+                ),
+            ):
+                with self.subTest(rename_existing=existing_path):
+                    git('checkout', '-B', 'case-existing', base_sha)
+                    (repo / existing_path).write_text('// modified\n', encoding='utf-8')
+                    git('commit', '-am', f'modify {existing_path}')
+                    assert_pr_commit(base_sha, expected)
+
+                    git('checkout', '-B', 'case-rename', base_sha)
+                    git('mv', existing_path, moved_path)
+                    git('commit', '-m', f'rename {existing_path} -> {moved_path}')
+                    assert_pr_commit(base_sha, expected)
+
+                    git('checkout', '-B', 'case-delete', base_sha)
+                    git('rm', existing_path)
+                    git('commit', '-m', f'delete {existing_path}')
+                    assert_pr_commit(base_sha, expected)
+
+            # Real Git PR lifecycle for package.json installation lifecycle hook (postinstall) + rename-out + delete.
+            git('checkout', '-B', 'pkg-hook', base_sha)
+            pkg_obj = json.loads((repo / 'package.json').read_text(encoding='utf-8'))
+            pkg_obj['scripts']['postinstall'] = 'node -e "process.exit(0)"'
+            (repo / 'package.json').write_text(json.dumps(pkg_obj, indent=2) + '\n', encoding='utf-8')
+            git('commit', '-am', 'add postinstall hook')
+            hook_sha = git('rev-parse', 'HEAD')
+            assert_pr_commit(base_sha, {'launcher': False, 'capture': True, 'changed': True})
+
+            pkg_obj['scripts']['postinstall'] = 'node -e "console.log(1)"'
+            (repo / 'package.json').write_text(json.dumps(pkg_obj, indent=2) + '\n', encoding='utf-8')
+            git('commit', '-am', 'modify postinstall hook')
+            assert_pr_commit(hook_sha, {'launcher': False, 'capture': True, 'changed': True})
+
+            git('checkout', '-B', 'pkg-rename', base_sha)
+            git('mv', 'package.json', 'package.json.disabled')
+            git('commit', '-m', 'rename package.json out of gate')
+            assert_pr_commit(base_sha, {'launcher': True, 'capture': True, 'changed': True})
+
+            git('checkout', '-B', 'pkg-delete', base_sha)
+            git('rm', 'package.json')
+            git('commit', '-m', 'delete package.json')
+            assert_pr_commit(base_sha, {'launcher': True, 'capture': True, 'changed': True})
+
+            # PR branch changes only README.md, while main advances on extension/capture.js;
+            # GitHub's synthetic PR merge commit (HEAD^1=main_tip, HEAD^2=pr_tip) must NOT
+            # false-trigger launcher-macos on main's already-landed capture.js change.
+            git('checkout', 'main')
+            git('checkout', '-b', 'pr')
+            (repo / 'README.md').write_text('v2 from pr\n', encoding='utf-8')
+            git('commit', '-am', 'docs only')
+            pr_tip = git('rev-parse', 'HEAD')
+
+            git('checkout', 'main')
+            (repo / 'extension/capture.js').write_text('// v2 on main\n', encoding='utf-8')
+            git('commit', '-am', 'capture on main')
+            main_tip = git('rev-parse', 'HEAD')
+
+            git('checkout', '--detach', main_tip)
+            git('merge', '--no-ff', '-m', 'Merge pr into main', pr_tip)
+            res, resolved = lp.evaluate_git(repo, event_name='pull_request', base_sha=base_sha)
+            self.assertEqual(resolved, main_tip)
+            self.assertEqual(res, {'launcher': False, 'capture': False, 'changed': False})
+
+    def test_workflows_do_not_call_unbounded_apt_get_directly(self):
+        ci_text = (WORKFLOWS / 'ci.yml').read_text(encoding='utf-8')
+        self.assertNotRegex(ci_text, r'\bapt-get\b')
+        self.assertIn('sudo bash tests/apt_install_bounded.sh pulseaudio xvfb xauth', ci_text)
+        # Ensure mirror healing + 80cassini-network precede Playwright's --with-deps apt-get call in contract.
+        contract_block = dict(jobs(WORKFLOWS / 'ci.yml'))['contract']
+        self.assertLess(
+            contract_block.index('tests/apt_install_bounded.sh'),
+            contract_block.index('npx playwright install --with-deps chromium'),
+        )
+
+    def test_apt_install_bounded_retries_mirrors_including_kernel_org_and_never_retries_dpkg(self):
+        script = ROOT / 'tests/apt_install_bounded.sh'
+        for layout in ('direct', 'mirror-list'):
+            for mode, ok, downloads, installs in (
+                ('ok', True, 1, 1),
+                ('fail-1', True, 2, 1),
+                ('fail-2', True, 3, 1),
+                ('fail-all', False, 3, 0),
+                ('dpkg-fails', False, 1, 1),
+            ):
+                with self.subTest(layout=layout, mode=mode), tempfile.TemporaryDirectory() as temp:
+                    tmp = pathlib.Path(temp)
+                    bindir = tmp / 'bin'
+                    bindir.mkdir()
+                    fake_apt = bindir / 'apt-get'
+                    fake_apt.write_text(
+                        f'#!{sys.executable}\n'
+                        'import json, os, sys\n'
+                        'from pathlib import Path\n'
+                        'log = Path(os.environ["APT_TEST_LOG"])\n'
+                        'rows = json.loads(log.read_text()) if log.exists() else []\n'
+                        'rows.append(sys.argv[1:])\n'
+                        'log.write_text(json.dumps(rows))\n'
+                        'mode = os.environ["APT_TEST_MODE"]\n'
+                        'if "--download-only" in sys.argv:\n'
+                        '    n = sum("--download-only" in r for r in rows)\n'
+                        '    if mode == "fail-all" or (mode == "fail-1" and n == 1) or (mode == "fail-2" and n <= 2):\n'
+                        '        sys.exit(100)\n'
+                        'if "--no-download" in sys.argv and mode == "dpkg-fails":\n'
+                        '    sys.exit(42)\n',
+                        encoding='utf-8',
+                    )
+                    fake_apt.chmod(0o755)
+                    apt_dir = tmp / 'apt'
+                    sources_d = apt_dir / 'sources.list.d'
+                    sources_d.mkdir(parents=True)
+                    ubuntu_sources = sources_d / 'ubuntu.sources'
+                    if layout == 'mirror-list':
+                        mirrors = apt_dir / 'apt-mirrors.txt'
+                        mirrors.write_text(
+                            'http://azure.archive.ubuntu.com/ubuntu/\n'
+                            'http://archive.ubuntu.com/ubuntu/\n'
+                            'http://security.ubuntu.com/ubuntu/\n',
+                            encoding='utf-8',
+                        )
+                        ubuntu_sources.write_text(
+                            f'URIs: mirror+file:{mirrors}\nSuites: noble noble-updates\n\n'
+                            'URIs: http://security.ubuntu.com/ubuntu/\nSuites: noble-security\n',
+                            encoding='utf-8',
+                        )
+                    else:
+                        ubuntu_sources.write_text(
+                            'URIs: http://azure.archive.ubuntu.com/ubuntu/\nSuites: noble noble-updates\n\n'
+                            'URIs: http://security.ubuntu.com/ubuntu/\nSuites: noble-security\n',
+                            encoding='utf-8',
+                        )
+                    other = sources_d / 'third-party.list'
+                    other.write_text('deb https://example.invalid/repo stable main\n', encoding='utf-8')
+                    log = tmp / 'calls.json'
+                    res = subprocess.run(
+                        ['bash', str(script), '--no-install-recommends', 'pulseaudio', 'xvfb'],
+                        env={
+                            **os.environ,
+                            'PATH': f'{bindir}:{os.environ["PATH"]}',
+                            'APT_TEST_LOG': str(log),
+                            'APT_TEST_MODE': mode,
+                            'CASSINI_APT_SOURCES_DIR': str(apt_dir),
+                        },
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                        check=False,
+                    )
+                    self.assertEqual(res.returncode == 0, ok, res.stderr)
+                    calls = json.loads(log.read_text(encoding='utf-8'))
+                    self.assertEqual(sum('--download-only' in row for row in calls), downloads)
+                    self.assertEqual(sum('--no-download' in row for row in calls), installs)
+                    self.assertEqual(other.read_text(encoding='utf-8'), 'deb https://example.invalid/repo stable main\n')
+                    policy = (apt_dir / 'apt.conf.d/80cassini-network').read_text(encoding='utf-8')
+                    self.assertIn('Acquire::http::Timeout "15";', policy)
+                    self.assertIn('APT::Update::Error-Mode "any";', policy)
+                    if mode in ('fail-2', 'fail-all'):
+                        self.assertIn('https://mirrors.edge.kernel.org/ubuntu/', ubuntu_sources.read_text(encoding='utf-8'))
+                        self.assertNotIn('security.ubuntu.com', ubuntu_sources.read_text(encoding='utf-8'))
+                        if layout == 'mirror-list':
+                            self.assertEqual(
+                                (apt_dir / 'apt-mirrors.txt').read_text(encoding='utf-8'),
+                                'https://mirrors.edge.kernel.org/ubuntu/\n',
+                            )
+                    if mode == 'dpkg-fails':
+                        self.assertEqual(res.returncode, 42)
 
 
 if __name__ == '__main__':
