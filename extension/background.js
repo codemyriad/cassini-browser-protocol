@@ -539,7 +539,7 @@ async function start(mode, tabId = null, options = {}) {
       session.host = new NativeHost((message,cause) => failure(message, session, cause));
       const start = { type: "start", version: 1, title: tab.title || "Browser meeting", features: ["source-outcomes-v1"],
         callGeneration: session.callGeneration, documentGeneration: documentFor(tab.id) };
-      if (session.independent) Object.assign(start, { independent: true, microphone: options.microphone !== false, captureId: session.token, timelineOriginMs: session.origin });
+      if (session.independent) Object.assign(start, { independent: true, microphone: options.microphone !== false, captureLocal: session.captureLocal, captureId: session.token, timelineOriginMs: session.origin });
       // Preserve the originating control ask across delayed native handshakes.
       if (options.requestId !== undefined) start.requestId = options.requestId;
       if (target) {
@@ -547,7 +547,7 @@ async function start(mode, tabId = null, options = {}) {
         // optional field on ordinary Start could create a second folder.
         start.type = "resume";
         start.features.push("resume-capture-v1");
-        delete start.microphone; // The app retains its actual per-session selection.
+        delete start.microphone; delete start.captureLocal; // The app retains its actual per-session selection.
       }
       const result = await session.host.send(start);
       if (target) {

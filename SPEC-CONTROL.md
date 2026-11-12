@@ -250,7 +250,15 @@ Independent starts may include `captureLocal` (default true) and `microphone`
 respecting the user's in-call microphone choice and mute state, while excluding
 `getDisplayMedia` screen- or tab-share audio since extension 0.2.27) rather than opening a raw OS
 microphone tap. `captureLocal: false` excludes page sender/microphone-preview
-sources for callers that explicitly omit page senders.
+sources for callers that explicitly omit page senders. The background passes the
+microphone choice to the native host in its start message, along with
+`independent: true`, `captureLocal` (whether the page records Me from its sender; an
+app that sees it absent or false records Me itself), `captureId` (the background token, an opaque string of
+at most128 characters) and `timelineOriginMs` (its Date.now() session origin), which
+lets the platform's own inputs share the source timeline. These optional
+start fields do not change the version1 PCM transport; legacy hosts ignore them.
+No page controls the choice or supplies an output path. Invalid option types are
+refused before any audio side effect.
 
 Sender Me (`sender-me-v1`, extension 0.2.27) is the hello capability an app checks
 before it relies on the page sender for Me and stops opening its own microphone.
@@ -263,14 +271,7 @@ its track clones and `MediaStream.clone()` copies is never Me. A page opened
 before the update keeps its older MAIN hook; its readiness reply lacks hook
 revision 2, so the relay reports it unavailable and the tab is `reloadRequired`
 rather than ready. Without the capability an app keeps sending
-`captureLocal: false` and records Me from its own microphone, as before. The background passes the
-microphone choice to the native host in its start message, along with
-`independent: true`, `captureId` (the background token, an opaque string of
-at most128 characters) and `timelineOriginMs` (its Date.now() session origin), which
-lets the platform's own inputs share the source timeline. These optional
-start fields do not change the version1 PCM transport; legacy hosts ignore them.
-No page controls the choice or supplies an output path. Invalid option types are
-refused before any audio side effect.
+`captureLocal: false` and records Me from its own microphone, as before.
 
 When an independent recording stops because its page/PCM path was lost, its stop
 message adds `failureReason: "lost"`; an explicit Stop omits it. The platform can
