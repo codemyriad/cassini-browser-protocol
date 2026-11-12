@@ -182,7 +182,7 @@ export function validatePlatformTopologyFixture(fixture) {
   if (fixture.webAudioGraphs.length > 0 && !fixture.runtime.usesWebAudio) {
     throw new Error('runtime.usesWebAudio must be true when webAudioGraphs is non-empty');
   }
-  const graphIds = new Set();
+  const graphNodeMaps = new Map();
   let sawWorkletNode = false;
   fixture.webAudioGraphs.forEach((graph, index) => {
     const label = `webAudioGraphs[${index}]`;
@@ -190,7 +190,6 @@ export function validatePlatformTopologyFixture(fixture) {
     if (graph.id !== `graph-${index}`) {
       throw new Error(`${label}.id must be canonical "graph-${index}"`);
     }
-    graphIds.add(graph.id);
     if (!['suspended', 'running', 'closed'].includes(graph.contextState)) {
       throw new Error(`${label}.contextState invalid: ${graph.contextState}`);
     }
@@ -200,10 +199,10 @@ export function validatePlatformTopologyFixture(fixture) {
     if (!Array.isArray(graph.nodes) || graph.nodes.length < 1 || graph.nodes.length > 128) {
       throw new Error(`${label}.nodes must contain 1..128 nodes`);
     }
-    const nodeIds = new Set();
+    const nodesById = new Map();
     graph.nodes.forEach((node, nodeIndex) => {
       const nodeLabel = `${label}.nodes[${nodeIndex}]`;
-      exactKeys(node, nodeLabel, ['id', 'type'], ['origin']);
+      exactKeys(node, nodeLabel, ['id', 'type'], ['origin', 'inputs', 'outputs']);
       if (node.id !== `n${nodeIndex}`) {
         throw new Error(`${nodeLabel}.id must be canonical "n${nodeIndex}"`);
       }
@@ -214,19 +213,50 @@ export function validatePlatformTopologyFixture(fixture) {
       if (node.origin !== undefined && !ALLOWED_NODE_ORIGINS.has(node.origin)) {
         throw new Error(`${nodeLabel}.origin invalid: ${node.origin}`);
       }
-      nodeIds.add(node.id);
+      if (node.inputs !== undefined) {
+        const minInputs = node.type === 'ChannelMergerNode' ? 1 : 0;
+        assertBoundedInt(node.inputs, `${nodeLabel}.inputs`, minInputs, 32);
+      }
+      if (node.outputs !== undefined) {
+        const minOutputs = node.type === 'ChannelSplitterNode' ? 1 : 0;
+        assertBoundedInt(node.outputs, `${nodeLabel}.outputs`, minOutputs, 32);
+      }
+      nodesById.set(node.id, node);
     });
+    graphNodeMaps.set(graph.id, nodesById);
     if (!Array.isArray(graph.edges) || graph.edges.length > 256) {
       throw new Error(`${label}.edges must contain 0..256 edges`);
     }
     graph.edges.forEach((edge, edgeIndex) => {
       const edgeLabel = `${label}.edges[${edgeIndex}]`;
-      exactKeys(edge, edgeLabel, ['from', 'to', 'kind']);
-      if (!nodeIds.has(edge.from) || !nodeIds.has(edge.to)) {
+      if (!edge || typeof edge !== 'object' || Array.isArray(edge) || !ALLOWED_EDGE_KINDS.has(edge.kind)) {
+        throw new Error(`${edgeLabel}.kind invalid: ${edge?.kind}`);
+      }
+      if (edge.kind === 'stream') {
+        exactKeys(edge, edgeLabel, ['from', 'to', 'kind']);
+      } else if (edge.kind === 'audio') {
+        exactKeys(edge, edgeLabel, ['from', 'to', 'kind', 'output', 'input']);
+        assertBoundedInt(edge.output, `${edgeLabel}.output`, 0, 31);
+        assertBoundedInt(edge.input, `${edgeLabel}.input`, 0, 31);
+      } else {
+        exactKeys(edge, edgeLabel, ['from', 'to', 'kind', 'output']);
+        assertBoundedInt(edge.output, `${edgeLabel}.output`, 0, 31);
+      }
+      const fromNode = nodesById.get(edge.from);
+      const toNode = nodesById.get(edge.to);
+      if (!fromNode || !toNode) {
         throw new Error(`${edgeLabel} references unknown node id`);
       }
-      if (!ALLOWED_EDGE_KINDS.has(edge.kind)) {
-        throw new Error(`${edgeLabel}.kind invalid: ${edge.kind}`);
+      if (edge.kind !== 'stream') {
+        if (fromNode.type === 'MediaStreamAudioDestinationNode' || fromNode.type === 'AudioDestinationNode') {
+          throw new Error(`${edgeLabel}.from "${edge.from}" (${fromNode.type}) has no outputs`);
+        }
+        if (fromNode.outputs !== undefined && edge.output >= fromNode.outputs) {
+          throw new Error(`${edgeLabel}.output (${edge.output}) exceeds ${edge.from}.outputs (${fromNode.outputs})`);
+        }
+        if (edge.kind === 'audio' && toNode.inputs !== undefined && edge.input >= toNode.inputs) {
+          throw new Error(`${edgeLabel}.input (${edge.input}) exceeds ${edge.to}.inputs (${toNode.inputs})`);
+        }
       }
     });
   });
@@ -268,7 +298,7 @@ export function validatePlatformTopologyFixture(fixture) {
       if (slot.sender !== null) {
         const senderLabel = `${slotLabel}.sender`;
         exactKeys(slot.sender, senderLabel, [
-          'kind', 'label', 'lineage', 'webAudioGraphId', 'cloned', 'packetsProgressing'
+          'kind', 'label', 'lineage', 'webAudioGraphId', 'webAudioDestNodeId', 'cloned', 'packetsProgressing'
         ]);
         if (!['audio', 'video'].includes(slot.sender.kind)) {
           throw new Error(`${senderLabel}.kind invalid: ${slot.sender.kind}`);
@@ -279,8 +309,28 @@ export function validatePlatformTopologyFixture(fixture) {
         if (!ALLOWED_LINEAGES.has(slot.sender.lineage)) {
           throw new Error(`${senderLabel}.lineage invalid: ${slot.sender.lineage}`);
         }
-        if (slot.sender.webAudioGraphId !== null && !graphIds.has(slot.sender.webAudioGraphId)) {
-          throw new Error(`${senderLabel}.webAudioGraphId references unknown graph "${slot.sender.webAudioGraphId}"`);
+        if ((slot.sender.webAudioGraphId === null) !== (slot.sender.webAudioDestNodeId === null)) {
+          throw new Error(`${senderLabel}.webAudioGraphId and webAudioDestNodeId must both be null or both be set`);
+        }
+        if (slot.sender.webAudioGraphId !== null) {
+          if (slot.sender.kind !== 'audio') {
+            throw new Error(`${senderLabel}.kind must be "audio" when webAudioGraphId is set`);
+          }
+          const targetGraphNodes = graphNodeMaps.get(slot.sender.webAudioGraphId);
+          if (!targetGraphNodes) {
+            throw new Error(`${senderLabel}.webAudioGraphId references unknown graph "${slot.sender.webAudioGraphId}"`);
+          }
+          const destNode = targetGraphNodes.get(slot.sender.webAudioDestNodeId);
+          if (!destNode) {
+            throw new Error(
+              `${senderLabel}.webAudioDestNodeId references unknown node "${slot.sender.webAudioDestNodeId}" in "${slot.sender.webAudioGraphId}"`
+            );
+          }
+          if (destNode.type !== 'MediaStreamAudioDestinationNode') {
+            throw new Error(
+              `${senderLabel}.webAudioDestNodeId "${slot.sender.webAudioDestNodeId}" must reference a MediaStreamAudioDestinationNode, got "${destNode.type}"`
+            );
+          }
         }
         if (typeof slot.sender.cloned !== 'boolean' || typeof slot.sender.packetsProgressing !== 'boolean') {
           throw new Error(`${senderLabel}.cloned and packetsProgressing must be booleans`);
@@ -591,8 +641,29 @@ export function installRtcTopologyProbe() {
         origin = 'synthetic';
       }
     }
+    let inputs;
+    let outputs;
+    if (type === 'ChannelMergerNode' && Number.isSafeInteger(node.numberOfInputs)) {
+      inputs = Math.min(32, Math.max(1, node.numberOfInputs));
+    } else if (type === 'ChannelSplitterNode' && Number.isSafeInteger(node.numberOfOutputs)) {
+      outputs = Math.min(32, Math.max(1, node.numberOfOutputs));
+    } else if (type === 'AudioWorkletNode') {
+      if (Number.isSafeInteger(node.numberOfInputs) && node.numberOfInputs !== 1) {
+        inputs = Math.min(32, Math.max(0, node.numberOfInputs));
+      }
+      if (Number.isSafeInteger(node.numberOfOutputs) && node.numberOfOutputs !== 1) {
+        outputs = Math.min(32, Math.max(0, node.numberOfOutputs));
+      }
+    }
     id = `n${graph.nodes.length}`;
-    const entry = origin ? { id, type, origin, ref: node } : { id, type, ref: node };
+    const entry = {
+      id,
+      type,
+      ...(origin ? { origin } : {}),
+      ...(inputs !== undefined ? { inputs } : {}),
+      ...(outputs !== undefined ? { outputs } : {}),
+      ref: node
+    };
     graph.nodes.push(entry);
     graph.nodeIds.set(node, id);
     registerParams(node);
@@ -608,10 +679,30 @@ export function installRtcTopologyProbe() {
     return id;
   }
 
-  function addEdge(graph, from, to, kind) {
+  function addStreamEdge(graph, from, to) {
     if (!graph || !from || !to || graph.edges.length >= 256) return;
-    if (graph.edges.some(edge => edge.from === from && edge.to === to && edge.kind === kind)) return;
-    graph.edges.push({ from, to, kind });
+    if (graph.edges.some(edge => edge.from === from && edge.to === to && edge.kind === 'stream')) return;
+    graph.edges.push({ from, to, kind: 'stream' });
+  }
+
+  function addAudioEdge(graph, from, to, output, input) {
+    if (!graph || !from || !to || graph.edges.length >= 256) return;
+    if (output < 0 || output > 31 || input < 0 || input > 31) return;
+    if (graph.edges.some(edge =>
+      edge.from === from && edge.to === to && edge.kind === 'audio' &&
+      edge.output === output && edge.input === input
+    )) return;
+    graph.edges.push({ from, to, kind: 'audio', output, input });
+  }
+
+  function addParamEdge(graph, from, to, output, paramRef) {
+    if (!graph || !from || !to || graph.edges.length >= 256) return;
+    if (output < 0 || output > 31) return;
+    if (graph.edges.some(edge =>
+      edge.from === from && edge.to === to && edge.kind === 'param' &&
+      edge.output === output && edge.paramRef === paramRef
+    )) return;
+    graph.edges.push({ from, to, kind: 'param', output, paramRef });
   }
 
   function classifyInputTrackOrigin(track, depth = 0) {
@@ -619,9 +710,8 @@ export function installRtcTopologyProbe() {
     const meta = trackMeta.get(track);
     if (meta?.destNode) {
       const nested = computeDestinationOrigin(meta.destNode, depth + 1);
-      if (nested === 'microphone' || nested === 'mixed-microphone-display') return 'microphone';
-      if (nested === 'display') return 'display';
       if (nested !== 'none') return nested;
+      return 'unknown';
     }
     if (captured.has(track) || meta?.origin === 'microphone') return 'microphone';
     if (meta?.origin === 'display') return 'display';
@@ -636,36 +726,42 @@ export function installRtcTopologyProbe() {
   function registerStreamSourceNode(node, tracks) {
     const graph = ensureGraph(node?.context);
     if (!graph || graph.nodeIds.has(node)) return node;
-    const origins = new Set((tracks || []).map(track => classifyInputTrackOrigin(track, 0)));
-    let streamNodeId = null;
+    const trackOrigins = (tracks || []).map(track => classifyInputTrackOrigin(track, 0));
+    const origins = new Set(trackOrigins);
+    const allMic = trackOrigins.length > 0 && trackOrigins.every(o => o === 'microphone' || o === 'mixed-microphone-display');
+    const anyDisplay = origins.has('display') || origins.has('mixed-microphone-display');
+    const streamNodeIds = [];
     let fallbackOrigin;
-    if (origins.has('microphone')) {
-      if (graph.nodes.length < 127) {
-        streamNodeId = `n${graph.nodes.length}`;
-        graph.nodes.push({ id: streamNodeId, type: 'getUserMediaAudio', origin: 'microphone', ref: null });
-      } else {
-        fallbackOrigin = 'microphone';
-      }
-    } else if (origins.has('display')) {
-      if (graph.nodes.length < 127) {
-        streamNodeId = `n${graph.nodes.length}`;
-        graph.nodes.push({ id: streamNodeId, type: 'getDisplayMediaAudio', origin: 'display', ref: null });
-      } else {
-        fallbackOrigin = 'display';
-      }
-    } else if (origins.has('remote')) {
-      fallbackOrigin = 'remote';
-    } else {
-      fallbackOrigin = 'unknown';
+    if (allMic && graph.nodes.length < 127) {
+      const micNodeId = `n${graph.nodes.length}`;
+      graph.nodes.push({ id: micNodeId, type: 'getUserMediaAudio', origin: 'microphone', ref: null });
+      streamNodeIds.push(micNodeId);
+    } else if (allMic) {
+      fallbackOrigin = 'microphone';
+    }
+    if (anyDisplay && graph.nodes.length < 127) {
+      const displayNodeId = `n${graph.nodes.length}`;
+      graph.nodes.push({ id: displayNodeId, type: 'getDisplayMediaAudio', origin: 'display', ref: null });
+      streamNodeIds.push(displayNodeId);
+    } else if (anyDisplay) {
+      fallbackOrigin = 'display';
+    }
+    if (!allMic && !anyDisplay) {
+      fallbackOrigin = origins.has('remote') ? 'remote' : 'unknown';
     }
     const sourceId = ensureNode(node, fallbackOrigin);
-    if (streamNodeId && sourceId) addEdge(graph, streamNodeId, sourceId, 'stream');
+    if (sourceId) {
+      for (const streamNodeId of streamNodeIds) addStreamEdge(graph, streamNodeId, sourceId);
+    }
     return node;
   }
 
   let lineageSteps = 0;
   window.cassiniRtcProbeStats = () => ({ lineageSteps });
 
+  // Match extension/rtc-evidence.js and extension/page-hook.js: microphone
+  // lineage propagates ONLY through port 0 (output 0 into input 0), whereas
+  // display, remote, media-element and synthetic origins propagate across any port.
   function computeDestinationOrigin(destNode, depth = 0) {
     if (!destNode || depth > 8) return 'none';
     const graph = contextGraphs.get(destNode.context);
@@ -673,37 +769,67 @@ export function installRtcTopologyProbe() {
     if (!graph || !destId) return 'none';
     const nodeById = new Map();
     for (const entry of graph.nodes) nodeById.set(entry.id, entry);
-    const incomingByTo = new Map();
+    const incomingAny = new Map();
+    const incomingPort0 = new Map();
     for (const edge of graph.edges) {
       if (edge.kind !== 'audio' && edge.kind !== 'stream') continue;
-      let list = incomingByTo.get(edge.to);
-      if (!list) { list = []; incomingByTo.set(edge.to, list); }
-      list.push(edge.from);
+      let anyList = incomingAny.get(edge.to);
+      if (!anyList) { anyList = []; incomingAny.set(edge.to, anyList); }
+      anyList.push(edge.from);
+      if (edge.kind === 'stream' || (edge.output === 0 && edge.input === 0)) {
+        let port0List = incomingPort0.get(edge.to);
+        if (!port0List) { port0List = []; incomingPort0.set(edge.to, port0List); }
+        port0List.push(edge.from);
+      }
     }
-    const visited = new Set([destId]);
-    const queue = [destId];
-    let head = 0;
-    const origins = new Set();
-    while (head < queue.length) {
-      lineageSteps++;
-      const currentId = queue[head++];
-      const nodeEntry = nodeById.get(currentId);
-      if (nodeEntry?.origin) origins.add(nodeEntry.origin);
-      const upstream = incomingByTo.get(currentId);
-      if (!upstream) continue;
-      for (const fromId of upstream) {
-        if (!visited.has(fromId)) {
-          visited.add(fromId);
-          queue.push(fromId);
+
+    let micPort0Reachable = false;
+    {
+      const visited = new Set([destId]);
+      const queue = [destId];
+      let head = 0;
+      while (head < queue.length) {
+        lineageSteps++;
+        const currentId = queue[head++];
+        if (nodeById.get(currentId)?.origin === 'microphone') micPort0Reachable = true;
+        const upstream = incomingPort0.get(currentId);
+        if (!upstream) continue;
+        for (const fromId of upstream) {
+          if (!visited.has(fromId)) {
+            visited.add(fromId);
+            queue.push(fromId);
+          }
         }
       }
     }
-    if (origins.has('microphone') && origins.has('display')) return 'mixed-microphone-display';
-    if (origins.has('microphone')) return 'microphone';
-    if (origins.has('display')) return 'display';
-    if (origins.has('remote')) return 'remote';
-    if (origins.has('media-element')) return 'media-element';
-    if (origins.has('synthetic')) return 'synthetic';
+
+    const anyOrigins = new Set();
+    {
+      const visited = new Set([destId]);
+      const queue = [destId];
+      let head = 0;
+      while (head < queue.length) {
+        lineageSteps++;
+        const currentId = queue[head++];
+        const origin = nodeById.get(currentId)?.origin;
+        if (origin && origin !== 'microphone') anyOrigins.add(origin);
+        const upstream = incomingAny.get(currentId);
+        if (!upstream) continue;
+        for (const fromId of upstream) {
+          if (!visited.has(fromId)) {
+            visited.add(fromId);
+            queue.push(fromId);
+          }
+        }
+      }
+    }
+
+    if (micPort0Reachable && anyOrigins.has('display')) return 'mixed-microphone-display';
+    if (micPort0Reachable) return 'microphone';
+    if (anyOrigins.has('display')) return 'display';
+    if (anyOrigins.has('remote')) return 'remote';
+    if (anyOrigins.has('media-element')) return 'media-element';
+    if (anyOrigins.has('synthetic')) return 'synthetic';
     return 'none';
   }
 
@@ -734,6 +860,13 @@ export function installRtcTopologyProbe() {
     return origin === 'microphone' || origin === 'mixed-microphone-display';
   }
 
+  // Only supplied argument slots: an omitted index never reads a page prototype
+  // property; non-numbers become -1 (matching WebIDL unsigned long handling in
+  // extension/page-hook.js and extension/rtc-evidence.js).
+  const argSlot = (args, position) => (position < args.length ? args[position] : undefined);
+  const audioIndex = (value, fallback) =>
+    value === undefined ? fallback : (typeof value === 'number' ? (value >>> 0) : -1);
+
   if (typeof audioNodeClass === 'function' && typeof audioNodeClass.prototype?.connect === 'function') {
     const nativeConnect = audioNodeClass.prototype.connect;
     audioNodeClass.prototype.connect = function (...args) {
@@ -741,13 +874,16 @@ export function installRtcTopologyProbe() {
       try {
         const fromId = ensureNode(this);
         const graph = contextGraphs.get(this.context);
-        const target = args[0];
+        const target = argSlot(args, 0);
         if (target && typeof audioNodeClass === 'function' && target instanceof audioNodeClass) {
+          const output = audioIndex(argSlot(args, 1), 0);
+          const input = audioIndex(argSlot(args, 2), 0);
           const toId = ensureNode(target);
-          addEdge(graph, fromId, toId, 'audio');
+          if (output >= 0 && input >= 0) addAudioEdge(graph, fromId, toId, output, input);
         } else if (target && typeof audioParamClass === 'function' && target instanceof audioParamClass) {
+          const output = audioIndex(argSlot(args, 1), 0);
           const owner = paramOwners.get(target);
-          if (owner) addEdge(graph, fromId, ensureNode(owner), 'param');
+          if (owner && output >= 0) addParamEdge(graph, fromId, ensureNode(owner), output, target);
         }
       } catch {}
       return result;
@@ -762,15 +898,44 @@ export function installRtcTopologyProbe() {
         const graph = contextGraphs.get(this.context);
         const fromId = graph?.nodeIds.get(this);
         if (!graph || !fromId) return result;
-        if (args.length === 0 || typeof args[0] === 'number') {
+        if (args.length === 0) {
           graph.edges = graph.edges.filter(edge => edge.kind === 'stream' || edge.from !== fromId);
-        } else if (args[0] instanceof audioNodeClass) {
-          const toId = graph.nodeIds.get(args[0]);
-          if (toId) graph.edges = graph.edges.filter(edge => !(edge.from === fromId && edge.to === toId && edge.kind === 'audio'));
-        } else if (typeof audioParamClass === 'function' && args[0] instanceof audioParamClass) {
-          const owner = paramOwners.get(args[0]);
-          const toId = owner && graph.nodeIds.get(owner);
-          if (toId) graph.edges = graph.edges.filter(edge => !(edge.from === fromId && edge.to === toId && edge.kind === 'param'));
+        } else {
+          const first = argSlot(args, 0);
+          if (first instanceof audioNodeClass) {
+            const toId = graph.nodeIds.get(first);
+            const output = args.length > 1 ? audioIndex(argSlot(args, 1), -1) : -1;
+            const input = args.length > 2 ? audioIndex(argSlot(args, 2), -1) : -1;
+            if (toId) {
+              graph.edges = graph.edges.filter(edge => !(
+                edge.from === fromId &&
+                edge.to === toId &&
+                edge.kind === 'audio' &&
+                (output < 0 || edge.output === output) &&
+                (input < 0 || edge.input === input)
+              ));
+            }
+          } else if (typeof audioParamClass === 'function' && first instanceof audioParamClass) {
+            const owner = paramOwners.get(first);
+            const toId = owner && graph.nodeIds.get(owner);
+            const output = args.length > 1 ? audioIndex(argSlot(args, 1), -1) : -1;
+            if (toId) {
+              graph.edges = graph.edges.filter(edge => !(
+                edge.from === fromId &&
+                edge.to === toId &&
+                edge.kind === 'param' &&
+                (!edge.paramRef || edge.paramRef === first) &&
+                (output < 0 || edge.output === output)
+              ));
+            }
+          } else {
+            const output = audioIndex(first, -1);
+            graph.edges = graph.edges.filter(edge =>
+              edge.kind === 'stream' ||
+              edge.from !== fromId ||
+              (output >= 0 && edge.output !== output)
+            );
+          }
         }
       } catch {}
       return result;
@@ -1076,11 +1241,13 @@ export function installRtcTopologyProbe() {
 
   window.cassiniSampleRtcTopology = samplePacketProgress;
 
-  function senderLineage(track, graphIndexByCtx) {
-    if (!track) return { lineage: 'unknown', webAudioGraphId: null, cloned: false };
+  function senderLineage(track, graphInfoByCtx) {
+    if (!track) return { lineage: 'unknown', webAudioGraphId: null, webAudioDestNodeId: null, cloned: false };
     const meta = trackMeta.get(track);
     if (meta?.destNode) {
-      const graphId = graphIndexByCtx.get(meta.destNode.context) ?? null;
+      const graphInfo = graphInfoByCtx.get(meta.destNode.context) || null;
+      const destNodeId = graphInfo?.nodeIds.get(meta.destNode) ?? null;
+      const graphId = destNodeId ? graphInfo.id : null;
       const origin = computeDestinationOrigin(meta.destNode, 0);
       const map = {
         'microphone': 'webaudio-microphone',
@@ -1089,18 +1256,36 @@ export function installRtcTopologyProbe() {
         'media-element': 'webaudio-media-element',
         'synthetic': 'webaudio-synthetic',
         'remote': 'webaudio-synthetic',
-        'none': 'webaudio-synthetic'
+        'none': 'unknown'
       };
-      return { lineage: map[origin] || 'unknown', webAudioGraphId: graphId, cloned: !!meta.cloned };
+      return {
+        lineage: map[origin] || 'unknown',
+        webAudioGraphId: graphId,
+        webAudioDestNodeId: destNodeId,
+        cloned: !!meta.cloned
+      };
     }
     if (captured.has(track) || meta?.origin === 'microphone') {
-      return { lineage: meta?.cloned ? 'microphone-clone' : 'microphone', webAudioGraphId: null, cloned: !!meta?.cloned };
+      return {
+        lineage: meta?.cloned ? 'microphone-clone' : 'microphone',
+        webAudioGraphId: null,
+        webAudioDestNodeId: null,
+        cloned: !!meta?.cloned
+      };
     }
-    if (meta?.origin === 'display') return { lineage: 'display', webAudioGraphId: null, cloned: !!meta.cloned };
-    if (meta?.origin === 'camera') return { lineage: 'camera', webAudioGraphId: null, cloned: !!meta.cloned };
-    if (meta?.origin === 'synthetic') return { lineage: 'synthetic', webAudioGraphId: null, cloned: !!meta.cloned };
-    if (meta?.origin === 'media-element') return { lineage: 'webaudio-media-element', webAudioGraphId: null, cloned: !!meta.cloned };
-    return { lineage: 'unknown', webAudioGraphId: null, cloned: !!meta?.cloned };
+    if (meta?.origin === 'display') {
+      return { lineage: 'display', webAudioGraphId: null, webAudioDestNodeId: null, cloned: !!meta.cloned };
+    }
+    if (meta?.origin === 'camera') {
+      return { lineage: 'camera', webAudioGraphId: null, webAudioDestNodeId: null, cloned: !!meta.cloned };
+    }
+    if (meta?.origin === 'synthetic') {
+      return { lineage: 'synthetic', webAudioGraphId: null, webAudioDestNodeId: null, cloned: !!meta.cloned };
+    }
+    if (meta?.origin === 'media-element') {
+      return { lineage: 'webaudio-media-element', webAudioGraphId: null, webAudioDestNodeId: null, cloned: !!meta.cloned };
+    }
+    return { lineage: 'unknown', webAudioGraphId: null, webAudioDestNodeId: null, cloned: !!meta?.cloned };
   }
 
   function sanitizeLabel(track, role, lineage) {
@@ -1138,17 +1323,44 @@ export function installRtcTopologyProbe() {
       await samplePacketProgress();
     }
 
-    const graphIndexByCtx = new Map();
+    const graphInfoByCtx = new Map();
     const webAudioGraphs = contextList.slice(0, 32).filter(graph => graph.nodes.length > 0).map((graph, index) => {
       const id = `graph-${index}`;
-      graphIndexByCtx.set(graph.ctx, id);
+      const exportedNodeIds = new Set(graph.nodes.map(n => n.id));
+      graphInfoByCtx.set(graph.ctx, { id, nodeIds: graph.nodeIds, exportedNodeIds });
       const state = ['suspended', 'running', 'closed'].includes(graph.ctx.state) ? graph.ctx.state : 'running';
+      const serializedEdges = [];
+      const seenEdgeKeys = new Set();
+      for (const edge of graph.edges) {
+        if (!exportedNodeIds.has(edge.from) || !exportedNodeIds.has(edge.to)) continue;
+        let serialized;
+        let key;
+        if (edge.kind === 'stream') {
+          serialized = { from: edge.from, to: edge.to, kind: 'stream' };
+          key = `stream:${edge.from}->${edge.to}`;
+        } else if (edge.kind === 'audio') {
+          serialized = { from: edge.from, to: edge.to, kind: 'audio', output: edge.output, input: edge.input };
+          key = `audio:${edge.from}:${edge.output}->${edge.to}:${edge.input}`;
+        } else {
+          serialized = { from: edge.from, to: edge.to, kind: 'param', output: edge.output };
+          key = `param:${edge.from}:${edge.output}->${edge.to}`;
+        }
+        if (!seenEdgeKeys.has(key)) {
+          seenEdgeKeys.add(key);
+          serializedEdges.push(serialized);
+        }
+      }
       return {
         id,
         contextState: state,
-        nodes: graph.nodes.map(({ id: nodeId, type, origin }) =>
-          origin ? { id: nodeId, type, origin } : { id: nodeId, type }),
-        edges: graph.edges.map(({ from, to, kind }) => ({ from, to, kind })),
+        nodes: graph.nodes.map(({ id: nodeId, type, origin, inputs, outputs }) => ({
+          id: nodeId,
+          type,
+          ...(origin !== undefined ? { origin } : {}),
+          ...(inputs !== undefined ? { inputs } : {}),
+          ...(outputs !== undefined ? { outputs } : {})
+        })),
+        edges: serializedEdges,
         outputTrackOrigin: computeGraphOutputOrigin(graph)
       };
     });
@@ -1187,12 +1399,13 @@ export function installRtcTopologyProbe() {
 
         let senderDesc = null;
         if (includeSender) {
-          const info = senderLineage(senderTrack, graphIndexByCtx);
+          const info = senderLineage(senderTrack, graphInfoByCtx);
           senderDesc = {
             kind: senderTrack.kind === 'video' ? 'video' : 'audio',
             label: sanitizeLabel(senderTrack, 'sender', info.lineage),
             lineage: info.lineage,
             webAudioGraphId: info.webAudioGraphId,
+            webAudioDestNodeId: info.webAudioDestNodeId,
             cloned: info.cloned,
             packetsProgressing: senderProgress.get(slot.sender) === true
           };

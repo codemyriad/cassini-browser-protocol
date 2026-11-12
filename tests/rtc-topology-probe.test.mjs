@@ -77,7 +77,15 @@ test('platform topology validator accepts checked-in Teams fixture and rejects n
     ['extra raw SDP field',f=>{f.sdp='v=0';}],
     ['extra audio bytes field',f=>{f.peers[0].audio='UklGRg==';}],
     ['dangling graph reference',f=>{f.peers[0].transceivers[0].sender.webAudioGraphId='graph-4';}],
-    ['dangling edge node reference',f=>{f.webAudioGraphs[0].edges.push({from:'n0',to:'n99',kind:'audio'});}],
+    ['mismatched null webAudioDestNodeId',f=>{f.peers[0].transceivers[0].sender.webAudioDestNodeId=null;}],
+    ['webAudioDestNodeId without webAudioGraphId',f=>{f.peers[0].transceivers[0].sender.webAudioGraphId=null;}],
+    ['dangling webAudioDestNodeId',f=>{f.peers[0].transceivers[0].sender.webAudioDestNodeId='n99';}],
+    ['non-destination webAudioDestNodeId',f=>{f.peers[0].transceivers[0].sender.webAudioDestNodeId='n2';}],
+    ['audio edge missing port indices',f=>{f.webAudioGraphs[0].edges.push({from:'n1',to:'n2',kind:'audio'});}],
+    ['stream edge carrying port index',f=>{f.webAudioGraphs[0].edges[0].output=0;}],
+    ['param edge carrying input index',f=>{f.webAudioGraphs[0].edges.push({from:'n1',to:'n2',kind:'param',output:0,input:0});}],
+    ['edge input exceeding ChannelMergerNode inputs',f=>{f.webAudioGraphs[0].nodes[2]={id:'n2',type:'ChannelMergerNode',inputs:2};f.webAudioGraphs[0].edges[1].input=2;}],
+    ['dangling edge node reference',f=>{f.webAudioGraphs[0].edges.push({from:'n0',to:'n99',kind:'audio',output:0,input:0});}],
     ['inconsistent CSRC presence flag',f=>{f.peers[0].transceivers[0].receiver.csrc={present:true,distinctCount:0};}],
     ['single mixing with multiple speakersOnTrack',f=>{f.peers[0].transceivers[0].receiver.mixing='single';f.peers[0].transceivers[0].receiver.speakersOnTrack=2;}],
     ['unrecorded AudioWorklet flag',f=>{f.webAudioGraphs[0].nodes[2].type='AudioWorkletNode';}]
@@ -316,4 +324,152 @@ test('WebAudio lineage walk scales linearly by counted steps (2N vs N) and valid
     runtime:{usesWebAudio:false,usesAudioWorklet:false,usesWasm:false},
     webAudioGraphs:[],peers:[deep]
   }),/depth|object|missing/i);
+});
+
+test('probe distinguishes multiple destinations in one context, preserves port indices, and handles indexed disconnects',async()=>{
+  const context=vm.createContext({});
+  vm.runInContext(`
+    window=globalThis;
+    (() => {
+      class AudioParam {}
+      class AudioNode {
+        constructor(ctx,inputs=1,outputs=1){this.context=ctx;this.numberOfInputs=inputs;this.numberOfOutputs=outputs}
+        connect(dest){return dest}
+        disconnect(){}
+      }
+      let nextId=0;
+      class MediaStreamTrack {
+        constructor(kind,label){this.kind=kind;this.label=label;this.id='t-'+(nextId++);this.readyState='live';this.enabled=true;this.muted=false}
+        clone(){return new MediaStreamTrack(this.kind,this.label)}
+      }
+      class MediaStream {
+        constructor(tracks=[]){this._tracks=tracks}
+        getAudioTracks(){return this._tracks.filter(t=>t.kind==='audio')}
+        getVideoTracks(){return []}
+        getTracks(){return [...this._tracks]}
+      }
+      class MediaStreamAudioSourceNode extends AudioNode {
+        constructor(ctx,opts){super(ctx,0,1);this.mediaStream=opts.mediaStream}
+      }
+      class GainNode extends AudioNode {
+        constructor(ctx){super(ctx,1,1);this.gain=new AudioParam()}
+      }
+      class OscillatorNode extends AudioNode {
+        constructor(ctx){super(ctx,0,1);this.frequency=new AudioParam()}
+        start(){}
+      }
+      class ChannelSplitterNode extends AudioNode {
+        constructor(ctx,outputs=6){super(ctx,1,outputs)}
+      }
+      class ChannelMergerNode extends AudioNode {
+        constructor(ctx,inputs=6){super(ctx,inputs,1)}
+      }
+      class MediaStreamAudioDestinationNode extends AudioNode {
+        constructor(ctx){super(ctx,1,0);this.stream=new MediaStream([new MediaStreamTrack('audio','MediaStreamAudioDestinationNode')])}
+      }
+      class AudioContext {
+        constructor(){this.state='running'}
+        createMediaStreamSource(stream){return new globalThis.MediaStreamAudioSourceNode(this,{mediaStream:stream})}
+        createGain(){return new globalThis.GainNode(this)}
+        createOscillator(){return new globalThis.OscillatorNode(this)}
+        createChannelSplitter(n=6){return new globalThis.ChannelSplitterNode(this,n)}
+        createChannelMerger(n=6){return new globalThis.ChannelMergerNode(this,n)}
+        createMediaStreamDestination(){return new globalThis.MediaStreamAudioDestinationNode(this)}
+      }
+      Object.assign(globalThis,{
+        AudioParam,AudioNode,MediaStreamTrack,MediaStream,MediaStreamAudioSourceNode,
+        GainNode,OscillatorNode,ChannelSplitterNode,ChannelMergerNode,
+        MediaStreamAudioDestinationNode,AudioContext
+      });
+    })();
+    globalThis.RTCPeerConnection=class RTCPeerConnection {
+      constructor(){this.connectionState='connected';this.signalingState='stable';this._slots=[]}
+      addSlot(slot){this._slots.push(slot)}
+      getTransceivers(){return this._slots}
+      getSenders(){return this._slots.map(s=>s.sender).filter(Boolean)}
+      getReceivers(){return []}
+      async getStats(){return new Map()}
+    };
+    navigator={mediaDevices:{
+      async getUserMedia(){return new MediaStream([new MediaStreamTrack('audio','mic')])}
+    }};
+    (${installRtcTopologyProbe.toString()})();
+  `,context);
+
+  const result=JSON.parse(JSON.stringify(await vm.runInContext(`(async()=>{
+    const mic=await navigator.mediaDevices.getUserMedia({audio:true});
+
+    // Context 0: TWO destinations in the same AudioContext (dstOsc + dstMic)
+    // plus indexed splitter/merger connects and disconnects.
+    const ctx0=new AudioContext();
+    const osc=ctx0.createOscillator();
+    const dstOsc=ctx0.createMediaStreamDestination();
+    osc.connect(dstOsc);
+
+    const src=ctx0.createMediaStreamSource(mic);
+    const splitter=ctx0.createChannelSplitter(2);
+    const merger=ctx0.createChannelMerger(2);
+    const gain=ctx0.createGain();
+    const dstMic=ctx0.createMediaStreamDestination();
+    src.connect(splitter,0,0);
+    splitter.connect(merger,0,0);
+    splitter.connect(merger,1,1);
+    splitter.connect(gain.gain,1);
+    // Indexed disconnect(1) removes output-1 audio AND param edges while preserving output 0!
+    splitter.disconnect(1);
+    merger.connect(gain,0,0);
+    gain.connect(dstMic,0,0);
+
+    // Context 1: connect mic to BOTH (0, 0) and (0, 1) of merger, verify port-0 grants
+    // lineage, then indexed disconnect(merger, 0, 0) leaves only (0, 1) and withholds lineage!
+    const ctx1=new AudioContext();
+    const src1=ctx1.createMediaStreamSource(mic);
+    const merger1=ctx1.createChannelMerger(2);
+    const dst1=ctx1.createMediaStreamDestination();
+    src1.connect(merger1,0,0);
+    src1.connect(merger1,0,1);
+    merger1.connect(dst1,0,0);
+
+    const pc=new RTCPeerConnection();
+    let tick=0;
+    const makeSender=track=>({track,async getStats(){tick++;return new Map([['s',{type:'outbound-rtp',packetsSent:tick*10}]])}});
+    pc.addSlot({direction:'sendonly',currentDirection:'sendonly',sender:makeSender(dstOsc.stream.getAudioTracks()[0]),receiver:null});
+    pc.addSlot({direction:'sendonly',currentDirection:'sendonly',sender:makeSender(dstMic.stream.getAudioTracks()[0]),receiver:null});
+    pc.addSlot({direction:'sendonly',currentDirection:'sendonly',sender:makeSender(dst1.stream.getAudioTracks()[0]),receiver:null});
+
+    await cassiniSampleRtcTopology();
+    const beforeDisconnect=await cassiniRtcPlatformFixture({platform:'ms-teams',capturedOn:'2026-11-12',provenance:'synthetic-probe'});
+
+    src1.disconnect(merger1,0,0);
+    const afterDisconnect=await cassiniRtcPlatformFixture({platform:'ms-teams',capturedOn:'2026-11-12',provenance:'synthetic-probe'});
+    return {beforeDisconnect,afterDisconnect};
+  })()`,context)));
+
+  validatePlatformTopologyFixture(result.beforeDisconnect);
+  validatePlatformTopologyFixture(result.afterDisconnect);
+
+  const [slotOsc,slotMic,slotBefore]=result.beforeDisconnect.peers[0].transceivers;
+  assert.equal(slotOsc.sender.webAudioGraphId,'graph-0');
+  assert.equal(slotMic.sender.webAudioGraphId,'graph-0');
+  assert.notEqual(slotOsc.sender.webAudioDestNodeId,slotMic.sender.webAudioDestNodeId,'two destinations in one context have distinct node IDs');
+  assert.equal(slotOsc.sender.lineage,'webaudio-synthetic');
+  assert.equal(slotMic.sender.lineage,'webaudio-microphone');
+
+  const g0=result.beforeDisconnect.webAudioGraphs[0];
+  assert.ok(g0.nodes.some(n=>n.type==='ChannelSplitterNode'&&n.outputs===2));
+  assert.ok(g0.nodes.some(n=>n.type==='ChannelMergerNode'&&n.inputs===2));
+  assert.equal(g0.edges.some(e=>e.kind!=='stream'&&e.output===1),false,'splitter.disconnect(1) removed output-1 audio and param edges');
+  assert.equal(g0.edges.some(e=>e.kind==='audio'&&e.output===0&&e.input===0),true,'splitter.disconnect(1) preserved output-0 path');
+
+  assert.equal(slotBefore.sender.lineage,'webaudio-microphone','port (0,0) grants webaudio-microphone');
+  const slotAfter=result.afterDisconnect.peers[0].transceivers[2];
+  assert.equal(slotAfter.sender.lineage,'unknown','after disconnect(merger,0,0), remaining (0,1) edge withholds microphone lineage');
+  const g1After=result.afterDisconnect.webAudioGraphs[1];
+  assert.deepEqual(
+    g1After.edges.filter(e=>e.kind==='audio'),
+    [
+      {from:'n1',to:'n2',kind:'audio',output:0,input:1},
+      {from:'n2',to:'n3',kind:'audio',output:0,input:0}
+    ]
+  );
 });

@@ -123,13 +123,32 @@ async function replayFixtureInPages(caller, remote, fixture, remoteToneGroups) {
         }
       };
 
-      for (const nodeSpec of graphSpec.nodes) {
+      const nodeIndexById = new Map();
+      graphSpec.nodes.forEach((nodeSpec, idx) => nodeIndexById.set(nodeSpec.id, idx));
+      let nextNodeIdx = 0;
+
+      const materializeNode = async nodeSpec => {
         if (nodeSpec.type === 'getUserMediaAudio') {
           streamSources.set(nodeSpec.id, await ensureGum());
+        } else if (nodeSpec.type === 'getDisplayMediaAudio') {
+          const canvas = document.createElement('canvas');
+          canvas.width = 2;
+          canvas.height = 2;
+          streamSources.set(nodeSpec.id, canvas.captureStream(1));
         } else if (nodeSpec.type === 'MediaStreamAudioSourceNode') {
           const incomingStreamEdge = graphSpec.edges.find(e => e.to === nodeSpec.id && e.kind === 'stream');
           const stream = incomingStreamEdge ? streamSources.get(incomingStreamEdge.from) : await ensureGum();
           nodeObjects.set(nodeSpec.id, ctx.createMediaStreamSource(stream));
+        } else if (nodeSpec.type === 'MediaStreamTrackAudioSourceNode') {
+          const incomingStreamEdge = graphSpec.edges.find(e => e.to === nodeSpec.id && e.kind === 'stream');
+          const stream = incomingStreamEdge ? streamSources.get(incomingStreamEdge.from) : await ensureGum();
+          const track = stream.getAudioTracks()[0];
+          nodeObjects.set(
+            nodeSpec.id,
+            typeof ctx.createMediaStreamTrackSource === 'function'
+              ? ctx.createMediaStreamTrackSource(track)
+              : ctx.createMediaStreamSource(new MediaStream([track]))
+          );
         } else if (nodeSpec.type === 'MediaElementAudioSourceNode') {
           const el = new Audio();
           nodeObjects.set(nodeSpec.id, ctx.createMediaElementSource(el));
@@ -141,9 +160,35 @@ async function replayFixtureInPages(caller, remote, fixture, remoteToneGroups) {
           nodeObjects.set(nodeSpec.id, ctx.createBiquadFilter());
         } else if (nodeSpec.type === 'DynamicsCompressorNode') {
           nodeObjects.set(nodeSpec.id, ctx.createDynamicsCompressor());
+        } else if (nodeSpec.type === 'AnalyserNode') {
+          nodeObjects.set(nodeSpec.id, ctx.createAnalyser());
+        } else if (nodeSpec.type === 'DelayNode') {
+          nodeObjects.set(nodeSpec.id, ctx.createDelay());
+        } else if (nodeSpec.type === 'ConvolverNode') {
+          nodeObjects.set(nodeSpec.id, ctx.createConvolver());
+        } else if (nodeSpec.type === 'WaveShaperNode') {
+          nodeObjects.set(nodeSpec.id, ctx.createWaveShaper());
+        } else if (nodeSpec.type === 'StereoPannerNode') {
+          nodeObjects.set(nodeSpec.id, ctx.createStereoPanner());
+        } else if (nodeSpec.type === 'PannerNode') {
+          nodeObjects.set(nodeSpec.id, ctx.createPanner());
+        } else if (nodeSpec.type === 'ChannelSplitterNode') {
+          nodeObjects.set(nodeSpec.id, ctx.createChannelSplitter(nodeSpec.outputs ?? 6));
+        } else if (nodeSpec.type === 'ChannelMergerNode') {
+          nodeObjects.set(nodeSpec.id, ctx.createChannelMerger(nodeSpec.inputs ?? 6));
+        } else if (nodeSpec.type === 'IIRFilterNode') {
+          nodeObjects.set(nodeSpec.id, ctx.createIIRFilter([1], [1]));
+        } else if (nodeSpec.type === 'ScriptProcessorNode') {
+          nodeObjects.set(nodeSpec.id, ctx.createScriptProcessor(256, 1, 1));
         } else if (nodeSpec.type === 'AudioWorkletNode') {
           await ensureWorklet();
-          nodeObjects.set(nodeSpec.id, new AudioWorkletNode(ctx, 'replay-passthrough'));
+          nodeObjects.set(
+            nodeSpec.id,
+            new AudioWorkletNode(ctx, 'replay-passthrough', {
+              numberOfInputs: nodeSpec.inputs ?? 1,
+              numberOfOutputs: nodeSpec.outputs ?? 1
+            })
+          );
         } else if (nodeSpec.type === 'OscillatorNode') {
           const osc = ctx.createOscillator();
           osc.frequency.value = 440;
@@ -168,26 +213,65 @@ async function replayFixtureInPages(caller, remote, fixture, remoteToneGroups) {
         } else {
           nodeObjects.set(nodeSpec.id, ctx.createGain());
         }
-      }
+      };
 
+      const materializeNodesThrough = async targetIdx => {
+        while (nextNodeIdx <= targetIdx && nextNodeIdx < graphSpec.nodes.length) {
+          await materializeNode(graphSpec.nodes[nextNodeIdx++]);
+        }
+      };
+
+      const pickAudioParam = node => {
+        for (const prop of [
+          'gain', 'frequency', 'detune', 'Q', 'threshold', 'knee', 'ratio',
+          'attack', 'release', 'pan', 'delayTime', 'offset', 'playbackRate'
+        ]) {
+          if (node[prop] instanceof AudioParam) return node[prop];
+        }
+        if (node.parameters && typeof node.parameters.values === 'function') {
+          const first = node.parameters.values().next();
+          if (!first.done && first.value instanceof AudioParam) return first.value;
+        }
+        return null;
+      };
+
+      // Materialize nodes just in time for each edge so that stream edges
+      // (emitted on MediaStreamAudioSourceNode construction) and audio/param
+      // edges (emitted on connect()) replay in the exact recorded order.
       for (const edge of graphSpec.edges) {
+        const fromIdx = nodeIndexById.get(edge.from) ?? -1;
+        const toIdx = nodeIndexById.get(edge.to) ?? -1;
+        await materializeNodesThrough(Math.max(fromIdx, toIdx));
         if (edge.kind === 'stream') continue;
         const fromNode = nodeObjects.get(edge.from);
         const toNode = nodeObjects.get(edge.to);
         if (!fromNode || !toNode) continue;
-        if (edge.kind === 'param' && toNode.gain) fromNode.connect(toNode.gain);
-        else fromNode.connect(toNode);
+        if (edge.kind === 'param') {
+          const param = pickAudioParam(toNode);
+          if (!param) throw new Error(`No AudioParam on target node ${edge.to}`);
+          fromNode.connect(param, edge.output);
+        } else {
+          fromNode.connect(toNode, edge.output, edge.input);
+        }
       }
+      await materializeNodesThrough(graphSpec.nodes.length - 1);
 
       if (graphSpec.contextState === 'running') await ctx.resume();
-      const destEntry = graphSpec.nodes.find(n => n.type === 'MediaStreamAudioDestinationNode');
-      const destNode = destEntry ? nodeObjects.get(destEntry.id) : null;
-      window.replayedGraphs.set(graphSpec.id, { ctx, nodeObjects, outputTrack: destNode?.stream.getAudioTracks()[0] || null });
+      const outputTracks = new Map();
+      for (const nodeSpec of graphSpec.nodes) {
+        if (nodeSpec.type === 'MediaStreamAudioDestinationNode') {
+          const destNode = nodeObjects.get(nodeSpec.id);
+          const track = destNode?.stream.getAudioTracks()[0] || null;
+          if (track) outputTracks.set(nodeSpec.id, track);
+        }
+      }
+      window.replayedGraphs.set(graphSpec.id, { ctx, nodeObjects, outputTracks });
     }
 
     const peerOffers = [];
     for (const peerSpec of spec.peers) {
       const pc = new RTCPeerConnection();
+      const usedTracksOnPc = new Set();
       for (let d = 0; d < peerSpec.dataChannelCount; d++) {
         pc.createDataChannel(`dc-${d}`);
       }
@@ -197,11 +281,21 @@ async function replayFixtureInPages(caller, remote, fixture, remoteToneGroups) {
           if (slotSpec.sender.kind === 'video') {
             senderTrack = ensureVideoTrack();
           } else if (slotSpec.sender.webAudioGraphId) {
-            senderTrack = window.replayedGraphs.get(slotSpec.sender.webAudioGraphId)?.outputTrack || null;
-          } else if (slotSpec.sender.lineage === 'microphone') {
+            const graph = window.replayedGraphs.get(slotSpec.sender.webAudioGraphId);
+            senderTrack = graph?.outputTracks.get(slotSpec.sender.webAudioDestNodeId) || null;
+            if (!senderTrack) {
+              throw new Error(
+                `Missing output track for ${slotSpec.sender.webAudioGraphId}.${slotSpec.sender.webAudioDestNodeId}`
+              );
+            }
+          } else if (slotSpec.sender.lineage === 'microphone' || slotSpec.sender.lineage === 'microphone-clone') {
             senderTrack = (await ensureGum()).getAudioTracks()[0];
-          } else if (slotSpec.sender.lineage === 'microphone-clone') {
-            senderTrack = (await ensureGum()).getAudioTracks()[0].clone();
+          }
+          if (senderTrack && (slotSpec.sender.cloned || usedTracksOnPc.has(senderTrack))) {
+            senderTrack = senderTrack.clone();
+          }
+          if (senderTrack) {
+            usedTracksOnPc.add(senderTrack);
           }
         }
         if (senderTrack && slotSpec.direction === 'sendrecv') {
@@ -414,6 +508,7 @@ const report = {
   schema: 'cassini-platform-topology-replay-report/v1',
   extensionVersion: manifest.version,
   replayedFixtures: [],
+  regressionControls: [],
   negativeControl: null
 };
 
@@ -519,6 +614,7 @@ try {
           assert.equal(actualSlot.sender?.label ?? null, expectedSlot.sender?.label ?? null);
           assert.equal(actualSlot.sender?.lineage ?? null, expectedSlot.sender?.lineage ?? null);
           assert.equal(actualSlot.sender?.webAudioGraphId ?? null, expectedSlot.sender?.webAudioGraphId ?? null);
+          assert.equal(actualSlot.sender?.webAudioDestNodeId ?? null, expectedSlot.sender?.webAudioDestNodeId ?? null);
           assert.equal(actualSlot.sender?.cloned ?? null, expectedSlot.sender?.cloned ?? null);
           assert.equal(actualSlot.receiver?.label ?? null, expectedSlot.receiver?.label ?? null);
           assert.equal(actualSlot.receiver?.mixing ?? null, expectedSlot.receiver?.mixing ?? null);
@@ -681,6 +777,418 @@ try {
     }
   }
 
+  // Regression controls for multi-destination contexts and port-sensitive routing:
+  // 1a) Two MediaStreamAudioDestinationNodes in one AudioContext sent on two senders
+  //     of the same RTCPeerConnection must replay without InvalidAccessError and
+  //     preserve each sender's destination node ID and lineage.
+  // 1b) Single sender selecting the SECOND destination node in one AudioContext
+  //     must receive that second output's 330 Hz mic audio (never the first
+  //     destination's 440 Hz oscillator).
+  // 2a) Real ChannelSplitterNode -> (0, 0) -> real ChannelMergerNode -> (0, 0)
+  //     preserves port-0 microphone lineage and qualifies for auto-admission.
+  // 2b) source.connect(merger, 0, 1) into real ChannelMergerNode input 1 dumps
+  //     distinct port topology and withholds microphone lineage (state=unknown).
+  {
+    const twoDestGraph = {
+      id: 'graph-0',
+      contextState: 'running',
+      nodes: [
+        { id: 'n0', type: 'OscillatorNode', origin: 'synthetic' },
+        { id: 'n1', type: 'MediaStreamAudioDestinationNode' },
+        { id: 'n2', type: 'getUserMediaAudio', origin: 'microphone' },
+        { id: 'n3', type: 'MediaStreamAudioSourceNode' },
+        { id: 'n4', type: 'GainNode' },
+        { id: 'n5', type: 'MediaStreamAudioDestinationNode' }
+      ],
+      edges: [
+        { from: 'n0', to: 'n1', kind: 'audio', output: 0, input: 0 },
+        { from: 'n2', to: 'n3', kind: 'stream' },
+        { from: 'n3', to: 'n4', kind: 'audio', output: 0, input: 0 },
+        { from: 'n4', to: 'n5', kind: 'audio', output: 0, input: 0 }
+      ],
+      outputTrackOrigin: 'microphone'
+    };
+
+    const regressionCases = [
+      {
+        name: 'two-dest-two-senders',
+        verifySecondDestAudio: false,
+        fixture: validatePlatformTopologyFixture({
+          schema: 'cassini-platform-topology/v1',
+          platform: 'two-dest-two-senders',
+          capturedOn: '2026-11-12',
+          provenance: 'synthetic-probe',
+          call: { localSpeakers: 1, remoteSpeakers: 1 },
+          runtime: { usesWebAudio: true, usesAudioWorklet: false, usesWasm: false },
+          webAudioGraphs: [structuredClone(twoDestGraph)],
+          peers: [
+            {
+              peer: 0,
+              connectionState: 'connected',
+              dataChannelCount: 0,
+              transceivers: [
+                {
+                  slot: 0,
+                  kind: 'audio',
+                  direction: 'sendonly',
+                  currentDirection: 'sendonly',
+                  sender: {
+                    kind: 'audio',
+                    label: 'MediaStreamAudioDestinationNode',
+                    lineage: 'webaudio-synthetic',
+                    webAudioGraphId: 'graph-0',
+                    webAudioDestNodeId: 'n1',
+                    cloned: false,
+                    packetsProgressing: true
+                  },
+                  receiver: null
+                },
+                {
+                  slot: 1,
+                  kind: 'audio',
+                  direction: 'sendrecv',
+                  currentDirection: 'sendrecv',
+                  sender: {
+                    kind: 'audio',
+                    label: 'MediaStreamAudioDestinationNode',
+                    lineage: 'webaudio-microphone',
+                    webAudioGraphId: 'graph-0',
+                    webAudioDestNodeId: 'n5',
+                    cloned: false,
+                    packetsProgressing: true
+                  },
+                  receiver: {
+                    kind: 'audio',
+                    label: 'remote audio',
+                    mixing: 'single',
+                    speakersOnTrack: 1,
+                    speakersOverTime: [1],
+                    csrc: { present: false, distinctCount: 0 },
+                    ssrc: { present: true, distinctCount: 1 },
+                    packetsProgressing: true
+                  }
+                }
+              ]
+            }
+          ]
+        })
+      },
+      {
+        name: 'two-dest-second-only',
+        verifySecondDestAudio: true,
+        fixture: validatePlatformTopologyFixture({
+          schema: 'cassini-platform-topology/v1',
+          platform: 'two-dest-second-only',
+          capturedOn: '2026-11-12',
+          provenance: 'synthetic-probe',
+          call: { localSpeakers: 1, remoteSpeakers: 1 },
+          runtime: { usesWebAudio: true, usesAudioWorklet: false, usesWasm: false },
+          webAudioGraphs: [structuredClone(twoDestGraph)],
+          peers: [
+            {
+              peer: 0,
+              connectionState: 'connected',
+              dataChannelCount: 0,
+              transceivers: [
+                {
+                  slot: 0,
+                  kind: 'audio',
+                  direction: 'sendrecv',
+                  currentDirection: 'sendrecv',
+                  sender: {
+                    kind: 'audio',
+                    label: 'MediaStreamAudioDestinationNode',
+                    lineage: 'webaudio-microphone',
+                    webAudioGraphId: 'graph-0',
+                    webAudioDestNodeId: 'n5',
+                    cloned: false,
+                    packetsProgressing: true
+                  },
+                  receiver: {
+                    kind: 'audio',
+                    label: 'remote audio',
+                    mixing: 'single',
+                    speakersOnTrack: 1,
+                    speakersOverTime: [1],
+                    csrc: { present: false, distinctCount: 0 },
+                    ssrc: { present: true, distinctCount: 1 },
+                    packetsProgressing: true
+                  }
+                }
+              ]
+            }
+          ]
+        })
+      },
+      {
+        name: 'port-zero-splitter-merger',
+        verifySecondDestAudio: false,
+        fixture: validatePlatformTopologyFixture({
+          schema: 'cassini-platform-topology/v1',
+          platform: 'port-zero-splitter-merger',
+          capturedOn: '2026-11-12',
+          provenance: 'synthetic-probe',
+          call: { localSpeakers: 1, remoteSpeakers: 1 },
+          runtime: { usesWebAudio: true, usesAudioWorklet: false, usesWasm: false },
+          webAudioGraphs: [
+            {
+              id: 'graph-0',
+              contextState: 'running',
+              nodes: [
+                { id: 'n0', type: 'getUserMediaAudio', origin: 'microphone' },
+                { id: 'n1', type: 'MediaStreamAudioSourceNode' },
+                { id: 'n2', type: 'ChannelSplitterNode', outputs: 2 },
+                { id: 'n3', type: 'ChannelMergerNode', inputs: 2 },
+                { id: 'n4', type: 'MediaStreamAudioDestinationNode' }
+              ],
+              edges: [
+                { from: 'n0', to: 'n1', kind: 'stream' },
+                { from: 'n1', to: 'n2', kind: 'audio', output: 0, input: 0 },
+                { from: 'n2', to: 'n3', kind: 'audio', output: 0, input: 0 },
+                { from: 'n3', to: 'n4', kind: 'audio', output: 0, input: 0 }
+              ],
+              outputTrackOrigin: 'microphone'
+            }
+          ],
+          peers: [
+            {
+              peer: 0,
+              connectionState: 'connected',
+              dataChannelCount: 0,
+              transceivers: [
+                {
+                  slot: 0,
+                  kind: 'audio',
+                  direction: 'sendrecv',
+                  currentDirection: 'sendrecv',
+                  sender: {
+                    kind: 'audio',
+                    label: 'MediaStreamAudioDestinationNode',
+                    lineage: 'webaudio-microphone',
+                    webAudioGraphId: 'graph-0',
+                    webAudioDestNodeId: 'n4',
+                    cloned: false,
+                    packetsProgressing: true
+                  },
+                  receiver: {
+                    kind: 'audio',
+                    label: 'remote audio',
+                    mixing: 'single',
+                    speakersOnTrack: 1,
+                    speakersOverTime: [1],
+                    csrc: { present: false, distinctCount: 0 },
+                    ssrc: { present: true, distinctCount: 1 },
+                    packetsProgressing: true
+                  }
+                }
+              ]
+            }
+          ]
+        })
+      },
+      {
+        name: 'port-nonzero-merger',
+        verifySecondDestAudio: false,
+        fixture: validatePlatformTopologyFixture({
+          schema: 'cassini-platform-topology/v1',
+          platform: 'port-nonzero-merger',
+          capturedOn: '2026-11-12',
+          provenance: 'synthetic-probe',
+          call: { localSpeakers: 0, remoteSpeakers: 1 },
+          runtime: { usesWebAudio: true, usesAudioWorklet: false, usesWasm: false },
+          webAudioGraphs: [
+            {
+              id: 'graph-0',
+              contextState: 'running',
+              nodes: [
+                { id: 'n0', type: 'getUserMediaAudio', origin: 'microphone' },
+                { id: 'n1', type: 'MediaStreamAudioSourceNode' },
+                { id: 'n2', type: 'ChannelMergerNode', inputs: 2 },
+                { id: 'n3', type: 'MediaStreamAudioDestinationNode' }
+              ],
+              edges: [
+                { from: 'n0', to: 'n1', kind: 'stream' },
+                { from: 'n1', to: 'n2', kind: 'audio', output: 0, input: 1 },
+                { from: 'n2', to: 'n3', kind: 'audio', output: 0, input: 0 }
+              ],
+              outputTrackOrigin: 'none'
+            }
+          ],
+          peers: [
+            {
+              peer: 0,
+              connectionState: 'connected',
+              dataChannelCount: 0,
+              transceivers: [
+                {
+                  slot: 0,
+                  kind: 'audio',
+                  direction: 'sendrecv',
+                  currentDirection: 'sendrecv',
+                  sender: {
+                    kind: 'audio',
+                    label: 'MediaStreamAudioDestinationNode',
+                    lineage: 'unknown',
+                    webAudioGraphId: 'graph-0',
+                    webAudioDestNodeId: 'n3',
+                    cloned: false,
+                    packetsProgressing: true
+                  },
+                  receiver: {
+                    kind: 'audio',
+                    label: 'remote audio',
+                    mixing: 'single',
+                    speakersOnTrack: 1,
+                    speakersOverTime: [1],
+                    csrc: { present: false, distinctCount: 0 },
+                    ssrc: { present: true, distinctCount: 1 },
+                    packetsProgressing: true
+                  }
+                }
+              ]
+            }
+          ]
+        })
+      }
+    ];
+
+    for (const { name, verifySecondDestAudio, fixture } of regressionCases) {
+      const regCallerUrl = `${baseUrl}/replay/${name}/caller`;
+      const regRemoteUrl = `${baseUrl}/replay/${name}/remote`;
+      const regCaller = await context.newPage();
+      const regRemote = await context.newPage();
+      regCaller.on('pageerror', error => pageErrors.push(error.message));
+      regRemote.on('pageerror', error => pageErrors.push(error.message));
+
+      try {
+        await Promise.all([regCaller.goto(regCallerUrl), regRemote.goto(regRemoteUrl)]);
+        await replayFixtureInPages(regCaller, regRemote, fixture, [[550]]);
+
+        const shouldAdmit = expectedAutoAdmission(fixture);
+        const sendingMode = shouldAdmit ? 'captured' : 'any';
+        const before = await waitRtcTopology(regCaller, { sending: sendingMode });
+        const topology = summarizeRtcTopology(
+          before,
+          await waitRtcTopology(regCaller, { previous: before, sending: sendingMode })
+        );
+        assert.equal(topology.sendingPeers, shouldAdmit ? 1 : 0, `${name}: sendingPeers`);
+        assert.equal(topology.receivingPeers, 1, `${name}: receivingPeers`);
+
+        const dumped = await dumpPlatformTopologyFixture(regCaller, {
+          platform: fixture.platform,
+          capturedOn: fixture.capturedOn,
+          provenance: 'synthetic-probe',
+          localSpeakers: fixture.call.localSpeakers,
+          remoteSpeakers: fixture.call.remoteSpeakers,
+          receiverMixing: 'single'
+        });
+        assert.deepEqual(dumped.webAudioGraphs[0].nodes, fixture.webAudioGraphs[0].nodes, `${name}: nodes round-trip`);
+        assert.deepEqual(dumped.webAudioGraphs[0].edges, fixture.webAudioGraphs[0].edges, `${name}: edges round-trip`);
+        assert.equal(dumped.webAudioGraphs[0].outputTrackOrigin, fixture.webAudioGraphs[0].outputTrackOrigin, `${name}: outputTrackOrigin`);
+        fixture.peers[0].transceivers.forEach((expectedSlot, sIndex) => {
+          const actualSlot = dumped.peers[0].transceivers[sIndex];
+          assert.equal(actualSlot.sender?.lineage ?? null, expectedSlot.sender?.lineage ?? null, `${name}: slot ${sIndex} lineage`);
+          assert.equal(actualSlot.sender?.webAudioGraphId ?? null, expectedSlot.sender?.webAudioGraphId ?? null, `${name}: slot ${sIndex} graphId`);
+          assert.equal(actualSlot.sender?.webAudioDestNodeId ?? null, expectedSlot.sender?.webAudioDestNodeId ?? null, `${name}: slot ${sIndex} destNodeId`);
+        });
+
+        await regCaller.waitForFunction(() => globalThis.__cassiniCallEvidenceV1?.read().revision >= 3);
+        const regTabId = await worker.evaluate(
+          async targetUrl => (await chrome.tabs.query({})).find(tab => tab.url === targetUrl).id,
+          regCallerUrl
+        );
+        const regBarrier = controlEvents.length;
+        controlPeer.write(JSON.stringify({
+          type: 'configure',
+          capabilities: ['call-signals-v1', 'verified-auto-admission-v1']
+        }) + '\n');
+        const expectedState = shouldAdmit ? 'active' : 'unknown';
+        const regRow = await waitForControlEvent(
+          () => controlEvents
+            .slice(regBarrier)
+            .filter(e => e.type === 'callSignals')
+            .flatMap(e => e.tabs)
+            .find(tab => tab.tabId === regTabId && (!shouldAdmit || tab.callEvidence.state === expectedState)),
+          `${name}: callSignals snapshot (${expectedState})`
+        );
+        const regCollector = await regCaller.evaluate(() => {
+          const v = globalThis.__cassiniCallEvidenceV1.read();
+          return {
+            cohortQualified: v.cohortQualified,
+            capturedSendingPeers: v.capturedSendingPeers,
+            receivedPeers: v.receivedPeers
+          };
+        });
+        assert.equal(regCollector.cohortQualified, shouldAdmit, `${name}: cohortQualified`);
+        assert.equal(regCollector.capturedSendingPeers, shouldAdmit ? 1 : 0, `${name}: capturedSendingPeers`);
+        assert.equal(regRow.callEvidence.state, expectedState, `${name}: callEvidence.state`);
+
+        if (verifySecondDestAudio) {
+          const startId = `replay-start-${name}`;
+          controlPeer.write(JSON.stringify({
+            type: 'command',
+            requestId: startId,
+            action: 'start',
+            tabId: regTabId,
+            mode: 'tracks',
+            independent: true,
+            captureLocal: true,
+            microphone: false
+          }) + '\n');
+          const started = await waitForControlEvent(
+            () => controlEvents.find(e => e.type === 'result' && e.requestId === startId),
+            `${name}: start result`
+          );
+          assert.equal(started.ok, true, JSON.stringify(started));
+          const recordingDir = started.status.path;
+          await sessionValue(recordingDir, async () => {
+            try {
+              const session = JSON.parse(await readFile(path.join(recordingDir, 'session.json'), 'utf8'));
+              const local = session.tracks.find(t => t.kind === 'local');
+              if (!local || local.frames < local.sampleRate * 2) return false;
+              const wav = await readFile(path.join(recordingDir, local.file));
+              const offset = Math.max(4800, local.frames - 14000);
+              return tonePower(wav, 48000, 330, offset, 12000) > 0.0005;
+            } catch {
+              return false;
+            }
+          }, `${name}: settled 330 Hz second-destination local WAV`);
+          const stopId = `replay-stop-${name}`;
+          controlPeer.write(JSON.stringify({
+            type: 'command',
+            requestId: stopId,
+            action: 'stop',
+            tabId: regTabId,
+            independent: true
+          }) + '\n');
+          const stopped = await waitForControlEvent(
+            () => controlEvents.find(e => e.type === 'result' && e.requestId === stopId),
+            `${name}: stop result`
+          );
+          assert.equal(stopped.ok, true, JSON.stringify(stopped));
+          const finalSession = JSON.parse(await readFile(path.join(recordingDir, 'session.json'), 'utf8'));
+          const localTrack = finalSession.tracks.find(t => t.kind === 'local');
+          const localWav = await readFile(path.join(recordingDir, localTrack.file));
+          const offset = Math.max(4800, localTrack.frames - 14000);
+          const power330 = tonePower(localWav, 48000, 330, offset, 12000);
+          const power440 = tonePower(localWav, 48000, 440, offset, 12000);
+          assert.ok(power330 > 0.0005, `${name}: second destination carries 330 Hz mic signal`);
+          assert.ok(power440 < power330 * 0.01, `${name}: first destination 440 Hz oscillator never routed to second-destination sender`);
+        }
+
+        report.regressionControls.push({
+          name,
+          collector: regCollector,
+          autoAdmissionState: regRow.callEvidence.state
+        });
+        console.log(`PASS regression control: ${name} (auto-admission=${regRow.callEvidence.state})`);
+      } finally {
+        await regCaller.close();
+        await regRemote.close();
+      }
+    }
+  }
+
   // Mandatory negative control: pure synthetic OscillatorNode -> GainNode ->
   // MediaStreamAudioDestinationNode (even with a captured microphone modulating
   // GainNode.gain AudioParam) + live incoming remote audio MUST stay non-qualifying.
@@ -714,9 +1222,9 @@ try {
             ],
             edges: [
               { from: 'n0', to: 'n1', kind: 'stream' },
-              { from: 'n1', to: 'n3', kind: 'param' },
-              { from: 'n2', to: 'n3', kind: 'audio' },
-              { from: 'n3', to: 'n4', kind: 'audio' }
+              { from: 'n1', to: 'n3', kind: 'param', output: 0 },
+              { from: 'n2', to: 'n3', kind: 'audio', output: 0, input: 0 },
+              { from: 'n3', to: 'n4', kind: 'audio', output: 0, input: 0 }
             ],
             outputTrackOrigin: 'synthetic'
           }
@@ -737,6 +1245,7 @@ try {
                   label: 'MediaStreamAudioDestinationNode',
                   lineage: 'webaudio-synthetic',
                   webAudioGraphId: 'graph-0',
+                  webAudioDestNodeId: 'n4',
                   cloned: false,
                   packetsProgressing: true
                 },

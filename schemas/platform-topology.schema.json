@@ -165,34 +165,150 @@
             "synthetic",
             "unknown"
           ]
+        },
+        "inputs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 32
+        },
+        "outputs": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 32
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "ChannelMergerNode"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "inputs": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 32
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "ChannelSplitterNode"
+              }
+            },
+            "required": [
+              "type"
+            ]
+          },
+          "then": {
+            "properties": {
+              "outputs": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 32
+              }
+            }
+          }
+        }
+      ]
     },
     "webAudioEdge": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "from",
-        "to",
-        "kind"
-      ],
-      "properties": {
-        "from": {
-          "type": "string",
-          "pattern": "^n(?:0|[1-9]\\d*)$"
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "from",
+            "to",
+            "kind"
+          ],
+          "properties": {
+            "from": {
+              "type": "string",
+              "pattern": "^n(?:0|[1-9]\\d*)$"
+            },
+            "to": {
+              "type": "string",
+              "pattern": "^n(?:0|[1-9]\\d*)$"
+            },
+            "kind": {
+              "const": "stream"
+            }
+          }
         },
-        "to": {
-          "type": "string",
-          "pattern": "^n(?:0|[1-9]\\d*)$"
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "from",
+            "to",
+            "kind",
+            "output",
+            "input"
+          ],
+          "properties": {
+            "from": {
+              "type": "string",
+              "pattern": "^n(?:0|[1-9]\\d*)$"
+            },
+            "to": {
+              "type": "string",
+              "pattern": "^n(?:0|[1-9]\\d*)$"
+            },
+            "kind": {
+              "const": "audio"
+            },
+            "output": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 31
+            },
+            "input": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 31
+            }
+          }
         },
-        "kind": {
-          "enum": [
-            "stream",
-            "audio",
-            "param"
-          ]
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "from",
+            "to",
+            "kind",
+            "output"
+          ],
+          "properties": {
+            "from": {
+              "type": "string",
+              "pattern": "^n(?:0|[1-9]\\d*)$"
+            },
+            "to": {
+              "type": "string",
+              "pattern": "^n(?:0|[1-9]\\d*)$"
+            },
+            "kind": {
+              "const": "param"
+            },
+            "output": {
+              "type": "integer",
+              "minimum": 0,
+              "maximum": 31
+            }
+          }
         }
-      }
+      ]
     },
     "webAudioGraph": {
       "type": "object",
@@ -270,6 +386,7 @@
         "label",
         "lineage",
         "webAudioGraphId",
+        "webAudioDestNodeId",
         "cloned",
         "packetsProgressing"
       ],
@@ -308,11 +425,50 @@
             }
           ]
         },
+        "webAudioDestNodeId": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string",
+              "pattern": "^n(?:0|[1-9]\\d*)$"
+            }
+          ]
+        },
         "cloned": {
           "type": "boolean"
         },
         "packetsProgressing": {
           "type": "boolean"
+        }
+      },
+      "if": {
+        "required": [
+          "webAudioGraphId"
+        ],
+        "properties": {
+          "webAudioGraphId": {
+            "type": "null"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "webAudioDestNodeId": {
+            "type": "null"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "kind": {
+            "const": "audio"
+          },
+          "webAudioDestNodeId": {
+            "type": "string",
+            "pattern": "^n(?:0|[1-9]\\d*)$"
+          }
         }
       }
     },

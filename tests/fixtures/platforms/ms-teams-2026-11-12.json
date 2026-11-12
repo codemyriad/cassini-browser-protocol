@@ -44,12 +44,16 @@
         {
           "from": "n1",
           "to": "n2",
-          "kind": "audio"
+          "kind": "audio",
+          "output": 0,
+          "input": 0
         },
         {
           "from": "n2",
           "to": "n3",
-          "kind": "audio"
+          "kind": "audio",
+          "output": 0,
+          "input": 0
         }
       ],
       "outputTrackOrigin": "microphone"
@@ -71,6 +75,7 @@
             "label": "MediaStreamAudioDestinationNode",
             "lineage": "webaudio-microphone",
             "webAudioGraphId": "graph-0",
+            "webAudioDestNodeId": "n3",
             "cloned": false,
             "packetsProgressing": true
           },
