@@ -265,6 +265,23 @@ test('a microphone processed through WebAudio is recorded as Me, also when share
  assert.equal(f.captures[0].stopped,true,'the output that now carries only screen audio leaves Me');
  assert.equal(f.captures.length,1,'nor does it reappear as page media');
 }));
+test('a mixed output leaves Me once its microphone is stopped, disabled, routed off port 0 or its context stops rendering',()=>fixture(async f=>{
+ for(const change of ['stopped','disabled','muted','suspended','port']){
+  f.peer.senders=[];
+  const mic=await f.navigator.mediaDevices.getUserMedia({audio:true}),screen=await f.navigator.mediaDevices.getDisplayMedia({video:true,audio:true});
+  const g=await webAudioSenders(f,{mic,screen});
+  const [track]=mic.getAudioTracks();
+  if(change==='stopped')track.readyState='ended';
+  if(change==='disabled')track.enabled=false;
+  if(change==='muted')track.muted=true;
+  if(change==='suspended')g.audio.state='suspended';
+  if(change==='port'){g.sources.mic.disconnect(g.mixer);g.sources.mic.connect(g.mixer,0,1);}
+  const before=f.captures.length;
+  await f.start('mixed-'+change,{captureLocal:true,sourceOutcomes:true});
+  assert.equal(f.captures.length,before,change+': only shared-screen audio still reaches the output, so it is not Me');
+  await f.stop();
+ }
+}));
 test('shared-screen audio processed through WebAudio, from a stream or a media element, is never recorded as Me',()=>fixture(async f=>{
  for(const kind of ['screen','element']){
   const screen=await f.navigator.mediaDevices.getDisplayMedia({video:true,audio:true});

@@ -97,7 +97,7 @@
     return {label:[...names.values().next().value].slice(0, 200).join(""), labelSource:"dom"};
   }
   // Remember microphone and display-share origins before they become senders or previews.
-  function isDisplayTrack(track, depth = 0) {
+  function isDisplayTrack(track, depth = 0, memo = undefined) {
     if (!track) return false;
     const root = sourceRoot(track);
     if (knownDisplayTracks.has(track) || knownDisplayTracks.has(root)) return true;
@@ -112,7 +112,7 @@
     } catch {}
     // A WebAudio output is display audio while shared-screen audio reaches it and no captured
     // microphone does; a processed (or mixed) microphone stays Me. Its graph can change: no caching.
-    const reach = audioReach(track, depth);
+    const reach = audioReach(track, depth, memo);
     return !!reach && reach.display && !reach.microphone;
   }
   // WebAudio lineage, the same rules as the native collector's (rtc-evidence.js): a
@@ -121,22 +121,39 @@
   const capturedMicrophones = new WeakSet();
   const audioSources = new WeakMap(), audioInputs = new WeakMap(), audioOutputs = new WeakMap(), audioOutputTracks = new WeakMap();
   const isAudioNode = value => typeof AudioNode === "function" && value instanceof AudioNode;
-  function audioReach(track, depth = 0) {
+  // A microphone overrides display exclusion only while it is live, enabled and unmuted, its
+  // context renders, and it reaches the output through port 0 (output 0 into input 0), as in
+  // the collector. Shared-screen audio counts through any port: excluding it errs toward safety.
+  const audibleMicrophone = track => track?.readyState === "live" && track.enabled === true && track.muted !== true;
+  function audioReach(track, depth = 0, memo = new Map()) {
     const output = audioOutputTracks.get(sourceRoot(track)) || audioOutputTracks.get(track);
     if (!output || depth > 8) return null;
-    const reach = { microphone: false, display: false }, queue = [output], seen = new Set(queue);
-    for (let i = 0; i < queue.length && i < 512; i++) {
-      const source = audioSources.get(queue[i]);
-      if (source) {
-        let tracks = source.tracks || [];
-        if (source.element) try { tracks = source.element.srcObject?.getAudioTracks?.() || []; } catch { tracks = []; }
-        for (const input of tracks) {
-          if (capturedMicrophones.has(sourceRoot(input)) || audioReach(input, depth + 1)?.microphone) reach.microphone = true;
-          else if (isDisplayTrack(input, depth + 1)) reach.display = true;
+    if (memo.has(output)) return memo.get(output) || { microphone: false, display: false };
+    memo.set(output, null);
+    const reach = { microphone: false, display: false };
+    let running = false;
+    try { running = output.context?.state === "running"; } catch {}
+    // Walk twice: through every edge for display audio, through port-0 edges for microphones.
+    for (const micPath of [false, true]) {
+      const queue = [output], seen = new Set(queue);
+      for (let i = 0; i < queue.length && i < 512; i++) {
+        const source = audioSources.get(queue[i]);
+        if (source) {
+          let tracks = source.tracks || [];
+          if (source.element) try { tracks = source.element.srcObject?.getAudioTracks?.() || []; } catch { tracks = []; }
+          for (const input of tracks) {
+            if (micPath) {
+              if (running && audibleMicrophone(input) && (capturedMicrophones.has(sourceRoot(input)) || audioReach(input, depth + 1, memo)?.microphone)) reach.microphone = true;
+            } else if (isDisplayTrack(input, depth + 1, memo)) reach.display = true;
+          }
+        }
+        for (const edge of audioInputs.get(queue[i]) || []) {
+          if (micPath && (edge.output !== 0 || edge.input !== 0)) continue;
+          if (!seen.has(edge.from)) { seen.add(edge.from); queue.push(edge.from); }
         }
       }
-      for (const edge of audioInputs.get(queue[i]) || []) if (!seen.has(edge.from)) { seen.add(edge.from); queue.push(edge.from); }
     }
+    memo.set(output, reach);
     return reach;
   }
   const audioContextPrototype = globalThis.AudioContext?.prototype;
@@ -169,7 +186,9 @@
     audioNodePrototype.connect = function (...args) {
       const result = Reflect.apply(connect, this, args);
       try {
-        const [to] = args, output = audioIndex(args[1], 0), input = audioIndex(args[2], 0);
+        // Only supplied slots: an omitted index never reads a page prototype property.
+        const slot = i => i < args.length ? args[i] : undefined;
+        const to = slot(0), output = audioIndex(slot(1), 0), input = audioIndex(slot(2), 0);
         if (isAudioNode(to) && output >= 0 && input >= 0 && !edges(audioOutputs, this).some(e => e.to === to && e.output === output && e.input === input)) {
           edges(audioOutputs, this).push({ to, output, input });
           edges(audioInputs, to).push({ from: this, output, input });
@@ -181,9 +200,10 @@
       const result = Reflect.apply(disconnect, this, args);
       try {
         let to = null, output = -1, input = -1;
-        if (args.length && isAudioNode(args[0])) { to = args[0]; if (args.length > 1) output = audioIndex(args[1], -1); if (args.length > 2) input = audioIndex(args[2], -1); }
-        else if (args.length && typeof AudioParam === "function" && args[0] instanceof AudioParam) return result;
-        else if (args.length) output = audioIndex(args[0], -1);
+        const slot = i => i < args.length ? args[i] : undefined;
+        if (args.length && isAudioNode(slot(0))) { to = slot(0); if (args.length > 1) output = audioIndex(slot(1), -1); if (args.length > 2) input = audioIndex(slot(2), -1); }
+        else if (args.length && typeof AudioParam === "function" && slot(0) instanceof AudioParam) return result;
+        else if (args.length) output = audioIndex(slot(0), -1);
         const removed = e => (to === null || e.to === to) && (output < 0 || e.output === output) && (input < 0 || e.input === input);
         const outputs = audioOutputs.get(this) || [];
         for (const edge of outputs.filter(removed)) {

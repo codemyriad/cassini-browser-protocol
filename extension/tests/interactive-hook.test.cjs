@@ -3,12 +3,12 @@ const {test}=require('node:test');const assert=require('node:assert/strict');
 const vm=require('node:vm'),fs=require('node:fs'),path=require('node:path');
 const {until}=require('./support/app-control-harness.cjs');
 function fixture(){
-  let now=0;const origin=1000000,timers=[],listeners=[],messages=[];
+  let now=0,stateReads=0;const origin=1000000,timers=[],listeners=[],messages=[];
   const mapEach=Map.prototype.forEach;
   class Report extends Map {forEach(fn){return Reflect.apply(mapEach,this,[fn])}}
   class Track {
     #kind='audio';#state='live';#enabled=true;#muted=false;#label;constructor(label='Fixture microphone'){this.#label=label}
-    get kind(){return this.#kind}get readyState(){return this.#state}set readyState(value){this.#state=value}
+    get kind(){return this.#kind}get readyState(){stateReads++;return this.#state}set readyState(value){this.#state=value}
     get enabled(){return this.#enabled}set enabled(value){this.#enabled=value}
     get muted(){return this.#muted}set muted(value){this.#muted=value}get label(){return this.#label}
     clone(){return new Track(this.#label)}
@@ -47,6 +47,7 @@ function fixture(){
     createMediaStreamSource(mediaStream){return new MediaStreamAudioSourceNode(this,{mediaStream})}
     createMediaStreamDestination(){return new MediaStreamAudioDestinationNode(this)}
     createGain(){return new GainNode(this)}createOscillator(){return new AudioNode(this,0,1)}createMediaElementSource(){return new AudioNode(this,0,1)}
+    createChannelMerger(inputs=6){return new AudioNode(this,inputs,1)}createChannelSplitter(outputs=6){return new AudioNode(this,1,outputs)}
     async close(){this.state='closed'}
   }
   class Sender {
@@ -93,7 +94,7 @@ function fixture(){
     // deliberately poisoned Promise.prototype.then/species. Browsers ignore
     // an interval callback return value; this bridge waits intrinsically.
     Object.defineProperty(sampled,'constructor',{value:Promise});await sampled;}
-  return {context,window,listeners,messages,peer,read,advance,tick,Track};
+  return {context,window,listeners,messages,peer,read,advance,tick,Track,stateReads:()=>stateReads};
 }
 test('real capture provenance and proven clones require two fresh progress samples; preview and synthetic senders do not qualify',async()=>{
   for(const kind of ['captured','clone','synthetic']){
@@ -330,4 +331,48 @@ test('a WebAudio call ends natively when its microphone stops and its peers clos
  assert.equal(f.read().ended,true,'the output track no longer carries a live captured microphone');
  const next=await graphPeer(f,({audio,mic,output})=>{audio.createMediaStreamSource(mic).connect(output)});
  assert.equal(await qualifies(f,next.peer),true);assert.equal(f.read().hookGeneration,'1');
+});
+
+test('a page numeric prototype property cannot turn an omitted connect index into a stale edge',async()=>{
+ const f=fixture(),g=await graphPeer(f,({audio,mic,output})=>({source:audio.createMediaStreamSource(mic)}));
+ vm.runInContext('Object.prototype[1]=1;Object.prototype[2]=1;Array.prototype[1]=1',f.context);
+ g.source.connect(g.output);assert.equal(await qualifies(f,g.peer),true);
+ g.source.disconnect(g.output,0);
+ assert.equal(f.read().capturedSendingPeers,0,'the native output-0 edge is removed, not a phantom output-1 edge');
+});
+test('channel routing: a splitter port fed only by generated audio has no lineage; the microphone port has',async()=>{
+ for(const [port,expected] of [[1,false],[0,true]]){
+  const f=fixture(),g=await graphPeer(f,({audio,mic,output})=>{
+   const merger=audio.createChannelMerger(2),splitter=audio.createChannelSplitter(2);
+   audio.createMediaStreamSource(mic).connect(merger,0,0);audio.createOscillator().connect(merger,0,1);
+   merger.connect(splitter);splitter.connect(output,port);
+  });
+  assert.equal(await qualifies(f,g.peer),expected,'splitter output '+port);
+ }
+});
+test('disconnecting a qualified graph after its peers close is not a call end; only an ended microphone is',async()=>{
+ const f=fixture(),g=await graphPeer(f,({audio,mic,output})=>{const source=audio.createMediaStreamSource(mic);source.connect(output);return {source}});
+ assert.equal(await qualifies(f,g.peer),true);
+ g.peer.pc.close();g.source.disconnect();g.audio.state='suspended';
+ assert.equal(f.read().ended,false,'teardown of a graph is not proof that the microphone ended');
+ g.mic.getAudioTracks()[0].readyState='ended';assert.equal(f.read().ended,true);
+});
+test('nested WebAudio outputs are walked once per read: work grows linearly with fan-out',async()=>{
+ // Five chained contexts, each with `width` sources made from the previous
+ // output. The base microphone is disabled, so every path must be explored.
+ const work=async width=>{
+  const f=fixture(),mic=await f.context.navigator.mediaDevices.getUserMedia();
+  let stream=mic;
+  for(let level=0;level<5;level++){
+   const audio=new f.context.AudioContext(),output=audio.createMediaStreamDestination();
+   for(let i=0;i<width;i++)audio.createMediaStreamSource(stream).connect(output);
+   stream=output.stream;
+  }
+  const peer=await f.peer(stream.getAudioTracks()[0]);
+  mic.getAudioTracks()[0].enabled=false;
+  const before=f.stateReads();assert.equal(f.read().capturedSendingPeers,0);
+  return f.stateReads()-before;
+ };
+ const small=await work(4),large=await work(8);
+ assert.ok(large<=small*3,`work ${small} at width 4 and ${large} at width 8 must scale linearly, not exponentially`);
 });

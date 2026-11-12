@@ -270,8 +270,10 @@ silent even when its chunk arrives after unmuting. Audio from `getDisplayMedia`,
 its track clones and `MediaStream.clone()` copies is never Me. Since extension 0.2.28
 the hook follows WebAudio with the collector's graph rules: an output track reached by
 `getDisplayMedia` audio (also through a media element whose `srcObject` holds it) and
-by no captured microphone is display audio and never Me; a microphone processed
-through WebAudio stays Me, also while the page mixes shared-screen sound into it. A page opened
+by no audible captured microphone is display audio and never Me; a microphone processed
+through WebAudio stays Me, also while the page mixes shared-screen sound into it. The
+microphone counts only under the collector's rules (live, enabled, unmuted, port 0,
+running context); shared-screen audio counts through any port. A page opened
 before the update keeps its older MAIN hook; its readiness reply lacks hook
 revision 2, so the relay reports it unavailable and the tab is `reloadRequired`
 rather than ready. Without the capability an app keeps sending
@@ -1317,17 +1319,21 @@ copy, paired by audio-track position and equal native label; and the output trac
 `MediaStreamAudioDestinationNode` (factory or constructor). A
 `MediaStreamAudioSourceNode` is a microphone source only when every audio track of
 its native `mediaStream` had lineage at creation. Lineage follows
-`AudioNode.connect(node, output, input)` edges and is removed by every
-`disconnect()` form that may have removed them; arguments that are not numbers match
-every index. An output track has a root only while its context is `running` and a
-source whose tracks are all live, enabled, unmuted and themselves rooted reaches its
-node; chained contexts resolve recursively. AudioParam modulation, media-element,
+`AudioNode.connect(node, output, input)` edges on port 0 only (output 0 into input 0),
+because channel splitters, mergers and multi-port nodes can route other inputs alone to
+a port. A `disconnect()` removes every recorded edge it may have removed; only supplied
+argument slots are read, and arguments that are not numbers match every index. An
+output track has a root only while its context is `running` and a source whose tracks
+are all live, enabled, unmuted and themselves rooted reaches its node; chained contexts
+resolve recursively, each output walked at most once per read under a fixed work
+budget whose exhaustion withholds lineage. AudioParam modulation, media-element,
 received, generated and `getDisplayMedia` audio never supply lineage. An output that
 mixes a captured microphone with other audio is rooted through that microphone;
 without it the remaining inputs are not. Lineage is structural, like a sent raw
 microphone: it does not judge content (a zero gain still counts, as an enabled
-microphone in a silent room does). For the terminal check, an output track whose
-reaching microphones all ended (or whose context closed) is ended. Not covered:
+microphone in a silent room does). For the terminal check, an output track is ended natively,
+when its context closed, or when every source track that ever fed it a rooted
+microphone has ended; disconnecting or suspending a graph is not an end. Not covered:
 microphone audio carried outside the graph (AudioWorklet or ScriptProcessor message
 ports, `MediaStreamTrackProcessor`/`Generator`, Insertable Streams) and nodes made by
 constructors reached through a prototype's `constructor`; these stay unknown, with
