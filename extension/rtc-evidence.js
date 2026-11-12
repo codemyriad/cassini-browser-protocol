@@ -82,7 +82,7 @@
   const rememberRoot=(track,ancestor=track,node=null)=>{
     if(lineageOf(track))return;
     if(roots.length>=1024){overflow=true;return}
-    const value={track,root:ancestor,node,fed:list(),fedOverflow:false};
+    const value={track,root:ancestor,node};
     if(lineageIndex&&!remember(lineageIndex,track,value))return;add(roots,value);
   };
   const live=track=>get(trackKind,track)==='audio'&&get(trackState,track)==='live';
@@ -101,33 +101,48 @@
   // lineage, which also cuts cycles) and a total work budget: exhausting it
   // withholds lineage. Every output node is walked at most once.
   const evaluation=()=>({memo:new NativeWeakMap(),budget:4096,depth:0});
-  function sourceRoot(source,state,fed){
+  // Per output node: the source tracks that fed it a rooted microphone, for
+  // the terminal check (bounded; overflow never ends by ancestry).
+  const ancestry=graph?new NativeWeakMap():null;
+  const feed=(node,tracks)=>{
+    let value=lookup(ancestry,node);
+    if(!value){value={tracks:list(),overflow:false};if(!remember(ancestry,node,value))return}
+    for(let i=0;i<tracks.length;i++){
+      let known=false;for(let j=0;j<value.tracks.length;j++)if(value.tracks[j]===tracks[i]){known=true;break}
+      if(known)continue;if(value.tracks.length<16)add(value.tracks,tracks[i]);else value.overflow=true;
+    }
+  };
+  function sourceRoot(source,state){
     let found=null;
     for(let i=0;i<source.tracks.length;i++){
       const track=source.tracks[i];
       if(!live(track)||get(trackEnabled,track)!==true||get(trackMuted,track)!==false)return null;
       const ancestor=lineage(track,state);if(!ancestor)return null;found=found||ancestor;
     }
-    if(found&&fed)for(let i=0;i<source.tracks.length;i++)add(fed,source.tracks[i]);
     return found;
   }
   // Only port 0 carries lineage (output 0 into input 0): channel splitters,
   // mergers and multi-port nodes can route other inputs alone to a port.
-  function reaches(node,state,fed){
+  // Every walk visits all rooted sources so nested outputs keep their ancestry.
+  function reaches(node,state){
     const known=lookup(state.memo,node);if(known!==undefined)return known;
     remember(state.memo,node,null);
     // Only a running context renders its graph into the output track.
     if(!graph||state.depth>8||contextOf(node)!=='running')return null;
     const queue=list(),seen=new NativeWeakMap();add(queue,node);remember(seen,node,true);
     let found=null;
-    // The top-level walk (fed) collects every rooted source for the terminal check.
-    for(let i=0;i<queue.length&&(!found||fed);i++){
-      if(--state.budget<0)return fed?found:null;
+    walk:for(let i=0;i<queue.length;i++){
+      // An exhausted budget stops the walk; what it already proved stays genuine.
+      if(--state.budget<0)break;
       const current=queue[i],source=lookup(sources,current);
-      if(source){state.depth++;try{found=sourceRoot(source,state,fed)||found}finally{state.depth--}continue}
+      if(source){
+        state.depth++;let rooted=null;try{rooted=sourceRoot(source,state)}finally{state.depth--}
+        if(rooted){found=found||rooted;feed(node,source.tracks)}
+        continue;
+      }
       const inputs=lookup(inbound,current);if(!inputs)continue;
       for(let j=0;j<inputs.length;j++){
-        if(--state.budget<0)return fed?found:null;
+        if(--state.budget<0)break walk;
         const edge=inputs[j];
         if(edge.output!==0||edge.input!==0||lookup(seen,edge.from))continue;
         remember(seen,edge.from,true);add(queue,edge.from);
@@ -138,28 +153,19 @@
   }
   function lineage(track,state){
     const value=lineageOf(track);if(!value)return null;
-    return value.root||reaches(value.node,state,null);
+    return value.root||reaches(value.node,state);
   }
-  // Each rooted read of an output remembers the source tracks that fed it, so
-  // the terminal check needs an affirmative end, never a missing lineage.
-  const root=track=>{
-    const value=lineageOf(track);if(!value)return null;if(value.root)return value.root;
-    const fed=list(),found=reaches(value.node,evaluation(),fed);
-    if(found)for(let i=0;i<fed.length;i++){
-      let known=false;for(let j=0;j<value.fed.length;j++)if(value.fed[j]===fed[i]){known=true;break}
-      if(known)continue;if(value.fed.length<16)add(value.fed,fed[i]);else value.fedOverflow=true;
-    }
-    return found;
-  };
+  const root=track=>lineage(track,evaluation());
   // An output ends like a track: natively, when its context closed, or when
-  // every source track that ever fed it a rooted microphone has ended.
-  // Disconnecting or suspending a graph is not an end.
+  // every source track that ever fed it a rooted microphone has ended (nested
+  // outputs recursively). Disconnecting or suspending a graph is not an end.
   const finished=(track,depth=0)=>{
     if(get(trackState,track)==='ended')return true;
     const value=lineageOf(track);if(!value||value.root||depth>8)return false;
     if(contextOf(value.node)==='closed')return true;
-    if(value.fedOverflow||!value.fed.length)return false;
-    for(let i=0;i<value.fed.length;i++)if(!finished(value.fed[i],depth+1))return false;
+    const fed=lookup(ancestry,value.node);
+    if(!fed||fed.overflow||!fed.tracks.length)return false;
+    for(let i=0;i<fed.tracks.length;i++)if(!finished(fed.tracks[i],depth+1))return false;
     return true;
   };
   const closed=pc=>get(signaling,pc)==='closed'||get(connection,pc)==='closed';

@@ -376,3 +376,16 @@ test('nested WebAudio outputs are walked once per read: work grows linearly with
  const small=await work(4),large=await work(8);
  assert.ok(large<=small*3,`work ${small} at width 4 and ${large} at width 8 must scale linearly, not exponentially`);
 });
+
+test('a chained WebAudio call ends when its microphone stops and its peers close, then the next episode rotates',async()=>{
+ const f=fixture(),mic=await f.context.navigator.mediaDevices.getUserMedia();
+ const first=new f.context.AudioContext(),inner=first.createMediaStreamDestination();first.createMediaStreamSource(mic).connect(inner);
+ const second=new f.context.AudioContext(),outer=second.createMediaStreamDestination();second.createMediaStreamSource(inner.stream).connect(outer);
+ const peer=await f.peer(outer.stream.getAudioTracks()[0]);
+ assert.equal(await qualifies(f,peer),true);
+ peer.pc.close();assert.equal(f.read().ended,false);
+ mic.getAudioTracks()[0].readyState='ended';
+ assert.equal(f.read().ended,true,'the nested output inherits its microphone ancestry');
+ const next=await graphPeer(f,({audio,mic,output})=>{audio.createMediaStreamSource(mic).connect(output)});
+ assert.equal(await qualifies(f,next.peer),true);assert.equal(f.read().hookGeneration,'1');
+});

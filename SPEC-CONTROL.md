@@ -273,7 +273,9 @@ the hook follows WebAudio with the collector's graph rules: an output track reac
 by no audible captured microphone is display audio and never Me; a microphone processed
 through WebAudio stays Me, also while the page mixes shared-screen sound into it. The
 microphone counts only under the collector's rules (live, enabled, unmuted, port 0,
-running context); shared-screen audio counts through any port. A page opened
+running context, every track of a stream source); shared-screen audio counts through
+any port and through any track of a stream source, and a graph too deep or wide to
+walk is treated as shared-screen audio. A page opened
 before the update keeps its older MAIN hook; its readiness reply lacks hook
 revision 2, so the relay reports it unavailable and the tab is `reloadRequired`
 rather than ready. Without the capability an app keeps sending
@@ -1333,12 +1335,18 @@ without it the remaining inputs are not. Lineage is structural, like a sent raw
 microphone: it does not judge content (a zero gain still counts, as an enabled
 microphone in a silent room does). For the terminal check, an output track is ended natively,
 when its context closed, or when every source track that ever fed it a rooted
-microphone has ended; disconnecting or suspending a graph is not an end. Not covered:
+microphone has ended (through nested outputs too); disconnecting or suspending a
+graph is not an end. Not covered:
 microphone audio carried outside the graph (AudioWorklet or ScriptProcessor message
 ports, `MediaStreamTrackProcessor`/`Generator`, Insertable Streams) and nodes made by
 constructors reached through a prototype's `constructor`; these stay unknown, with
 manual recording preserved. Edges are bounded per node; an unrecorded edge can only
-withhold lineage. Observation must not open a microphone.
+withhold lineage. A `disconnect()` made through another frame's or realm's
+`AudioNode` methods is invisible to this collector, so the edge it removed can keep
+an output rooted. Exploiting that requires a live, enabled, captured microphone in
+this frame that the page deliberately unhooks through a foreign realm; such a page
+already qualifies by sending that microphone itself (D80.4), so it gains no
+admission it lacks. No collector state is shared across frames to close this. Observation must not open a microphone.
 A listen-only call without an outbound captured sender remains unknown for this
 rule, with explicit manual recording preserved.
 

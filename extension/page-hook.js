@@ -127,7 +127,9 @@
   const audibleMicrophone = track => track?.readyState === "live" && track.enabled === true && track.muted !== true;
   function audioReach(track, depth = 0, memo = new Map()) {
     const output = audioOutputTracks.get(sourceRoot(track)) || audioOutputTracks.get(track);
-    if (!output || depth > 8) return null;
+    if (!output) return null;
+    // A graph too deep or too wide to walk is unknown: treated as shared-screen audio, never Me.
+    if (depth > 8) return { microphone: false, display: true };
     if (memo.has(output)) return memo.get(output) || { microphone: false, display: false };
     memo.set(output, null);
     const reach = { microphone: false, display: false };
@@ -136,16 +138,18 @@
     // Walk twice: through every edge for display audio, through port-0 edges for microphones.
     for (const micPath of [false, true]) {
       const queue = [output], seen = new Set(queue);
-      for (let i = 0; i < queue.length && i < 512; i++) {
+      for (let i = 0; i < queue.length; i++) {
+        if (i >= 512) { if (!micPath) reach.display = true; break; }
         const source = audioSources.get(queue[i]);
         if (source) {
           let tracks = source.tracks || [];
           if (source.element) try { tracks = source.element.srcObject?.getAudioTracks?.() || []; } catch { tracks = []; }
-          for (const input of tracks) {
-            if (micPath) {
-              if (running && audibleMicrophone(input) && (capturedMicrophones.has(sourceRoot(input)) || audioReach(input, depth + 1, memo)?.microphone)) reach.microphone = true;
-            } else if (isDisplayTrack(input, depth + 1, memo)) reach.display = true;
-          }
+          // A stream source renders one of its tracks: it is a microphone only when every
+          // track is an audible captured microphone, and display when any track is display.
+          if (micPath) {
+            if (running && !source.element && tracks.length && tracks.every(input => audibleMicrophone(input) &&
+                (capturedMicrophones.has(sourceRoot(input)) || audioReach(input, depth + 1, memo)?.microphone))) reach.microphone = true;
+          } else if (tracks.some(input => isDisplayTrack(input, depth + 1, memo))) reach.display = true;
         }
         for (const edge of audioInputs.get(queue[i]) || []) {
           if (micPath && (edge.output !== 0 || edge.input !== 0)) continue;

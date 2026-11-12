@@ -282,6 +282,18 @@ test('a mixed output leaves Me once its microphone is stopped, disabled, routed 
   await f.stop();
  }
 }));
+test('a stream holding shared-screen audio and a microphone, or screen audio chained past the walk limit, is not Me',()=>fixture(async f=>{
+ const screen=await f.navigator.mediaDevices.getDisplayMedia({video:true,audio:true}),mic=await f.navigator.mediaDevices.getUserMedia({audio:true});
+ // A MediaStreamAudioSourceNode renders one track of its stream: the screen track may be the one.
+ const Stream=mic.constructor;
+ await webAudioSenders(f,{both:new Stream([...screen.getAudioTracks(),...mic.getAudioTracks()])});
+ // Ten chained contexts exceed the walk depth: unknown is never Me.
+ let stream=await f.navigator.mediaDevices.getDisplayMedia({video:true,audio:true});
+ for(let level=0;level<10;level++){const audio=new f.AudioContext(),output=audio.createMediaStreamDestination();audio.createMediaStreamSource(stream).connect(output);stream=output.stream;}
+ f.peer.senders.push(micSender(stream.getAudioTracks()[0]));
+ await f.start('limits',{captureLocal:true,sourceOutcomes:true});
+ assert.deepEqual(f.captures.map(c=>c.label),[]);
+}));
 test('shared-screen audio processed through WebAudio, from a stream or a media element, is never recorded as Me',()=>fixture(async f=>{
  for(const kind of ['screen','element']){
   const screen=await f.navigator.mediaDevices.getDisplayMedia({video:true,audio:true});
