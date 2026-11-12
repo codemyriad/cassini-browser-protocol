@@ -151,7 +151,7 @@ test('a replacement relay is ready only after the departing capture token drains
  assert.equal(f.messages.some(m=>m.type==='hookReady'),false);
  await f.stop();
  assert.equal(f.messages.find(m=>m.type==='hookReady').instanceId,'replacement');
- assert.equal(f.messages.find(m=>m.type==='hookReady').revision,2,'the relay accepts only a hook with the display-share exclusion');
+ assert.equal(f.messages.find(m=>m.type==='hookReady').revision,3,'the relay accepts only a hook with the display-share exclusion and WebAudio lineage');
  await f.start('replacement-capture');
  assert.equal(f.captures.length,2,'the same live peer can record through the replacement relay');
 }));

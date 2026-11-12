@@ -1,8 +1,10 @@
 (() => {
   if (!window.RTCPeerConnection || globalThis.__cassiniPageHook) return;
   // Revision 2 excludes display-share audio from Me and gates sender mute on the render clock.
+  // Revision 3 (0.2.28) follows microphone and display lineage through WebAudio, here and in the
+  // document-start collector, so automatic recording works on pages that process the microphone.
   // The relay refuses an older hook still alive in a page opened before an update (reload required).
-  const hookRevision = 2;
+  const hookRevision = 3;
   globalThis.__cassiniPageHook = {protocol:1, revision:hookRevision};
   const peers = new Set(), closedPeers = new WeakSet();
   const original = window.RTCPeerConnection;

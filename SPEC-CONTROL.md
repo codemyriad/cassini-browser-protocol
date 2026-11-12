@@ -278,7 +278,8 @@ any port, through any track of a stream source and through nested outputs even w
 they also carry a microphone, and a graph too deep or wide to
 walk is treated as shared-screen audio. A page opened
 before the update keeps its older MAIN hook; its readiness reply lacks hook
-revision 2, so the relay reports it unavailable and the tab is `reloadRequired`
+revision 3 (0.2.28: WebAudio lineage; revision 2 was 0.2.27's display-share exclusion),
+so the relay reports it unavailable and the tab is `reloadRequired`
 rather than ready. Without the capability an app keeps sending
 `captureLocal: false` and records Me from its own microphone, as before.
 
