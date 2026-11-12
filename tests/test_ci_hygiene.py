@@ -108,16 +108,189 @@ def select_runner(
 
 class CiHygieneTests(unittest.TestCase):
     def test_ci_runs_on_pull_requests_and_on_pushes_to_main_only(self):
-        # A branch push with an open PR used to run the whole contract twice.
+        # A branch push with an open PR used to run the whole contract twice; PRs also listen for
+        # labeled (for full-ci) and nightly/manual runs exercise tight host-clock tolerances.
         trigger = re.search(r'^on:(.*?)^permissions:', (WORKFLOWS / 'ci.yml').read_text(), re.M | re.S)
-        self.assertEqual(trigger and trigger.group(1), '\n  push:\n    branches: [main]\n  pull_request:\n')
+        self.assertEqual(
+            trigger and trigger.group(1),
+            "\n  push:\n    branches: [main]\n"
+            "  pull_request:\n    types: [opened, synchronize, reopened, labeled]\n"
+            "  schedule:\n    - cron: '58 2 * * *'\n"
+            "  workflow_dispatch:\n",
+        )
 
     def test_only_superseded_pull_request_runs_are_cancelled(self):
-        # Each main push has its own group (run_id): a shared group would drop a pending main run.
+        # Each main push, schedule, and dispatch has its own group (run_id): a shared group would drop
+        # a pending main run. Labeled PR runs use a non-cancelling <pr>-label-<run_id> group so
+        # opened/synchronize + labeled on the same head never leave CANCELLED checks (UNSTABLE).
         text = (WORKFLOWS / 'ci.yml').read_text()
-        self.assertIn('\nconcurrency:\n  group: ${{ github.workflow }}-${{ github.event_name == '
-                      "'pull_request' && github.event.pull_request.number || github.run_id }}\n"
-                      "  cancel-in-progress: ${{ github.event_name == 'pull_request' }}\n", text)
+        self.assertIn(
+            "\nconcurrency:\n"
+            "  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && "
+            "(github.event.action == 'labeled' && format('{0}-label-{1}', github.event.pull_request.number, github.run_id) "
+            "|| github.event.pull_request.number) || github.run_id }}\n"
+            "  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action != 'labeled' }}\n",
+            text,
+        )
+
+    def test_perf_gate_and_labeled_pr_isolation_across_full_dag(self):
+        lp = _load_launcher_paths()
+        text = (WORKFLOWS / 'ci.yml').read_text()
+        header = text.split('\njobs:\n', 1)[0]
+        group_expr = re.search(r'^  group: (.+)$', header, re.M).group(1)
+        cancel_expr = re.search(r'^  cancel-in-progress: (.+)$', header, re.M).group(1)
+        perf_expr = re.search(r'^  CASSINI_PERF_GATE: (.+)$', header, re.M).group(1)
+        ci_jobs = dict(jobs(WORKFLOWS / 'ci.yml'))
+
+        def make_github(event_name, *, action='', added_label='', labels=(), pr_number=42, run_id=900):
+            if event_name == 'pull_request':
+                pr_ns = SimpleNamespace(
+                    number=pr_number,
+                    labels=SimpleNamespace(_star_name=[_CIString(x) for x in labels]),
+                )
+                event_ns = SimpleNamespace(
+                    action=_CIString(action),
+                    label=SimpleNamespace(name=_CIString(added_label)),
+                    pull_request=pr_ns,
+                )
+            else:
+                event_ns = _NULL
+            return SimpleNamespace(
+                workflow=_CIString('Shared recording contract'),
+                event_name=_CIString(event_name),
+                run_id=run_id,
+                event=event_ns,
+            )
+
+        def eval_expr(raw, github_ctx, needs_ctx=None):
+            expr = raw.strip()
+            if expr.startswith('${{') and expr.endswith('}}'):
+                expr = expr.removeprefix('${{').removesuffix('}}').strip()
+            expr = expr.replace('github.event.pull_request.labels.*.name', 'github.event.pull_request.labels._star_name')
+            expr = re.sub(r'needs\.([A-Za-z0-9_-]+)', lambda m: f"needs.{m.group(1).replace('-', '_')}", expr)
+            expr = expr.replace('&&', ' and ').replace('||', ' or ')
+            return eval(
+                expr,
+                {'__builtins__': {}},
+                {
+                    'github': github_ctx,
+                    'needs': needs_ctx or SimpleNamespace(),
+                    'format': lambda tmpl, *args: str(tmpl).format(*args),
+                    'contains': lambda items, needle: (
+                        bool(items) and any(_CIString(x) == _CIString(needle) for x in items)
+                    ),
+                },
+            )
+
+        def eval_template(raw, github_ctx):
+            return re.sub(r'\$\{\{(.*?)\}\}', lambda m: str(eval_expr(m.group(1), github_ctx)), raw)
+
+        # Concurrency isolation across events
+        self.assertEqual(
+            eval_template(group_expr, make_github('pull_request', action='opened', pr_number=55, run_id=1)),
+            'Shared recording contract-55',
+        )
+        self.assertEqual(
+            eval_template(group_expr, make_github('pull_request', action='synchronize', pr_number=55, run_id=2)),
+            'Shared recording contract-55',
+        )
+        self.assertEqual(
+            eval_template(group_expr, make_github('pull_request', action='labeled', added_label='full-ci', pr_number=55, run_id=3)),
+            'Shared recording contract-55-label-3',
+        )
+        self.assertEqual(
+            eval_template(group_expr, make_github('push', run_id=77)),
+            'Shared recording contract-77',
+        )
+        self.assertEqual(
+            eval_template(group_expr, make_github('schedule', run_id=78)),
+            'Shared recording contract-78',
+        )
+        self.assertTrue(bool(eval_expr(cancel_expr, make_github('pull_request', action='synchronize'))))
+        self.assertFalse(bool(eval_expr(cancel_expr, make_github('pull_request', action='labeled', added_label='full-ci'))))
+        self.assertFalse(bool(eval_expr(cancel_expr, make_github('push'))))
+        self.assertFalse(bool(eval_expr(cancel_expr, make_github('schedule'))))
+        self.assertFalse(bool(eval_expr(cancel_expr, make_github('workflow_dispatch'))))
+
+        def parse_needs(block):
+            m_inline = re.search(r'^    needs:\s*\[([^\]]+)\]\s*$', block, re.M)
+            if m_inline:
+                return [x.strip() for x in m_inline.group(1).split(',') if x.strip()]
+            m_single = re.search(r'^    needs:\s*([A-Za-z0-9_-]+)\s*$', block, re.M)
+            return [m_single.group(1)] if m_single else []
+
+        def simulate_dag(event_name, *, action='', added_label='', labels=(), changed_files=('README.md',)):
+            gh_ctx = make_github(event_name, action=action, added_label=added_label, labels=labels)
+            perf_gate = str(eval_expr(perf_expr, gh_ctx))
+            if event_name != 'pull_request' or perf_gate == '1':
+                lp_out = {'launcher': True, 'capture': True, 'changed': True}
+            else:
+                lp_out = lp.classify_changes(list(changed_files))
+
+            results = {}
+            active = []
+            for jname, block in ci_jobs.items():
+                ancs = parse_needs(block)
+                anc_ok = all(results[a] == 'success' for a in ancs)
+                m_if = re.search(r'^    if:\s*(.+)$', block, re.M)
+                cond = m_if.group(1) if m_if else None
+                has_status_fn = bool(cond and any(fn in cond for fn in ('always()', 'cancelled()', 'failure()', 'success()')))
+                if not anc_ok and not has_status_fn:
+                    results[jname] = 'skipped'
+                    continue
+                needs_ns = SimpleNamespace(
+                    launcher_paths=SimpleNamespace(
+                        result=_CIString(results.get('launcher-paths', 'skipped')),
+                        outputs=SimpleNamespace(
+                            **{
+                                k: _CIString(str(v).lower()) if results.get('launcher-paths') == 'success' else _CIString('')
+                                for k, v in lp_out.items()
+                            }
+                        ),
+                    ),
+                    contract=SimpleNamespace(result=_CIString(results.get('contract', 'skipped'))),
+                )
+                ok = anc_ok if cond is None else bool(eval_expr(cond, gh_ctx, needs_ns))
+                if ok:
+                    results[jname] = 'success'
+                    active.append(jname)
+                else:
+                    results[jname] = 'skipped'
+            return perf_gate, active
+
+        # Unlabeled docs PR skips launcher-macos and runs contract + nextcloud-talk with CASSINI_PERF_GATE == ''.
+        self.assertEqual(
+            simulate_dag('pull_request', action='opened', changed_files=('README.md',)),
+            ('', ['launcher-paths', 'contract', 'nextcloud-talk']),
+        )
+        # Unlabeled capture PR runs all 4 jobs with CASSINI_PERF_GATE == ''.
+        self.assertEqual(
+            simulate_dag('pull_request', action='synchronize', changed_files=('extension/capture.js',)),
+            ('', ['launcher-paths', 'launcher-macos', 'contract', 'nextcloud-talk']),
+        )
+        # full-ci labeled PR runs all 4 jobs (even on docs-only diff) with CASSINI_PERF_GATE == '1'.
+        self.assertEqual(
+            simulate_dag('pull_request', action='labeled', added_label='full-ci', labels=('full-ci',), changed_files=('README.md',)),
+            ('1', ['launcher-paths', 'launcher-macos', 'contract', 'nextcloud-talk']),
+        )
+        # Unrelated labeled PR skips every job cleanly without ancestor-skip collateral on other runs.
+        for other_label in ('bug', 'docs', 'ui-shots'):
+            with self.subTest(other_label=other_label):
+                self.assertEqual(
+                    simulate_dag('pull_request', action='labeled', added_label=other_label, labels=(other_label,), changed_files=('extension/capture.js',)),
+                    ('', []),
+                )
+        # Push to main runs all 4 jobs without perf gate; schedule and workflow_dispatch run all 4 with CASSINI_PERF_GATE == '1'.
+        self.assertEqual(
+            simulate_dag('push', changed_files=('README.md',)),
+            ('', ['launcher-paths', 'launcher-macos', 'contract', 'nextcloud-talk']),
+        )
+        for full_event in ('schedule', 'workflow_dispatch'):
+            with self.subTest(full_event=full_event):
+                self.assertEqual(
+                    simulate_dag(full_event, changed_files=('README.md',)),
+                    ('1', ['launcher-paths', 'launcher-macos', 'contract', 'nextcloud-talk']),
+                )
 
     def test_talk_archives_are_verified_cached_before_stack_creation(self):
         text = (WORKFLOWS / 'ci.yml').read_text()
@@ -564,6 +737,28 @@ class CiHygieneTests(unittest.TestCase):
             res, resolved = lp.evaluate_git(repo, event_name='pull_request', base_sha=base_sha)
             self.assertEqual(resolved, main_tip)
             self.assertEqual(res, {'launcher': False, 'capture': False, 'changed': False})
+
+            # Adding full-ci (perf_gate=True) to that same docs-only PR forces both macOS steps on.
+            perf_res, perf_resolved = lp.evaluate_git(
+                repo, event_name='pull_request', base_sha=base_sha, perf_gate=True
+            )
+            self.assertIsNone(perf_resolved)
+            self.assertEqual(perf_res, {'launcher': True, 'capture': True, 'changed': True})
+            gh_out = repo / 'github_output.txt'
+            rc = lp.main(
+                [
+                    '--repo', str(repo),
+                    '--event-name', 'pull_request',
+                    '--base', base_sha,
+                    '--perf-gate', '1',
+                    '--github-output', str(gh_out),
+                ]
+            )
+            self.assertEqual(rc, 0)
+            self.assertEqual(
+                dict(line.split('=', 1) for line in gh_out.read_text(encoding='utf-8').strip().splitlines()),
+                {'launcher': 'true', 'capture': 'true', 'changed': 'true'},
+            )
 
     def test_workflows_do_not_call_unbounded_apt_get_directly(self):
         ci_text = (WORKFLOWS / 'ci.yml').read_text(encoding='utf-8')
