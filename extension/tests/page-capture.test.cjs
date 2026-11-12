@@ -246,6 +246,36 @@ test('display-share audio cloned through MediaStream.clone() is never recorded a
  assert.deepEqual(f.captures.map(c=>c.label),['local: Headset Microphone']);
 }));
 
+// Microsoft Teams sends a WebAudio output (getUserMedia -> source -> nodes -> destination).
+async function webAudioSenders(f,inputs){
+ const audio=new f.AudioContext(),mixer=audio.createGain(),output=audio.createMediaStreamDestination(),sources={};
+ for(const [name,stream] of Object.entries(inputs))(sources[name]=name==='element'?audio.createMediaElementSource({srcObject:stream}):audio.createMediaStreamSource(stream)).connect(mixer);
+ mixer.connect(output);
+ const [track]=output.stream.getAudioTracks();f.peer.senders.push(micSender(track));
+ return {audio,mixer,output,sources,track};
+}
+test('a microphone processed through WebAudio is recorded as Me, also when shared-screen sound is mixed in',()=>fixture(async f=>{
+ const mic=await f.navigator.mediaDevices.getUserMedia({audio:true}),screen=await f.navigator.mediaDevices.getDisplayMedia({video:true,audio:true});
+ const g=await webAudioSenders(f,{mic:mic.clone(),screen});
+ await f.start('local-only',{captureLocal:true,sourceOutcomes:true});
+ assert.deepEqual(f.captures.map(c=>[c.kind,c.label]),[['local','local: MediaStreamAudioDestinationNode']]);
+ assert.equal(f.captures[0].enabled(),true);
+ // With the microphone disconnected, only shared-screen audio reaches the output: not Me.
+ g.sources.mic.disconnect();await f.scan();
+ assert.equal(f.captures[0].stopped,true,'the output that now carries only screen audio leaves Me');
+ assert.equal(f.captures.length,1,'nor does it reappear as page media');
+}));
+test('shared-screen audio processed through WebAudio, from a stream or a media element, is never recorded as Me',()=>fixture(async f=>{
+ for(const kind of ['screen','element']){
+  const screen=await f.navigator.mediaDevices.getDisplayMedia({video:true,audio:true});
+  const g=await webAudioSenders(f,{[kind]:screen});f.render(g.track);
+ }
+ const [mic]=(await f.navigator.mediaDevices.getUserMedia({audio:true})).getAudioTracks();
+ f.peer.senders.push(micSender(mic));
+ await f.start('local-only',{captureLocal:true,sourceOutcomes:true});
+ assert.deepEqual(f.captures.map(c=>c.label),['local: Headset Microphone']);
+}));
+
 test('one microphone track sent on two peers stays audible while either sends, through peer close and null mute',()=>fixture(async f=>{
  const [mic]=(await f.navigator.mediaDevices.getUserMedia({audio:true})).getAudioTracks();
  const second=new f.window.RTCPeerConnection();

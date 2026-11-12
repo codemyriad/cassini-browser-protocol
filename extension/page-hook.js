@@ -97,7 +97,7 @@
     return {label:[...names.values().next().value].slice(0, 200).join(""), labelSource:"dom"};
   }
   // Remember microphone and display-share origins before they become senders or previews.
-  function isDisplayTrack(track) {
+  function isDisplayTrack(track, depth = 0) {
     if (!track) return false;
     const root = sourceRoot(track);
     if (knownDisplayTracks.has(track) || knownDisplayTracks.has(root)) return true;
@@ -110,14 +110,97 @@
         }
       }
     } catch {}
-    return false;
+    // A WebAudio output is display audio while shared-screen audio reaches it and no captured
+    // microphone does; a processed (or mixed) microphone stays Me. Its graph can change: no caching.
+    const reach = audioReach(track, depth);
+    return !!reach && reach.display && !reach.microphone;
+  }
+  // WebAudio lineage, the same rules as the native collector's (rtc-evidence.js): a
+  // MediaStreamAudioDestinationNode output carries what its graph's sources reach through
+  // successful AudioNode connections. AudioParam modulation carries nothing.
+  const capturedMicrophones = new WeakSet();
+  const audioSources = new WeakMap(), audioInputs = new WeakMap(), audioOutputs = new WeakMap(), audioOutputTracks = new WeakMap();
+  const isAudioNode = value => typeof AudioNode === "function" && value instanceof AudioNode;
+  function audioReach(track, depth = 0) {
+    const output = audioOutputTracks.get(sourceRoot(track)) || audioOutputTracks.get(track);
+    if (!output || depth > 8) return null;
+    const reach = { microphone: false, display: false }, queue = [output], seen = new Set(queue);
+    for (let i = 0; i < queue.length && i < 512; i++) {
+      const source = audioSources.get(queue[i]);
+      if (source) {
+        let tracks = source.tracks || [];
+        if (source.element) try { tracks = source.element.srcObject?.getAudioTracks?.() || []; } catch { tracks = []; }
+        for (const input of tracks) {
+          if (capturedMicrophones.has(sourceRoot(input)) || audioReach(input, depth + 1)?.microphone) reach.microphone = true;
+          else if (isDisplayTrack(input, depth + 1)) reach.display = true;
+        }
+      }
+      for (const edge of audioInputs.get(queue[i]) || []) if (!seen.has(edge.from)) { seen.add(edge.from); queue.push(edge.from); }
+    }
+    return reach;
+  }
+  const audioContextPrototype = globalThis.AudioContext?.prototype;
+  const rememberAudioSource = node => {
+    try {
+      if (node?.mediaStream) audioSources.set(node, { tracks: node.mediaStream.getAudioTracks() });
+      else if (node?.mediaElement) audioSources.set(node, { element: node.mediaElement });
+    } catch {}
+    return node;
+  };
+  const rememberAudioOutput = node => {
+    try { for (const track of node.stream.getAudioTracks()) audioOutputTracks.set(track, node); } catch {}
+    return node;
+  };
+  for (const [factory, Node, remember] of [["createMediaStreamSource", "MediaStreamAudioSourceNode", rememberAudioSource],
+    ["createMediaElementSource", "MediaElementAudioSourceNode", rememberAudioSource],
+    ["createMediaStreamDestination", "MediaStreamAudioDestinationNode", rememberAudioOutput]]) {
+    const create = audioContextPrototype?.[factory];
+    if (typeof create === "function") audioContextPrototype[factory] = function (...args) { return remember(Reflect.apply(create, this, args)); };
+    if (typeof globalThis[Node] === "function") globalThis[Node] = new Proxy(globalThis[Node], {
+      construct(target, args, newTarget) { return remember(Reflect.construct(target, args, newTarget)); }
+    });
+  }
+  const audioNodePrototype = globalThis.AudioNode?.prototype;
+  // WebIDL unsigned long; anything but a number is unknown (-1, matching every index).
+  const audioIndex = (value, fallback) => value === undefined ? fallback : typeof value === "number" ? value >>> 0 : -1;
+  if (typeof audioNodePrototype?.connect === "function" && typeof audioNodePrototype?.disconnect === "function") {
+    const connect = audioNodePrototype.connect, disconnect = audioNodePrototype.disconnect;
+    const edges = (map, node) => { if (!map.has(node)) map.set(node, []); return map.get(node); };
+    audioNodePrototype.connect = function (...args) {
+      const result = Reflect.apply(connect, this, args);
+      try {
+        const [to] = args, output = audioIndex(args[1], 0), input = audioIndex(args[2], 0);
+        if (isAudioNode(to) && output >= 0 && input >= 0 && !edges(audioOutputs, this).some(e => e.to === to && e.output === output && e.input === input)) {
+          edges(audioOutputs, this).push({ to, output, input });
+          edges(audioInputs, to).push({ from: this, output, input });
+        }
+      } catch {}
+      return result;
+    };
+    audioNodePrototype.disconnect = function (...args) {
+      const result = Reflect.apply(disconnect, this, args);
+      try {
+        let to = null, output = -1, input = -1;
+        if (args.length && isAudioNode(args[0])) { to = args[0]; if (args.length > 1) output = audioIndex(args[1], -1); if (args.length > 2) input = audioIndex(args[2], -1); }
+        else if (args.length && typeof AudioParam === "function" && args[0] instanceof AudioParam) return result;
+        else if (args.length) output = audioIndex(args[0], -1);
+        const removed = e => (to === null || e.to === to) && (output < 0 || e.output === output) && (input < 0 || e.input === input);
+        const outputs = audioOutputs.get(this) || [];
+        for (const edge of outputs.filter(removed)) {
+          const inputs = audioInputs.get(edge.to) || [];
+          audioInputs.set(edge.to, inputs.filter(e => !(e.from === this && e.output === edge.output && e.input === edge.input)));
+        }
+        audioOutputs.set(this, outputs.filter(e => !removed(e)));
+      } catch {}
+      return result;
+    };
   }
   const devices = navigator.mediaDevices;
   if (devices?.getUserMedia) {
     const getUserMedia = devices.getUserMedia;
     devices.getUserMedia = function (...args) {
       return Reflect.apply(getUserMedia, this, args).then(stream => {
-        stream.getAudioTracks().forEach(track => knownLocalTracks.add(track));
+        stream.getAudioTracks().forEach(track => { knownLocalTracks.add(track); capturedMicrophones.add(track); });
         return stream;
       });
     };
