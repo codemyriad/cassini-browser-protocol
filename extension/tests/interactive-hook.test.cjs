@@ -389,3 +389,24 @@ test('a chained WebAudio call ends when its microphone stops and its peers close
  const next=await graphPeer(f,({audio,mic,output})=>{audio.createMediaStreamSource(mic).connect(output)});
  assert.equal(await qualifies(f,next.peer),true);assert.equal(f.read().hookGeneration,'1');
 });
+
+test('the terminal check walks each nested output once: teardown work grows linearly with fan-out',async()=>{
+ const work=async width=>{
+  const f=fixture(),mic=await f.context.navigator.mediaDevices.getUserMedia();
+  let stream=mic;
+  for(let level=0;level<6;level++){
+   const audio=new f.context.AudioContext(),output=audio.createMediaStreamDestination();
+   // Distinct stream clones of the previous output (the microphone itself at level 0,
+   // whose ended track is the affirmative end).
+   for(let i=0;i<width;i++)audio.createMediaStreamSource(level?stream.clone():stream).connect(output);
+   stream=output.stream;
+  }
+  const peer=await f.peer(stream.getAudioTracks()[0]);
+  assert.equal(await qualifies(f,peer),true);
+  peer.pc.close();mic.getAudioTracks()[0].readyState='ended';
+  const before=f.stateReads();assert.equal(f.read().ended,true);
+  return f.stateReads()-before;
+ };
+ const small=await work(4),large=await work(8);
+ assert.ok(large<=small*3,`teardown work ${small} at width 4 and ${large} at width 8 must scale linearly`);
+});

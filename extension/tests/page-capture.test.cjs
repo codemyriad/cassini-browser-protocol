@@ -294,6 +294,23 @@ test('a stream holding shared-screen audio and a microphone, or screen audio cha
  await f.start('limits',{captureLocal:true,sourceOutcomes:true});
  assert.deepEqual(f.captures.map(c=>c.label),[]);
 }));
+test('screen audio split back out of a nested mixed output is not Me; the microphone port of that output is',()=>fixture(async f=>{
+ for(const [port,me] of [[1,false],[0,true]]){
+  f.peer.senders=[];
+  const mic=await f.navigator.mediaDevices.getUserMedia({audio:true}),screen=await f.navigator.mediaDevices.getDisplayMedia({video:true,audio:true});
+  // Merge the microphone into channel 0 and the screen into channel 1 of an inner output,
+  // then split one channel of that output into the sent one.
+  const inner=new f.AudioContext(),merger=inner.createGain(),mixed=inner.createMediaStreamDestination();
+  inner.createMediaStreamSource(mic).connect(merger,0,0);inner.createMediaStreamSource(screen).connect(merger,0,1);merger.connect(mixed);
+  const outer=new f.AudioContext(),splitter=outer.createGain(),sent=outer.createMediaStreamDestination();
+  outer.createMediaStreamSource(mixed.stream).connect(splitter);splitter.connect(sent,port);
+  f.peer.senders.push(micSender(sent.stream.getAudioTracks()[0]));
+  const before=f.captures.length;
+  await f.start('nested-'+port,{captureLocal:true,sourceOutcomes:true});
+  assert.equal(f.captures.length-before,me?1:0,'splitter output '+port);
+  await f.stop();
+ }
+}));
 test('shared-screen audio processed through WebAudio, from a stream or a media element, is never recorded as Me',()=>fixture(async f=>{
  for(const kind of ['screen','element']){
   const screen=await f.navigator.mediaDevices.getDisplayMedia({video:true,audio:true});

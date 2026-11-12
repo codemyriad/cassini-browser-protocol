@@ -274,7 +274,8 @@ by no audible captured microphone is display audio and never Me; a microphone pr
 through WebAudio stays Me, also while the page mixes shared-screen sound into it. The
 microphone counts only under the collector's rules (live, enabled, unmuted, port 0,
 running context, every track of a stream source); shared-screen audio counts through
-any port and through any track of a stream source, and a graph too deep or wide to
+any port, through any track of a stream source and through nested outputs even when
+they also carry a microphone, and a graph too deep or wide to
 walk is treated as shared-screen audio. A page opened
 before the update keeps its older MAIN hook; its readiness reply lacks hook
 revision 2, so the relay reports it unavailable and the tab is `reloadRequired`
@@ -1335,7 +1336,8 @@ without it the remaining inputs are not. Lineage is structural, like a sent raw
 microphone: it does not judge content (a zero gain still counts, as an enabled
 microphone in a silent room does). For the terminal check, an output track is ended natively,
 when its context closed, or when every source track that ever fed it a rooted
-microphone has ended (through nested outputs too); disconnecting or suspending a
+microphone has ended (through nested outputs too, each walked once per check
+under a work budget whose exhaustion means not ended); disconnecting or suspending a
 graph is not an end. Not covered:
 microphone audio carried outside the graph (AudioWorklet or ScriptProcessor message
 ports, `MediaStreamTrackProcessor`/`Generator`, Insertable Streams) and nodes made by

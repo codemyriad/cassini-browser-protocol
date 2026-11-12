@@ -99,6 +99,14 @@
   // Remember microphone and display-share origins before they become senders or previews.
   function isDisplayTrack(track, depth = 0, memo = undefined) {
     if (!track) return false;
+    if (capturedDisplay(track)) return true;
+    // A WebAudio output is display audio while shared-screen audio reaches it and no captured
+    // microphone does; a processed (or mixed) microphone stays Me. Its graph can change: no caching.
+    const reach = audioReach(track, depth, memo);
+    return !!reach && reach.display && !reach.microphone;
+  }
+  // getDisplayMedia audio, its clones, or a track reporting a display surface.
+  function capturedDisplay(track) {
     const root = sourceRoot(track);
     if (knownDisplayTracks.has(track) || knownDisplayTracks.has(root)) return true;
     try {
@@ -110,10 +118,7 @@
         }
       }
     } catch {}
-    // A WebAudio output is display audio while shared-screen audio reaches it and no captured
-    // microphone does; a processed (or mixed) microphone stays Me. Its graph can change: no caching.
-    const reach = audioReach(track, depth, memo);
-    return !!reach && reach.display && !reach.microphone;
+    return false;
   }
   // WebAudio lineage, the same rules as the native collector's (rtc-evidence.js): a
   // MediaStreamAudioDestinationNode output carries what its graph's sources reach through
@@ -149,7 +154,9 @@
           if (micPath) {
             if (running && !source.element && tracks.length && tracks.every(input => audibleMicrophone(input) &&
                 (capturedMicrophones.has(sourceRoot(input)) || audioReach(input, depth + 1, memo)?.microphone))) reach.microphone = true;
-          } else if (tracks.some(input => isDisplayTrack(input, depth + 1, memo))) reach.display = true;
+          // Raw display reachability: a nested output's own microphone must not hide
+          // shared-screen audio that a later splitter or port routes on alone.
+          } else if (tracks.some(input => capturedDisplay(input) || audioReach(input, depth + 1, memo)?.display)) reach.display = true;
         }
         for (const edge of audioInputs.get(queue[i]) || []) {
           if (micPath && (edge.output !== 0 || edge.input !== 0)) continue;

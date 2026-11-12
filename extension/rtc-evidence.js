@@ -159,22 +159,33 @@
   // An output ends like a track: natively, when its context closed, or when
   // every source track that ever fed it a rooted microphone has ended (nested
   // outputs recursively). Disconnecting or suspending a graph is not an end.
-  const finished=(track,depth=0)=>{
+  // One check memoizes each output node (in progress counts as not ended,
+  // which cuts cycles) under a work budget whose exhaustion means not ended.
+  const terminalCheck=()=>({memo:new NativeWeakMap(),budget:4096,depth:0});
+  const finished=(track,state)=>{
     if(get(trackState,track)==='ended')return true;
-    const value=lineageOf(track);if(!value||value.root||depth>8)return false;
-    if(contextOf(value.node)==='closed')return true;
-    const fed=lookup(ancestry,value.node);
-    if(!fed||fed.overflow||!fed.tracks.length)return false;
-    for(let i=0;i<fed.tracks.length;i++)if(!finished(fed.tracks[i],depth+1))return false;
-    return true;
+    const value=lineageOf(track);if(!value||value.root||state.depth>8||--state.budget<0)return false;
+    const known=lookup(state.memo,value.node);if(known!==undefined)return known;
+    remember(state.memo,value.node,false);
+    let ended=contextOf(value.node)==='closed';
+    if(!ended){
+      const fed=lookup(ancestry,value.node);
+      ended=!!fed&&!fed.overflow&&fed.tracks.length>0;
+      state.depth++;
+      try{for(let i=0;ended&&i<fed.tracks.length;i++)if(!finished(fed.tracks[i],state))ended=false}
+      finally{state.depth--}
+    }
+    remember(state.memo,value.node,ended);
+    return ended;
   };
   const closed=pc=>get(signaling,pc)==='closed'||get(connection,pc)==='closed';
   const connected=pc=>!closed(pc)&&(get(connection,pc)==='connected'||get(ice,pc)==='connected'||get(ice,pc)==='completed');
   const terminal=()=>{
     if(!qualified.length)return false;
+    const check=terminalCheck();
     for(let i=0;i<qualified.length;i++){
       const entry=qualified[i];if(!closed(entry.pc))return false;
-      for(let j=0;j<entry.tracks.length;j++)if(!finished(entry.tracks[j]))return false;
+      for(let j=0;j<entry.tracks.length;j++)if(!finished(entry.tracks[j],check))return false;
     }
     for(let i=0;i<peers.length;i++)if(!closed(peers[i].pc))return false;
     return true;
