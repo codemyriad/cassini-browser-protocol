@@ -23,6 +23,7 @@
   const peerGenerations = new WeakMap();
   const knownLocalTracks = new WeakSet();
   const knownDisplayTracks = new WeakSet();
+  const localGroups = new WeakMap(); // sender -> its Me source identity, across capture restarts
   const knownReceiverRoots = new WeakSet();
   const sourceRoots = new WeakMap();
   const sourceKeys = new WeakMap();
@@ -431,12 +432,18 @@
                 knownLocalTracks.add(sourceRoot(sender.track));
                 if (message.captureLocal === false || peerGenerations.get(pc) !== callGeneration) continue;
                 // One Me source per microphone: the same track or clones of it sent on several
-                // peers is one voice. A sender keeps its source across replaceTrack (mute, device).
-                let group = state.senderGroups.get(sender);
-                if (!group) for (const candidate of state.localGroups)
-                  if ([...candidate.owners.values()].some(owner => sourceRoot(owner.track) === sourceRoot(sender.track))) { group = candidate; break; }
-                if (!group) { group = { kind: "local", owners: new Map() }; group.root = group; state.localGroups.add(group); }
+                // peers is one voice, also after a replaceTrack makes two senders converge.
+                // A sender keeps its source across replaceTrack (mute, device) and capture restarts.
+                const current = state.senderGroups.get(sender);
+                let group = null;
+                for (const candidate of state.localGroups)
+                  if ([...candidate.owners].some(([other, owner]) => other !== sender && sourceRoot(owner.track) === sourceRoot(sender.track))) { group = candidate; break; }
+                group ||= current || localGroups.get(sender);
+                if (!group) { group = { kind: "local" }; group.root = group; }
+                if (!state.localGroups.has(group)) { group.owners = new Map(); state.localGroups.add(group); }
+                if (current && current !== group) current.owners.delete(sender);
                 state.senderGroups.set(sender, group);
+                localGroups.set(sender, group);
                 group.owners.set(sender, { pc, track: sender.track });
               }
             }
