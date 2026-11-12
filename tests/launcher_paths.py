@@ -186,9 +186,10 @@ def evaluate_git(
     event_name: str,
     base_sha: str,
     head: str = 'HEAD',
+    perf_gate: bool = False,
 ) -> tuple[dict[str, bool], str | None]:
-    # Pushes to main (and any non-PR event) always run full macOS coverage before inspecting diffs.
-    if event_name != 'pull_request':
+    # Pushes to main, nightly/manual runs, and full-ci PRs always run full macOS coverage.
+    if event_name != 'pull_request' or perf_gate:
         return {'launcher': True, 'capture': True, 'changed': True}, None
     compare_base = resolve_compare_base(repo, base_sha, head)
     if compare_base is None:
@@ -212,6 +213,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--event-name', default=os.environ.get('EVENT_NAME', ''))
     parser.add_argument('--base', default=os.environ.get('BASE', ''))
     parser.add_argument('--head', default='HEAD')
+    parser.add_argument('--perf-gate', default=os.environ.get('CASSINI_PERF_GATE', ''))
     parser.add_argument('--github-output', type=pathlib.Path)
     args = parser.parse_args(argv)
 
@@ -220,6 +222,7 @@ def main(argv: list[str] | None = None) -> int:
         event_name=args.event_name,
         base_sha=args.base,
         head=args.head,
+        perf_gate=(args.perf_gate == '1'),
     )
     lines = [f"{key}={'true' if value else 'false'}" for key, value in result.items()]
     if args.github_output is not None:

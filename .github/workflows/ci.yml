@@ -3,19 +3,27 @@ on:
   push:
     branches: [main]
   pull_request:
+    types: [opened, synchronize, reopened, labeled]
+  schedule:
+    - cron: '58 2 * * *'
+  workflow_dispatch:
 permissions:
   contents: read
-# D66: a PR push runs once, and a newer push to the same PR cancels its superseded run.
-# Pushes to main each get their own group: GitHub would otherwise drop a pending main run.
+# D66: a newer push to a PR cancels its older push run, while labeled runs use their own
+# non-cancelling group so opened/synchronize + labeled on the same head never leave CANCELLED
+# check runs (UNSTABLE). Pushes to main, nightly schedules, and dispatches each get their own group.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.run_id }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'pull_request' && (github.event.action == 'labeled' && format('{0}-label-{1}', github.event.pull_request.number, github.run_id) || github.event.pull_request.number) || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && github.event.action != 'labeled' }}
+env:
+  CASSINI_PERF_GATE: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || contains(github.event.pull_request.labels.*.name, 'full-ci')) && '1' || '' }}
 jobs:
   launcher-paths:
     # Light gate for launcher-macos on pull requests: did the PR touch the launcher, the relay,
     # their tests, what those tests import or read, the capture graph or npm install inputs (D68.1),
-    # or this gate/job? Pushes to main and unknown bases always run both steps.
+    # or this gate/job? Pushes to main, nightly/manual runs, and full-ci PRs always run both steps.
     # A light job: a constant GitHub-hosted label (the CM_RUNNER selector stays the contract job's).
+    if: ${{ github.event_name != 'pull_request' || github.event.action != 'labeled' || github.event.label.name == 'full-ci' }}
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     outputs:
@@ -55,6 +63,7 @@ jobs:
           npx playwright install chromium
           node tests/capture-real-time.mjs
   contract:
+    if: ${{ github.event_name != 'pull_request' || github.event.action != 'labeled' || github.event.label.name == 'full-ci' }}
     # CM_RUNNER=hetzner moves trusted runs (push, schedule, workflow_dispatch, or same-repo PR) to
     # cm-hetzner; any other value, fork PR, or unallowlisted event keeps ubuntu-24.04.
     runs-on: ${{ (github.event_name == 'push' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)) && vars.CM_RUNNER == 'hetzner' && fromJSON('["self-hosted","cm-hetzner"]') || 'ubuntu-24.04' }}
