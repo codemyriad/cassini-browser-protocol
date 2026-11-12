@@ -1019,7 +1019,7 @@ const genericProducer = new GenericCallEvidenceProducer({identity:()=>browserIns
   executeScript:request=>chrome.scripting.executeScript(request),callIdentity:frame=>callInfo(frame.tabId).generation,
   onNativeRead:(frame,native)=>{frame.nativeSourceVerified=true;adoptDiscovery(frame,{documentGeneration:native.documentGeneration,callGeneration:native.hookGeneration,
     sourceCount:native.sourceCount,heard:native.heard})}});
-const controlCapabilities = ["independent-sessions-v1", "call-evidence-v1", "page-state-v1", "multi-stream-v1", "resume-capture-v1", "heartbeat-v1", "tab-readiness-v1"];
+const controlCapabilities = ["independent-sessions-v1", "call-evidence-v1", "page-state-v1", "multi-stream-v1", "resume-capture-v1", "heartbeat-v1", "tab-readiness-v1", "sender-me-v1"];
 const appControl = new AppControl({
   runtime: chrome.runtime, alarms: chrome.alarms, busy: startBusy, capabilities: controlCapabilities, signalSnapshot:options=>options.verified?genericProducer.snapshot(options):signalProducer.snapshot(), identity: () => ({extensionVersion,extensionInstance,...companionDiagnostics}), cancelPending: cancelPendingStart,
   signalFinalize:(value,options)=>options.verified?genericProducer.finalize(value):value,
