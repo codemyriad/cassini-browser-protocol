@@ -103,7 +103,11 @@ try{
  const directory=started.status.path;
  await until(async()=>{try{const m=JSON.parse(await readFile(path.join(directory,'session.json'),'utf8'));return m.tracks.filter(t=>t.kind==='remote'&&t.frames>=t.sampleRate*2).length>=2&&m;}catch{return null;}},'two separately captured remote tracks');
  await popup.getByRole('heading',{name:'Browser capture is active',exact:true}).waitFor();
- assert.equal(await popup.getByRole('button',{name:/record|stop/i}).count(),0);
+ // This control client never opts in to popup-record-v1: Stop is shown for the
+ // tab's capture but disabled with a reason, and the popup asks nothing.
+ const stopButton=popup.getByRole('button',{name:'Stop recording',exact:true});await stopButton.waitFor();
+ assert.equal(await stopButton.isDisabled(),true);
+ assert.ok(!events.some(e=>e.type==='recordRequest'),'no popup ask without the app opt-in');
  const stopId='nextcloud-stop';control.write(JSON.stringify({type:'command',requestId:stopId,action:'stop',tabId:row.tabId,independent:true})+'\n');
  const stopped=await until(()=>events.find(e=>e.type==='result'&&e.requestId===stopId),'native Stop result');assert.equal(stopped.ok,true,JSON.stringify(stopped));
  const final=JSON.parse(await readFile(path.join(directory,'session.json'),'utf8'));report.manifest=final;
