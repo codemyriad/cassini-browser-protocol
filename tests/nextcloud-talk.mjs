@@ -134,13 +134,17 @@ try{
   peaks.push(frequency);
  }
  assert.deepEqual([...new Set(peaks)].sort((a,b)=>a-b),[440,880],'remote tracks must carry separate known peer tones without cross-mixing');
- // D80.3: measure the real topology before choosing an admission binding.
- // The baseline observer was muted for the independent capture proof above.
+ // D80.3 / D-982: add a 3rd remote participant (4-person call: 3 remote + active mic)
+ // and measure the real split-PC topology + sustained callSignals renewal.
+ const thirdBrowser=await chromium.launch({channel:'chromium',headless:true,args:[...sharedArgs,`--use-file-for-fake-audio-capture=${await wave(660)}`]});participants.push(thirdBrowser);
+ const thirdContext=await thirdBrowser.newContext({permissions:['microphone','camera'],userAgent});
+ await joinNextcloudTalk(await thirdContext.newPage(),{url:callURL,name:'Al-Khwarizmi'});
+ await until(async()=>{const state=await talkMediaState(meeting);return state.remoteAudio>=3&&state;},'three real Talk remote audio sources');
  report.rtcTopologyMuted=await meeting.evaluate(()=>cassiniRtcTopology());
  await meeting.getByRole('button',{name:/^Unmute(?: audio)?(?: \(.*\))?$/i}).first().click();
  const topologyBefore=await waitRtcTopology(meeting,{sending:'captured'});
  report.rtcTopology=summarizeRtcTopology(topologyBefore,await waitRtcTopology(meeting,{previous:topologyBefore,sending:'captured'}));
- assert.ok(report.rtcTopology.sendingPeers>0&&report.rtcTopology.receivingPeers>0,'Talk measurement requires real bidirectional packet progress');
+ assert.ok(report.rtcTopology.sendingPeers>0&&report.rtcTopology.receivingPeers>=3,'4-person Talk measurement requires real bidirectional packet progress with 3 remote peers');
  report.rtcCohortCandidates=await meeting.evaluate(()=>cassiniRtcCohortFacts());
  assert.equal(report.rtcTopology.samePeerConnection,false,'real Talk must exercise split publisher/subscriber PCs');
  // D80.5 product gate: the SHIPPED native collector and worker must publish
@@ -155,12 +159,21 @@ try{
  assert.equal(verified.documentGeneration,qualified.sourceDocumentGeneration);assert.equal(verified.callGeneration,qualified.callEvidence.callGeneration);
  assert.notEqual(qualified.documentGeneration,qualified.sourceDocumentGeneration);
  await popup.getByRole('heading',{name:'Interactive media session detected',exact:true}).waitFor();
+ // Verify active callEvidence is renewed across multiple sampling cycles without dropping to unknown.
+ const renewals=await controlEvent(()=>{
+  const tabSignals=events.slice(proofStart).filter(event=>event.type==='callSignals').map(event=>event.tabs.find(tab=>tab.tabId===row.tabId)).filter(Boolean);
+  return tabSignals.length>=3&&tabSignals;
+ },'sustained active callSignals renewals');
+ assert.ok(renewals.every(tab=>tab.callEvidence.state==='active'),'4-person active Talk call must not drop to unknown across callSignals renewals');
+ await popup.getByRole('heading',{name:'Interactive media session detected',exact:true}).waitFor();
  report.d805Admission={state:qualified.callEvidence.state,remoteAudio:qualified.remoteAudio,acknowledged:true,namespaceBinding:true,
-   adapterVersion:qualified.callEvidence.adapter.version,splitPeerConnection:true,
+   adapterVersion:qualified.callEvidence.adapter.version,splitPeerConnection:true,renewals:renewals.length,
    collector:await meeting.evaluate(()=>{const value=__cassiniCallEvidenceV1.read();return {version:value.version,
      cohortQualified:value.cohortQualified,samePeerCount:value.samePeerCount,receivedPeers:value.receivedPeers,capturedSendingPeers:value.capturedSendingPeers}})};
  assert.equal(report.d805Admission.collector.cohortQualified,true);assert.equal(report.d805Admission.collector.samePeerCount,0);
- report.cases.push('D80.5 real split-PC Talk qualifies through native collector and worker as one fresh document/frame cohort');
+ assert.ok(report.d805Admission.collector.receivedPeers>=3,'4-person Talk call must report at least 3 receiving peers');
+ assert.equal(report.d805Admission.collector.capturedSendingPeers,1);
+ report.cases.push('D80.5 / D-982 real 4-person split-PC Talk qualifies and renews through native collector and worker');
  // Compare actual native fields against another room on the SAME backend.
  // A common SFU certificate/CNAME/stream placeholder is not room identity.
  // Retain only numeric facts plus a private in-browser reference table, then
