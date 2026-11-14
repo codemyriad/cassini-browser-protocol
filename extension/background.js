@@ -468,15 +468,21 @@ function settleRecordRequest(command) {
 }
 // Browser-owned facts the app needs to resolve and title a manual Start even
 // when its verified inventory omits this tab (repaired or unverified frames).
-function recordStartBody(tabId, tab) {
+// The ask stays bound to the call and document the tab metadata was read for:
+// if either changed while publication drained, it is refused, never re-paired.
+function recordStartBody(tabId, tab, identity = null) {
   if (sessions.has(tabId) || pendingStartFor(tabId)) throw refused("A recording is already running. Stop it before starting another.", "busy");
+  const current = documentFor(tabId), callGeneration = callInfo(tabId).generation;
+  const documentGeneration = typeof current === "string" && current ? current : undefined;
+  if (identity && (identity.callGeneration !== callGeneration || identity.documentGeneration !== documentGeneration))
+    throw refused("The meeting changed before Cassini could start. Try again.", "gone");
   requireTrackReadiness(tabId);
   if (![...frames].some(frame => frame.tabId === tabId && relayReady(frame) && frame.sourceCount > 0))
     throw refused("No audio is available from that meeting yet.", "noSources");
-  const documentGeneration = documentFor(tabId), state = pageState(tabId);
-  return { action: "start", tabId, callGeneration: callInfo(tabId).generation,
+  const state = pageState(tabId);
+  return { action: "start", tabId, callGeneration,
     title: [...(tab.title || "Meeting")].slice(0, 200).join(""), url: new URL(tab.url).href.slice(0, 2048),
-    ...(typeof documentGeneration === "string" && documentGeneration ? { documentGeneration } : {}),
+    ...(documentGeneration ? { documentGeneration } : {}),
     ...(["present", "closed", "navigating"].includes(state) ? { pageState: state } : {}) };
 }
 async function requestRecording(action, tabId) {
@@ -491,8 +497,8 @@ async function requestRecording(action, tabId) {
     try { tab = await chrome.tabs.get(tabId); }
     catch { throw refused("That meeting is no longer available.", "gone"); }
     if (!/^https?:/.test(tab?.url || "")) throw refused("Open the meeting tab first. Recording works on web pages only.", "notWebPage");
-    recordStartBody(tabId, tab);
-    build = () => recordStartBody(tabId, tab);
+    const { callGeneration, documentGeneration } = recordStartBody(tabId, tab);
+    build = () => recordStartBody(tabId, tab, { callGeneration, documentGeneration });
   } else {
     const body = () => {
       const session = sessions.get(tabId);

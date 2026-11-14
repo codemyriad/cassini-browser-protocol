@@ -1051,7 +1051,12 @@ still pending; it carries no meeting metadata.
 Before sending an ask, the extension waits until every inventory/status change
 already notified on this connection has been published, then re-checks that the
 connection and opt-in are unchanged (otherwise `appUnavailable`/`unsupported`,
-nothing sent) and builds the ask from current state. An ask therefore never
+nothing sent) and builds the ask from current state. A Start stays bound to the
+`callGeneration` and `documentGeneration` its `title`/`url` were read for: if
+either changed during the wait it is refused (`gone`, nothing sent) rather than
+pairing the new call with the previous meeting's metadata. The 10-second deadline
+and disconnect/revocation cancellation are armed before this wait, so a stalled or
+constantly refreshing publication cannot hold an ask open. An ask therefore never
 precedes the `meetings`/`status` snapshot that introduces its `tabId`,
 `callGeneration` or `captureId`. The app answers each ask exactly once:
 

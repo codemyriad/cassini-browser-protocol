@@ -16,6 +16,10 @@ async function optIn(app, enabled = true) {
   await until(() => sent(port, 'recordRequestsConfigured').length);
   return sent(port, 'recordRequestsConfigured').at(-1);
 }
+// Resolves when the next popup ask enters its publication wait (event gate, no turn counting).
+function waiting(control) {
+  return new Promise(resolve => { control.recordWaiting = requestId => { control.recordWaiting = () => {}; resolve(requestId); }; });
+}
 async function asked(app, count = 1) {
   const port = app.ports.at(-1);
   await until(() => sent(port, 'recordRequest').length >= count);
@@ -198,8 +202,9 @@ test('popup record: an ask never overtakes a pending inventory publication; a re
     control.snapshot = async options => { await new Promise(resolve => { release = resolve; }); return original(options); };
     control.publish();
     await until(() => release);
+    let entered = waiting(control);
     const reply = rpc(app, { type: 'recordRequest', action: 'start', tabId: 2 });
-    for (let turn = 0; turn < 50; turn++) await new Promise(resolve => setImmediate(resolve));
+    await entered;
     assert.equal(sent(port, 'recordRequest').length, 0, 'the ask waits for the in-flight snapshot');
     const before = port.sent.length;
     control.snapshot = original;
@@ -214,13 +219,78 @@ test('popup record: an ask never overtakes a pending inventory publication; a re
     control.snapshot = async options => { await new Promise(resolve => { release = resolve; }); return original(options); };
     control.publish();
     await until(() => release);
+    entered = waiting(control);
     const revoked = rpc(app, { type: 'recordRequest', action: 'start', tabId: 2 });
-    for (let turn = 0; turn < 50; turn++) await new Promise(resolve => setImmediate(resolve));
+    await entered;
     port.onMessage.emit({ type: 'recordRequests', enabled: false });
     control.snapshot = original;
     release();
     assert.equal((await revoked).code, 'appUnavailable');
     assert.equal(sent(port, 'recordRequest').length, 1);
+  } finally { release?.(); app.close(); }
+});
+
+test('popup record: a held publication cannot outlive the ask deadline or its connection', async () => {
+  const app = await setup();
+  let release;
+  try {
+    const control = app.api.appControl, port = control.port;
+    await optIn(app);
+    const original = control.snapshot;
+    // A snapshot that never settles until the end of the test.
+    control.snapshot = async options => { await new Promise(resolve => { release = resolve; }); return original(options); };
+    control.publish();
+    await until(() => release);
+    let entered = waiting(control);
+    const timedOut = rpc(app, { type: 'recordRequest', action: 'start', tabId: 2 });
+    const requestId = await entered;
+    assert.deepEqual(plain((await rpc(app, { type: 'status', tabId: 2 })).recordRequest), { action: 'start', state: 'pending' });
+    // The deadline was armed before the wait: firing it refuses the ask with the snapshot still held.
+    const [timerId, timer] = [...app.timers].find(([, value]) => value.ms === 10000);
+    app.timers.delete(timerId); timer.fn();
+    assert.equal((await timedOut).code, 'timeout');
+    assert.equal((await rpc(app, { type: 'status', tabId: 2 })).recordRequest, undefined, 'no stale pending state');
+    assert.equal(control.recordRequests.has(requestId), false);
+    // A retry is not refused as busy; it waits again, and a disconnect ends it with the snapshot still held.
+    entered = waiting(control);
+    const lost = rpc(app, { type: 'recordRequest', action: 'start', tabId: 2 });
+    await entered;
+    port.disconnect();
+    assert.equal((await lost).code, 'appUnavailable');
+    assert.equal((await rpc(app, { type: 'status', tabId: 2 })).recordRequest, undefined);
+    // Releasing the stalled publication afterwards never sends either ask.
+    const held = release; release = null; held();
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(sent(port, 'recordRequest').length, 0);
+  } finally { release?.(); app.close(); }
+});
+
+test('popup record: a call change during publication refuses Start instead of mixing old metadata with the new call', async () => {
+  const app = await setup();
+  let release;
+  try {
+    const control = app.api.appControl, port = control.port;
+    await optIn(app);
+    const original = control.snapshot;
+    control.snapshot = async options => { await new Promise(resolve => { release = resolve; }); return original(options); };
+    control.publish();
+    await until(() => release);
+    const before = app.api.callInfo(2).generation;
+    const entered = waiting(control);
+    const reply = rpc(app, { type: 'recordRequest', action: 'start', tabId: 2 });
+    await entered;
+    // The tab navigates to another call while the ask waits; its sources come back.
+    app.tabs.set(2, { id: 2, title: 'Other meeting', url: 'https://meet.example/other' });
+    app.api.callChanged(2, 'https://meet.example/other');
+    app.pages[0].onMessage.emit({ type: 'discovery', sourceCount: 3 });
+    assert.notEqual(app.api.callInfo(2).generation, before);
+    control.snapshot = original;
+    const held = release; release = null; held();
+    const answer = await reply;
+    assert.equal(answer.code, 'gone');
+    assert.match(answer.error, /meeting changed/);
+    assert.equal(sent(port, 'recordRequest').length, 0, 'no ask pairs the new call with the old title and URL');
+    assert.equal((await rpc(app, { type: 'status', tabId: 2 })).recordRequest, undefined);
   } finally { release?.(); app.close(); }
 });
 

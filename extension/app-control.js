@@ -2,8 +2,9 @@
 // Persistent app management, independent of the per-recording PCM connection.
 export class AppControl {
   constructor({ runtime, alarms, snapshot, command, capabilities = [], identity = () => ({}), cancelPending = () => {}, connected = async () => {},
-                later = (fn, ms) => setTimeout(fn, ms), cancel = id => clearTimeout(id), busy = () => false, signalSnapshot = null, signalFinalize = value => value }) {
-    Object.assign(this, { runtime, alarms, snapshot, command, capabilities, identity, cancelPending, connected, later, cancel, busy, signalSnapshot, signalFinalize });
+                later = (fn, ms) => setTimeout(fn, ms), cancel = id => clearTimeout(id), busy = () => false, signalSnapshot = null, signalFinalize = value => value,
+               recordWaiting = () => {} }) {
+    Object.assign(this, { runtime, alarms, snapshot, command, capabilities, identity, cancelPending, connected, later, cancel, busy, signalSnapshot, signalFinalize, recordWaiting });
     this.port = null;
     this.resetSignals();
     this.ready = false;
@@ -181,39 +182,50 @@ export class AppControl {
   }
   // Waits until every inventory/status change notified so far has been sent on
   // this connection, so an ask never overtakes the snapshot that introduces its
-  // tab, callGeneration or captureId. Bounded against a constantly busy page.
-  async flushPublication() {
-    for (let round = 0; round < 8 && this.port && !this.connecting && (this.dirty || this.publishing); round++) {
+  // tab, callGeneration or captureId. Stops as soon as `live()` turns false; the
+  // caller's deadline, not this loop, bounds a stalled or constantly busy page.
+  async flushPublication(live = () => true) {
+    while (live() && this.port && !this.connecting && (this.dirty || this.publishing)) {
       if (!this.publishing) this.publish();
       await this.publishing;
     }
   }
   // Sends one popup ask and resolves with the app's correlated answer. The app
-  // performs any recording through its own ordinary control command. `build`
-  // runs synchronously after pending publication is flushed, so the ask carries
-  // the same state the app was just told about; it may throw a refusal.
-  async requestRecording(build, timeoutMs = 10000) {
-    let unavailable = this.recordUnavailable();
-    if (unavailable) throw unavailable;
+  // performs any recording through its own ordinary control command. The ask is
+  // registered (deadline and disconnect/revocation cancellation armed) before
+  // pending publication is flushed; `build` then runs synchronously, so the ask
+  // carries the same state the app was just told about. It may throw a refusal.
+  requestRecording(build, timeoutMs = 10000) {
+    const unavailable = this.recordUnavailable();
+    if (unavailable) return Promise.reject(unavailable);
     const port = this.port, epoch = this.recordEpoch;
-    await this.flushPublication();
-    // The connection or opt-in may have changed while publication drained.
-    if (port !== this.port || epoch !== this.recordEpoch)
-      throw Object.assign(new Error('Cassini disconnected before answering. Check the Cassini app.'), { code: 'appUnavailable' });
-    if ((unavailable = this.recordUnavailable())) throw unavailable;
-    const body = typeof build === 'function' ? build() : build;
     const requestId = `popup-${this.connectedAt}-${++this.recordSequence}`;
-    return new Promise((resolve, reject) => {
-      const request = { resolve, reject,
+    let request;
+    const answer = new Promise((resolve, reject) => {
+      request = { resolve, reject,
         lost: () => Object.assign(new Error('Cassini disconnected before answering. Check the Cassini app.'), { code: 'appUnavailable' }) };
-      request.timer = this.later(() => {
-        if (this.recordRequests.get(requestId) !== request) return;
-        this.recordRequests.delete(requestId);
-        reject(Object.assign(new Error('Cassini did not answer in time. Check the Cassini app.'), { code: 'timeout' }));
-      }, timeoutMs);
-      this.recordRequests.set(requestId, request);
-      this.send(port, { type: 'recordRequest', requestId, ...body });
     });
+    const live = () => this.recordRequests.get(requestId) === request;
+    const fail = error => {
+      if (!live()) return;
+      this.recordRequests.delete(requestId);
+      this.cancel(request.timer);
+      request.reject(error);
+    };
+    request.timer = this.later(() => fail(Object.assign(new Error('Cassini did not answer in time. Check the Cassini app.'), { code: 'timeout' })), timeoutMs);
+    this.recordRequests.set(requestId, request);
+    this.recordWaiting(requestId);
+    void (async () => {
+      await this.flushPublication(live);
+      // Timed out, disconnected or revoked meanwhile: the ask is never sent.
+      if (!live()) return;
+      if (port !== this.port || epoch !== this.recordEpoch) return fail(request.lost());
+      const refused = this.recordUnavailable();
+      if (refused) return fail(refused);
+      const body = typeof build === 'function' ? build() : build;
+      this.send(port, { type: 'recordRequest', requestId, ...body });
+    })().catch(fail);
+    return answer;
   }
   receive(port, message) {
     if (port !== this.port) return;
