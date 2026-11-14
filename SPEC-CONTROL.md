@@ -985,7 +985,7 @@ reload refusals, relay policy, wire version and capabilities are unchanged.
 
 The browser companion popup displays active-tab source readiness independently
 from the native app-control connection. It has no mode controls; since extension
-0.2.29 its Start/Stop asks the app (see "Popup Start and Stop" below) and never
+0.2.30 its Start/Stop asks the app (see "Popup Start and Stop" below) and never
 uses the direct capture RPC, which remains available to isolated browser fixtures.
 This is a presentation change, with no wire-version, capability, audio, or
 recording-policy change.
@@ -1013,7 +1013,7 @@ URLs, or recording paths. Confirmed app recording state, app auto-record policy,
 and launching the native app require additional explicit app-backed interfaces;
 the popup does not infer or fabricate them.
 
-## Popup Start and Stop (`popup-record-v1`, extension 0.2.29, D-983)
+## Popup Start and Stop (`popup-record-v1`, extension 0.2.30, D-983)
 
 The popup offers **Start recording** for the browser-owned current tab and, while
 that tab is recording or starting, **Stop recording**. The popup never records by
