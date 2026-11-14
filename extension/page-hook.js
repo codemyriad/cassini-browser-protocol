@@ -199,13 +199,19 @@
   const createTrackSource = audioContextPrototype?.createMediaStreamTrackSource;
   if (typeof createTrackSource === "function") {
     audioContextPrototype.createMediaStreamTrackSource = function (...args) {
-      return rememberAudioTrackSource(Reflect.apply(createTrackSource, this, args), args[0]);
+      const track = args.length > 0 ? args[0] : undefined;
+      return rememberAudioTrackSource(Reflect.apply(createTrackSource, this, args.length ? [track] : []), track);
     };
   }
   if (typeof globalThis.MediaStreamTrackAudioSourceNode === "function") {
     globalThis.MediaStreamTrackAudioSourceNode = new Proxy(globalThis.MediaStreamTrackAudioSourceNode, {
       construct(target, args, newTarget) {
-        return rememberAudioTrackSource(Reflect.construct(target, args, newTarget), args[1]?.mediaStreamTrack);
+        const options = args.length > 1 ? args[1] : undefined;
+        let track; try { track = options?.mediaStreamTrack; } catch {}
+        if (track !== undefined) {
+          return rememberAudioTrackSource(Reflect.construct(target, [args[0], { mediaStreamTrack: track }], newTarget), track);
+        }
+        return Reflect.construct(target, args, newTarget);
       }
     });
   }

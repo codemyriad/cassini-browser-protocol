@@ -1322,7 +1322,9 @@ track; a `MediaStreamTrack.clone()` of a lineage track; a `MediaStream.clone()`
 copy, paired by audio-track position and equal native label; and the output track of a
 `MediaStreamAudioDestinationNode` (factory or constructor). A
 `MediaStreamAudioSourceNode` is a microphone source only when every audio track of
-its native `mediaStream` had lineage at creation. Lineage follows
+its native `mediaStream` had lineage at creation; a `MediaStreamTrackAudioSourceNode`
+(or `createMediaStreamTrackSource`, extension 0.2.29) is a microphone source only when
+its own `mediaStreamTrack` is a live audio track that had lineage at creation. Lineage follows
 `AudioNode.connect(node, output, input)` edges on port 0 only (output 0 into input 0),
 because channel splitters, mergers and multi-port nodes can route other inputs alone to
 a port. A `disconnect()` removes every recorded edge it may have removed; only supplied

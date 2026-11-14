@@ -413,7 +413,7 @@ test('the terminal check walks each nested output once: teardown work grows line
  assert.ok(large<=small*3,`teardown work ${small} at width 4 and ${large} at width 8 must scale linearly`);
 });
 
-test('MediaStreamTrackAudioSourceNode and createMediaStreamTrackSource keep captured mic lineage and reject non-mic tracks',async()=>{
+test('MediaStreamTrackAudioSourceNode and createMediaStreamTrackSource keep captured mic lineage and reject non-mic or getter-swapped tracks',async()=>{
  const f=fixture(),g=await graphPeer(f,({audio,mic,output})=>{
   audio.createMediaStreamTrackSource(mic.getAudioTracks()[0]).connect(output);
  });
@@ -427,6 +427,16 @@ test('MediaStreamTrackAudioSourceNode and createMediaStreamTrackSource keep capt
   audio.createMediaStreamTrackSource(display.getAudioTracks()[0]).connect(output);
  });
  assert.equal(await qualifies(fNeg,gNeg.peer),false);
+ const fSwap=fixture(),gSwap=await graphPeer(fSwap,async({audio,mic,output})=>{
+  const display=await fSwap.context.navigator.mediaDevices.getDisplayMedia();
+  const options={};
+  Object.defineProperty(options,'mediaStreamTrack',{configurable:true,get(){
+   Object.defineProperty(options,'mediaStreamTrack',{value:mic.getAudioTracks()[0],configurable:true});
+   return display.getAudioTracks()[0];
+  }});
+  new fSwap.context.MediaStreamTrackAudioSourceNode(audio,options).connect(output);
+ });
+ assert.equal(await qualifies(fSwap,gSwap.peer),false);
 });
 
 test('sub-millisecond negative timestamp skew is tolerated and clamped while larger future timestamps are rejected',async()=>{

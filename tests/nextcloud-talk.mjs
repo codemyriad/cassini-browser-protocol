@@ -153,18 +153,21 @@ try{
  control.write(JSON.stringify({type:'configure',capabilities:['call-signals-v1','verified-auto-admission-v1']})+'\n');
  const ack=await controlEvent(()=>events.slice(proofStart).find(event=>event.type==='configured'),'verified capability acknowledgement');
  assert.deepEqual([...ack.capabilities].sort(),['call-signals-v1','verified-auto-admission-v1'].sort());
- const qualified=await controlEvent(()=>events.slice(proofStart).filter(event=>event.type==='callSignals').flatMap(event=>event.tabs).find(tab=>tab.tabId===row.tabId&&tab.callEvidence.state==='active'),'real Talk verified active publication');
+ const qualifiedSignal=await controlEvent(()=>events.slice(proofStart).find(event=>event.type==='callSignals'&&event.tabs.some(tab=>tab.tabId===row.tabId&&tab.callEvidence.state==='active')),'real Talk verified active publication');
+ const qualified=qualifiedSignal.tabs.find(tab=>tab.tabId===row.tabId);
  assert.equal(qualified.remoteAudio,'separated');assert.equal(qualified.callEvidence.adapter.version,'2');
  const verified=await controlEvent(()=>inventory().find(item=>item.tabId===row.tabId&&item.browserDocumentId===qualified.documentGeneration),'correlated verified RTP inventory');
  assert.equal(verified.documentGeneration,qualified.sourceDocumentGeneration);assert.equal(verified.callGeneration,qualified.callEvidence.callGeneration);
  assert.notEqual(qualified.documentGeneration,qualified.sourceDocumentGeneration);
  await popup.getByRole('heading',{name:'Interactive media session detected',exact:true}).waitFor();
- // Verify active callEvidence is renewed across multiple sampling cycles without dropping to unknown.
- const renewals=await controlEvent(()=>{
-  const tabSignals=events.slice(proofStart).filter(event=>event.type==='callSignals').map(event=>event.tabs.find(tab=>tab.tabId===row.tabId)).filter(Boolean);
-  return tabSignals.length>=3&&tabSignals;
+ // Verify active callEvidence is renewed across multiple post-qualification sampling cycles without dropping to unknown.
+ const renewalSignals=await controlEvent(()=>{
+  const postActive=events.slice(proofStart).filter(event=>event.type==='callSignals'&&event.sequence>qualifiedSignal.sequence);
+  return postActive.length>=3&&postActive;
  },'sustained active callSignals renewals');
- assert.ok(renewals.every(tab=>tab.callEvidence.state==='active'),'4-person active Talk call must not drop to unknown across callSignals renewals');
+ const renewals=renewalSignals.map(event=>event.tabs.find(tab=>tab.tabId===row.tabId));
+ assert.ok(renewals.every(tab=>tab?.callEvidence.state==='active'&&tab.callEvidence.callGeneration===qualified.callEvidence.callGeneration&&tab.remoteAudio==='separated'),
+  '4-person active Talk call must not drop to unknown across callSignals renewals');
  await popup.getByRole('heading',{name:'Interactive media session detected',exact:true}).waitFor();
  report.d805Admission={state:qualified.callEvidence.state,remoteAudio:qualified.remoteAudio,acknowledged:true,namespaceBinding:true,
    adapterVersion:qualified.callEvidence.adapter.version,splitPeerConnection:true,renewals:renewals.length,

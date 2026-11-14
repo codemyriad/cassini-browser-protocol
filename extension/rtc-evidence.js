@@ -255,17 +255,29 @@
     const argument=(args,position)=>position<args.length?args[position]:undefined;
     const factory=(prototype,key,remember)=>{
       const native=method(prototype,key);if(!native)return;
-      prototype[key]=function(){const node=call(native,this,arguments);try{remember(node,arguments)}catch{}return node};
+      prototype[key]=function(){const node=call(native,this,arguments);try{remember(node)}catch{}return node};
     };
-    const wrap=(name,Class,remember)=>{if(Class)globalThis[name]=new Proxy(Class,{construct(target,args,newTarget){const node=construct(target,args,newTarget);try{remember(node,args)}catch{}return node}})};
+    const wrap=(name,Class,remember)=>{if(Class)globalThis[name]=new Proxy(Class,{construct(target,args,newTarget){const node=construct(target,args,newTarget);try{remember(node)}catch{}return node}})};
     if(sourceStream){factory(Context?.prototype,'createMediaStreamSource',rememberSource);wrap('MediaStreamAudioSourceNode',SourceNode,rememberSource)}
-    if(TrackSourceNode||method(Context?.prototype,'createMediaStreamTrackSource')){
-      factory(Context?.prototype,'createMediaStreamTrackSource',(node,args)=>rememberTrackSource(node,argument(args,0)));
-      wrap('MediaStreamTrackAudioSourceNode',TrackSourceNode,(node,args)=>{
-        const options=argument(args,1);
-        rememberTrackSource(node,options&&typeof options==='object'?data(options,'mediaStreamTrack'):undefined);
-      });
-    }
+    const createTrackSource=method(Context?.prototype,'createMediaStreamTrackSource');
+    if(createTrackSource)Context.prototype.createMediaStreamTrackSource=function(){
+      const track=argument(arguments,0),node=call(createTrackSource,this,arguments.length?[track]:[]);
+      try{rememberTrackSource(node,track)}catch{}return node;
+    };
+    if(TrackSourceNode)globalThis.MediaStreamTrackAudioSourceNode=new Proxy(TrackSourceNode,{construct(target,args,newTarget){
+      // Read own mediaStreamTrack once and pass a null-prototype options bag so
+      // getters or proxies cannot hand native construction a different track.
+      const options=argument(args,1);
+      if(options&&(typeof options==='object'||typeof options==='function')){
+        let track;try{track=data(options,'mediaStreamTrack')}catch{}
+        if(track!==undefined){
+          const clean=create(null);clean.mediaStreamTrack=track;
+          const node=construct(target,[argument(args,0),clean],newTarget);
+          try{rememberTrackSource(node,track)}catch{}return node;
+        }
+      }
+      return construct(target,args,newTarget);
+    }});
     if(destinationStream){factory(Context?.prototype,'createMediaStreamDestination',rememberDestination);wrap('MediaStreamAudioDestinationNode',DestinationNode,rememberDestination)}
     const edges=(map,node)=>{let value=lookup(map,node);if(!value){value=list();call(weakSet,map,[node,value])}return value};
     // WebIDL unsigned long; anything but a number is unknown (-1).

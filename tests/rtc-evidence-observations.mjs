@@ -260,6 +260,25 @@ try{
       else assert.equal(published.row.callEvidence.callGeneration,null);
       assert.notEqual(inventory.row.callGeneration,'0');
       observation.worker={acknowledged:true,state:published.row.callEvidence.state,namespaceBinding:trusted,legacySourceCount:inventory.row.sourceCount,legacyHeard:inventory.row.heard};
+      if(fixture==='split-pc-4person-webaudio'){
+        const initialGen=published.row.callEvidence.callGeneration,initialSeq=published.packet.sequence;
+        const postActive=await worker.evaluate(async({initialSeq})=>new Promise((resolve,reject)=>{
+          let timer;
+          const check=()=>{
+            const next=fixturePackets.filter(p=>p.type==='callSignals'&&p.sequence>initialSeq);
+            if(next.length>=3){clearTimeout(timer);fixtureObservers.delete(check);resolve(next)}
+          };
+          timer=setTimeout(()=>{fixtureObservers.delete(check);reject(Error('Timed out waiting for 4-person split-PC renewals'))},15000);
+          fixtureObservers.add(check);check();
+        }),{initialSeq});
+        for(const sig of postActive){
+          const row=sig.tabs.find(t=>t.tabId===tabId);
+          assert.equal(row?.callEvidence.state,'active','4-person split-PC WebAudio call must renew without dropping to unknown');
+          assert.equal(row.callEvidence.callGeneration,initialGen);
+          assert.equal(row.remoteAudio,'separated');
+        }
+        observation.worker.sustainedRenewals=postActive.length;
+      }
       if(fixture==='primordial-poison-positive'){
         await worker.evaluate(async tabId=>chrome.scripting.executeScript({target:{tabId,frameIds:[0]},world:'MAIN',func:()=>{
         Object.getOwnPropertyDescriptor=()=>({value:{read:()=>({samePeerCount:99})}});
