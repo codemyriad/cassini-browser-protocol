@@ -434,7 +434,8 @@ function popupTabStatus(tabId) {
   return {...value, tabId, starting, recording:!!session?.ready && !starting, appRecording:appControl.recordAvailability(),
     ...(request ? {recordRequest:{action:request.action, state:request.state}} : {})};
 }
-const pendingStartFor = tabId => [...pendingStarts].some(([key,request]) => key === tabId || request.tabId === tabId);
+const pendingStartRequest = tabId => [...pendingStarts].find(([key,request]) => key === tabId || request.tabId === tabId)?.[1];
+const pendingStartFor = tabId => !!pendingStartRequest(tabId);
 
 // popup-record-v1: the popup asks the connected app to Start/Stop this tab. The
 // app answers and then records through its own ordinary control command, so its
@@ -500,13 +501,17 @@ async function requestRecording(action, tabId) {
     const { callGeneration, documentGeneration } = recordStartBody(tabId, tab);
     build = () => recordStartBody(tabId, tab, { callGeneration, documentGeneration });
   } else {
-    const body = () => {
-      const session = sessions.get(tabId);
-      if (!session && !pendingStartFor(tabId)) throw refused("No recording is running in this tab.", "gone");
+    // Stop is bound to the capture (or pending start) the user clicked Stop
+    // for. If it ended or was replaced while publication drained, the ask is
+    // refused: it never names a newer recording in the same tab.
+    const target = sessions.get(tabId) ?? pendingStartRequest(tabId);
+    if (!target) throw refused("No recording is running in this tab.", "gone");
+    build = () => {
+      const session = "token" in target ? target : target.session; // a session, or the pending start's capture
+      const current = session ? sessions.get(tabId) === session : [...pendingStarts.values()].includes(target);
+      if (!current) throw refused("That recording already ended.", "gone");
       return { action, tabId, ...(session ? { captureId: session.token } : {}) };
     };
-    body();
-    build = body;
   }
   if (recordRequests.get(tabId)?.state === "pending") throw refused("Cassini is still answering the previous request.", "busy");
   const request = { action, state: "pending", epoch: appControl.recordEpoch };
@@ -604,6 +609,7 @@ async function start(mode, tabId = null, options = {}) {
     const session = { callGeneration: identity.generation, mode, tabId: tab.id, independent: options.independent === true, captureLocal: options.captureLocal !== false, keepOnNavigation: options.keepOnNavigation === true, token: target?.captureId ?? crypto.randomUUID(), origin: target?.timelineOriginMs ?? Date.now(), resumeTarget: target,
       frames: new Set(), tracks: 0, trackIds: new Set(), trackReservations: new Set(), endedTrackIds: new Set(), trackSources: new Map(), discoveredSources: new Map(), sourceUpdates: new Set(), lastTab: tab, lastSourceCount: 0, stopping: false, problem: null };
     sessions.set(tab.id, session);
+    request.session = session; // A popup Stop bound to this start follows it to its capture.
     notifyControl();
     const checkStarting = () => {
       // A call change or a closed tab stops the starting session; classify those

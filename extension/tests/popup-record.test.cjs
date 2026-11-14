@@ -286,11 +286,61 @@ test('popup record: a call change during publication refuses Start instead of mi
     assert.notEqual(app.api.callInfo(2).generation, before);
     control.snapshot = original;
     const held = release; release = null; held();
-    const answer = await reply;
+    // Whichever comes first: a refusal (correct) or an ask naming a capture (the regression).
+    const answer = await Promise.race([reply, asked(app).then(ask => ({ leaked: ask }))]);
+    assert.equal(answer.leaked, undefined, 'the held Stop must not become an ask for the replacement');
     assert.equal(answer.code, 'gone');
     assert.match(answer.error, /meeting changed/);
     assert.equal(sent(port, 'recordRequest').length, 0, 'no ask pairs the new call with the old title and URL');
     assert.equal((await rpc(app, { type: 'status', tabId: 2 })).recordRequest, undefined);
+  } finally { release?.(); app.close(); }
+});
+
+test('popup record: a Stop held behind publication stays bound to its capture and never stops a replacement', async () => {
+  const app = await setup();
+  let release;
+  try {
+    const control = app.api.appControl, port = control.port;
+    await optIn(app);
+    const generation = app.api.callInfo(2).generation;
+    const startA = { type: 'command', requestId: 'app-a', action: 'start', tabId: 2, mode: 'tracks', independent: true, callGeneration: generation };
+    assert.equal((await app.command(startA)).ok, true);
+    const captureA = (await rpc(app, { type: 'status', tabId: 2 })).captureId;
+    const original = control.snapshot;
+    control.snapshot = async options => { await new Promise(resolve => { release = resolve; }); return original(options); };
+    control.publish();
+    await until(() => release);
+    const entered = waiting(control);
+    const reply = rpc(app, { type: 'recordRequest', action: 'stop', tabId: 2 });
+    await entered;
+    // While the ask waits, the app stops A and starts B in the same tab.
+    assert.equal((await app.command({ type: 'command', requestId: 'app-stop-a', action: 'stop', tabId: 2, independent: true, reason: 'user', captureId: captureA })).ok, true);
+    assert.equal((await app.command({ ...startA, requestId: 'app-b' })).ok, true);
+    const captureB = (await rpc(app, { type: 'status', tabId: 2 })).captureId;
+    assert.notEqual(captureB, captureA);
+    control.snapshot = original;
+    const held = release; release = null; held();
+    // Whichever comes first: a refusal (correct) or an ask naming a capture (the regression).
+    const answer = await Promise.race([reply, asked(app).then(ask => ({ leaked: ask }))]);
+    assert.equal(answer.leaked, undefined, 'the held Stop must not become an ask for the replacement');
+    assert.equal(answer.code, 'gone');
+    assert.equal(sent(port, 'recordRequest').length, 0, 'no Stop ask ever names the replacement capture');
+    const status = await rpc(app, { type: 'status', tabId: 2 });
+    assert.equal(status.recording, true); assert.equal(status.captureId, captureB);
+    assert.equal(status.recordRequest, undefined);
+    // An unreplaced capture still gets its Stop ask after the publication drains.
+    control.snapshot = async options => { await new Promise(resolve => { release = resolve; }); return original(options); };
+    control.publish();
+    await until(() => release);
+    const again = waiting(control);
+    const stopB = rpc(app, { type: 'recordRequest', action: 'stop', tabId: 2 });
+    await again;
+    control.snapshot = original;
+    const held2 = release; release = null; held2();
+    const ask = await asked(app);
+    assert.equal(ask.captureId, captureB);
+    port.onMessage.emit({ type: 'recordRequestResult', requestId: ask.requestId, ok: true });
+    assert.equal((await stopB).recordRequest.state, 'accepted');
   } finally { release?.(); app.close(); }
 });
 
