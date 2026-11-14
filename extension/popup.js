@@ -4,6 +4,8 @@ import { copyDiagnostics } from './tab-evidence.mjs';
 const element = id => document.getElementById(id);
 let pending = false, actionPending = false, reloadTabId = null, reloadedTabId = null, diagnosticText = '';
 let requestGeneration = 0;
+// A refresh asked for while a poll or action is outstanding runs once it ends.
+let refreshQueued = false, lastResult = null, lastTab = null;
 // The button's target is the tab and action displayed when it was rendered.
 let recordTarget = null, recordError = null;
 function boundedReply(promise, ms = 4000) {
@@ -34,6 +36,7 @@ function showActionError(message) {
   element('action-error').hidden = !message;
 }
 function render(result, tab) {
+  lastResult = result; lastTab = tab;
   const current = result.browserHealth?.tabs?.find(item => item.tabId === tab?.id);
   const capture = result.tabId === tab?.id && (result.recording === true || result.starting === true);
   if (tab?.id !== reloadedTabId || current || capture) reloadedTabId = null;
@@ -59,7 +62,8 @@ function render(result, tab) {
   element('copy').disabled = false;
 }
 async function refresh() {
-  if (pending || actionPending) return;
+  if (pending || actionPending) { refreshQueued = true; return; }
+  refreshQueued = false;
   pending = true;
   const generation = ++requestGeneration;
   try {
@@ -89,7 +93,13 @@ async function refresh() {
     diagnosticText = JSON.stringify({schemaVersion:1,error:'statusUnavailable'});
     element('diagnostics').textContent = diagnosticText;
     element('copy').disabled = false;
-  } finally { pending = false; element('tab-status').setAttribute('aria-busy', 'false'); }
+  } finally {
+    pending = false; element('tab-status').setAttribute('aria-busy', 'false');
+    drainRefresh();
+  }
+}
+function drainRefresh() {
+  if (refreshQueued && !pending && !actionPending) void refresh();
 }
 element('reload').addEventListener('click', async () => {
   if (actionPending || reloadTabId === null) return;
@@ -109,7 +119,7 @@ element('reload').addEventListener('click', async () => {
     reloadTabId = null;
     element('reload').hidden = element('reload-warning').hidden = true;
   } catch (error) { showActionError(error.message); }
-  finally { actionPending = false; element('reload').disabled = false; }
+  finally { actionPending = false; element('reload').disabled = false; drainRefresh(); }
 });
 element('record').addEventListener('click', async () => {
   if (actionPending || recordTarget === null) return;
@@ -118,19 +128,26 @@ element('record').addEventListener('click', async () => {
   actionPending = true;
   ++requestGeneration;
   recordTarget = null;
-  element('record').disabled = true;
-  element('record').textContent = action === 'start' ? 'Starting…' : 'Stopping…';
-  element('status').textContent = action === 'start' ? 'Asking Cassini to start recording…' : 'Asking Cassini to stop recording…';
   recordError = null; showRecordError('');
+  // Render the whole pending card (tone, text, note, button) through popupState.
+  // recordTarget only exists after a render of this tab, so lastResult is its view.
+  const confirmed = lastResult;
+  render({...confirmed, tabId, recordRequest: {action, state: 'pending'}}, lastTab);
+  lastResult = confirmed;
   try {
     const result = await boundedReply(chrome.runtime.sendMessage({target: 'background', type: 'recordRequest', action, tabId}), 15000);
     if (!result || result.error) throw new Error(result?.error || 'Cassini could not do that. Check the Cassini app.');
   } catch (error) {
     recordError = {tabId, action};
+    // Nothing changed: restore the last confirmed card at once rather than
+    // leaving Starting…/Stopping… beside the refusal until the next poll.
+    if (lastTab?.id === tabId) render(lastResult, lastTab);
     showRecordError(error.message);
   } finally {
     actionPending = false;
-    void refresh();
+    // A poll invalidated by the click may still be outstanding; queue behind it.
+    refreshQueued = true;
+    drainRefresh();
   }
 });
 element('copy').addEventListener('click', async () => {

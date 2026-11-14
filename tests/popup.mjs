@@ -35,6 +35,10 @@ try {
         }
         if(fixture.statusError)throw Error(fixture.statusError);
         if(message.type==='status' && fixture.statusNeverResolves)return new Promise(()=>{});
+        if(message.type==='status' && fixture.holdStatus){
+          const value=structuredClone(fixture.status);fixture.holdStatus=false;
+          return new Promise(resolve=>{window.releaseStatus=()=>resolve(value)});
+        }
         if(message.type==='status' && fixture.captures){
           const capture=fixture.captures.find(c=>c.tabId===message.tabId);
           return {...structuredClone(fixture.status),...(capture||{recording:false,tabId:message.tabId})};
@@ -153,6 +157,23 @@ async function recordFlow(page){
   await page.getByText('Generated app refusal',{exact:true}).waitFor();
   await page.waitForFunction(()=>!document.querySelector('#record').disabled);
   assert.equal(await page.locator('#record-hint').isVisible(),false);
+  // A click during an outstanding status poll: the refusal restores the card at
+  // once, and the refresh it asks for runs when the held poll ends.
+  await page.evaluate(()=>{delete window.releaseStatus;fixture.holdStatus=true});
+  await page.waitForFunction(()=>typeof window.releaseStatus==='function');
+  const statusCount=await page.evaluate(()=>fixture.requests.filter(r=>r.type==='status').length);
+  await page.evaluate(()=>{fixture.recordReply=()=>({error:'Generated refusal during a poll',code:'needsSetup'})});
+  await start.click();
+  await page.getByText('Generated refusal during a poll',{exact:true}).waitFor();
+  assert.equal(await page.locator('#record').textContent(),'Start recording');
+  assert.equal(await page.locator('#record').isDisabled(),false);
+  assert.equal(await page.locator('#status').textContent(),'Meeting sources detected');
+  assert.equal(await page.locator('#card').getAttribute('data-tone'),'good');
+  assert.equal(await page.evaluate(()=>fixture.requests.filter(r=>r.type==='status').length),statusCount,'the held poll is still outstanding');
+  await page.evaluate(()=>window.releaseStatus());
+  await page.waitForFunction(n=>fixture.requests.filter(r=>r.type==='status').length>n,statusCount);
+  await page.getByRole('heading',{name:'Meeting sources detected',exact:true}).waitFor();
+  assert.equal(await page.locator('#record-error').isVisible(),true,'the refusal stays until the offered action changes');
   // An accepted ask shows progress until this tab's capture reflects it.
   await page.evaluate(()=>{fixture.recordReply=message=>new Promise(resolve=>{window.finishRecord=()=>{
     fixture.captures=[{tabId:7,recording:false,starting:true,recordRequest:{action:'start',state:'accepted'}}];resolve({tabId:7})}})});
@@ -160,6 +181,11 @@ async function recordFlow(page){
   await page.getByRole('button',{name:'Starting…',exact:true}).waitFor();
   assert.equal(await page.locator('#record').isDisabled(),true);
   assert.equal(await page.locator('#status').textContent(),'Asking Cassini to start recording…');
+  // The whole card renders the pending state, not just the heading and button.
+  assert.equal(await page.locator('#card').getAttribute('data-tone'),'neutral');
+  assert.match(await page.locator('#explanation').textContent(),/Waiting for it to confirm/);
+  assert.equal(await page.locator('#recording-note').textContent(),'Recording is not yet confirmed');
+  assert.equal(await page.locator('#reload').isVisible(),false);
   assert.equal(await page.locator('#record-error').isVisible(),false,'a new click clears the old refusal');
   await page.evaluate(()=>window.finishRecord());
   await page.getByRole('heading',{name:'Asking Cassini to start recording…',exact:true}).waitFor();
@@ -173,7 +199,7 @@ async function recordFlow(page){
   await stop.click();
   await page.getByRole('button',{name:'Saving…',exact:true}).waitFor();
   assert.deepEqual(await page.evaluate(()=>fixture.requests.filter(r=>r.type==='recordRequest').map(({action,tabId})=>({action,tabId}))),
-    [{action:'start',tabId:7},{action:'start',tabId:7},{action:'stop',tabId:7}]);
+    [{action:'start',tabId:7},{action:'start',tabId:7},{action:'start',tabId:7},{action:'stop',tabId:7}]);
   await page.evaluate(()=>{delete fixture.captures;delete fixture.recordReply;delete fixture.status.appRecording;fixture.status.browserHealth.tabs=[]});
   await page.getByRole('heading',{name:'No meeting sources detected',exact:true}).waitFor();
 }

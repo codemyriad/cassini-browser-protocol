@@ -20,6 +20,9 @@ export class AppControl {
     this.recordConfigured = false;
     this.recordRequests = new Map();
     this.recordSequence = 0;
+    // Bumped whenever popup asks lose their footing (disconnect, reconnect,
+    // revocation, close) so accepted-but-unreflected asks stop claiming progress.
+    this.recordEpoch = 0;
     this.alarm = alarm => { if (alarm.name === 'cassini-app-control') this.connect(); };
   }
   start() {
@@ -165,17 +168,41 @@ export class AppControl {
   }
   failRecordRequests() {
     this.recordConfigured = false;
+    this.recordEpoch++;
     const pending = [...this.recordRequests.values()];
     this.recordRequests.clear();
     for (const request of pending) { this.cancel(request.timer); request.reject(request.lost()); }
   }
-  // Sends one popup ask and resolves with the app's correlated answer. The app
-  // performs any recording through its own ordinary control command.
-  requestRecording(body, timeoutMs = 10000) {
+  recordUnavailable() {
     const unavailable = this.recordAvailability();
-    if (unavailable === 'disconnected') return Promise.reject(Object.assign(new Error('Cassini is not connected. Open Cassini, then try again.'), { code: 'appUnavailable' }));
-    if (unavailable === 'unsupported') return Promise.reject(Object.assign(new Error('This version of Cassini cannot start or stop recordings from the browser. Use the Cassini app.'), { code: 'unsupported' }));
-    const port = this.port, requestId = `popup-${this.connectedAt}-${++this.recordSequence}`;
+    if (unavailable === 'disconnected') return Object.assign(new Error('Cassini is not connected. Open Cassini, then try again.'), { code: 'appUnavailable' });
+    if (unavailable === 'unsupported') return Object.assign(new Error('This version of Cassini cannot start or stop recordings from the browser. Use the Cassini app.'), { code: 'unsupported' });
+    return null;
+  }
+  // Waits until every inventory/status change notified so far has been sent on
+  // this connection, so an ask never overtakes the snapshot that introduces its
+  // tab, callGeneration or captureId. Bounded against a constantly busy page.
+  async flushPublication() {
+    for (let round = 0; round < 8 && this.port && !this.connecting && (this.dirty || this.publishing); round++) {
+      if (!this.publishing) this.publish();
+      await this.publishing;
+    }
+  }
+  // Sends one popup ask and resolves with the app's correlated answer. The app
+  // performs any recording through its own ordinary control command. `build`
+  // runs synchronously after pending publication is flushed, so the ask carries
+  // the same state the app was just told about; it may throw a refusal.
+  async requestRecording(build, timeoutMs = 10000) {
+    let unavailable = this.recordUnavailable();
+    if (unavailable) throw unavailable;
+    const port = this.port, epoch = this.recordEpoch;
+    await this.flushPublication();
+    // The connection or opt-in may have changed while publication drained.
+    if (port !== this.port || epoch !== this.recordEpoch)
+      throw Object.assign(new Error('Cassini disconnected before answering. Check the Cassini app.'), { code: 'appUnavailable' });
+    if ((unavailable = this.recordUnavailable())) throw unavailable;
+    const body = typeof build === 'function' ? build() : build;
+    const requestId = `popup-${this.connectedAt}-${++this.recordSequence}`;
     return new Promise((resolve, reject) => {
       const request = { resolve, reject,
         lost: () => Object.assign(new Error('Cassini disconnected before answering. Check the Cassini app.'), { code: 'appUnavailable' }) };

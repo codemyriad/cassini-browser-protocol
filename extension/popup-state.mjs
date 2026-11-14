@@ -28,7 +28,12 @@ export function recordControl(result, tab, current) {
 export function popupState(result, tab, reloadedTabId = null) {
   const view = popupStatus(result, tab, reloadedTabId);
   const health = result?.browserHealth;
-  const current = health?.tabs?.find(item => item.tabId === tab?.id) || null;
+  // Without a health row, this tab's own page evidence still says whether it
+  // needs a reload or is being checked. Evidence-only `ready` is only a relay
+  // handshake (no sources yet), so it never enables Start.
+  const page = result?.tabEvidence?.tabId === tab?.id ? tabEvidenceView(result, tab?.id).transport.page : null;
+  const current = health?.tabs?.find(item => item.tabId === tab?.id) ||
+    (page === 'reloadRequired' || page === 'checking' ? {state: page} : null);
   const record = recordControl(result, tab, current);
   const request = record && result.tabId === tab?.id ? result.recordRequest : null;
   if (request?.action === 'start') return {...view, record, tone: 'neutral', title: 'Asking Cassini to start recording…',

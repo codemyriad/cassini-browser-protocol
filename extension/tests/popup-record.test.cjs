@@ -52,7 +52,7 @@ test('popup record: Start asks the app, which records through its own command', 
     await optIn(app);
     const reply = rpc(app, { type: 'recordRequest', action: 'start', tabId: 2 });
     const ask = await asked(app);
-    assert.deepEqual(Object.keys(ask).sort(), ['action', 'callGeneration', 'requestId', 'tabId', 'type']);
+    assert.deepEqual(Object.keys(ask).sort(), ['action', 'callGeneration', 'pageState', 'requestId', 'tabId', 'title', 'type', 'url']);
     assert.equal(ask.action, 'start'); assert.equal(ask.tabId, 2);
     assert.equal(ask.callGeneration, app.api.callInfo(2).generation);
     assert.equal(app.audio.length, 0, 'the extension never starts native capture for the ask itself');
@@ -157,6 +157,110 @@ test('popup record: a disconnected or silent app fails the ask; it is never retr
     assert.equal(status.appRecording, 'disconnected'); assert.equal(status.recordRequest, undefined);
     assert.equal((await rpc(app, { type: 'recordRequest', action: 'start', tabId: 2 })).code, 'appUnavailable');
     assert.equal(sent(app.ports[0], 'recordRequest').length, 2);
+    assert.equal(app.audio.length, 0);
+  } finally { app.close(); }
+});
+
+test('popup record: Start carries browser-owned meeting metadata even when the verified inventory omits the tab', async () => {
+  const app = await setup();
+  try {
+    const control = app.api.appControl, port = control.port;
+    port.onMessage.emit({ type: 'configure', capabilities: ['call-signals-v1', 'verified-auto-admission-v1'] });
+    assert.equal(control.verifiedConfigured, true);
+    // The fixture frame was repaired (no document-start observer): D80.3 keeps it out of the verified inventory.
+    assert.deepEqual(plain((await app.api.meetings({ verified: true })).meetings), []);
+    await optIn(app);
+    const reply = rpc(app, { type: 'recordRequest', action: 'start', tabId: 2 });
+    const ask = await asked(app);
+    assert.equal(ask.title, 'Meeting B', 'the browser-owned title, never the page-reported one');
+    assert.equal(ask.url, 'https://meet.example/call');
+    assert.equal(ask.callGeneration, app.api.callInfo(2).generation);
+    assert.equal(ask.pageState, 'present');
+    assert.equal(ask.captureId, undefined);
+    port.onMessage.emit({ type: 'recordRequestResult', requestId: ask.requestId, ok: true });
+    assert.equal((await reply).error, undefined);
+    // Stop asks carry no meeting metadata.
+    const recording = await app.command({ type: 'command', requestId: 'app-manual-1', action: 'start', tabId: 2, mode: 'tracks', independent: true, callGeneration: ask.callGeneration });
+    assert.equal(recording.ok, true);
+    void rpc(app, { type: 'recordRequest', action: 'stop', tabId: 2 });
+    const stopAsk = await asked(app, 2);
+    assert.deepEqual(Object.keys(stopAsk).sort(), ['action', 'captureId', 'requestId', 'tabId', 'type']);
+  } finally { app.close(); }
+});
+
+test('popup record: an ask never overtakes a pending inventory publication; a revocation meanwhile refuses it', async () => {
+  const app = await setup();
+  let release;
+  try {
+    const control = app.api.appControl, port = control.port;
+    await optIn(app);
+    const original = control.snapshot;
+    control.snapshot = async options => { await new Promise(resolve => { release = resolve; }); return original(options); };
+    control.publish();
+    await until(() => release);
+    const reply = rpc(app, { type: 'recordRequest', action: 'start', tabId: 2 });
+    for (let turn = 0; turn < 50; turn++) await new Promise(resolve => setImmediate(resolve));
+    assert.equal(sent(port, 'recordRequest').length, 0, 'the ask waits for the in-flight snapshot');
+    const before = port.sent.length;
+    control.snapshot = original;
+    release();
+    const ask = await asked(app);
+    const meetings = port.sent.findIndex((m, index) => index >= before && m.type === 'meetings');
+    assert.ok(meetings >= 0 && meetings < port.sent.indexOf(ask), 'meetings is published before the ask');
+    port.onMessage.emit({ type: 'recordRequestResult', requestId: ask.requestId, ok: false, error: 'No.', code: 'needsSetup' });
+    await reply;
+    // The app revokes while the publication is still draining: nothing is sent.
+    release = null;
+    control.snapshot = async options => { await new Promise(resolve => { release = resolve; }); return original(options); };
+    control.publish();
+    await until(() => release);
+    const revoked = rpc(app, { type: 'recordRequest', action: 'start', tabId: 2 });
+    for (let turn = 0; turn < 50; turn++) await new Promise(resolve => setImmediate(resolve));
+    port.onMessage.emit({ type: 'recordRequests', enabled: false });
+    control.snapshot = original;
+    release();
+    assert.equal((await revoked).code, 'appUnavailable');
+    assert.equal(sent(port, 'recordRequest').length, 1);
+  } finally { release?.(); app.close(); }
+});
+
+test('popup record: an accepted ask ends with its connection, opt-in, or the app command it was waiting for', async () => {
+  const app = await setup();
+  const accept = async (count, action = 'start') => {
+    const reply = rpc(app, { type: 'recordRequest', action, tabId: 2 });
+    const ask = await asked(app, count);
+    app.ports.at(-1).onMessage.emit({ type: 'recordRequestResult', requestId: ask.requestId, ok: true });
+    assert.deepEqual(plain((await reply).recordRequest), { action, state: 'accepted' });
+    return ask;
+  };
+  try {
+    await optIn(app);
+    // Revocation clears it.
+    await accept(1);
+    app.ports[0].onMessage.emit({ type: 'recordRequests', enabled: false });
+    assert.equal((await rpc(app, { type: 'status', tabId: 2 })).recordRequest, undefined);
+    // Disconnect clears it; after reconnect and opt-in the user can decide again at once.
+    await optIn(app);
+    await accept(2);
+    const next = await app.reconnect();
+    let status = await rpc(app, { type: 'status', tabId: 2 });
+    assert.equal(status.recordRequest, undefined); assert.equal(status.appRecording, 'unsupported');
+    await optIn(app);
+    status = await rpc(app, { type: 'status', tabId: 2 });
+    assert.equal(status.recordRequest, undefined); assert.equal(status.appRecording, 'available');
+    // The app's Start command fails after acceptance: the wait ends.
+    let ask = await accept(1);
+    let result = await app.command({ type: 'command', requestId: 'app-1', action: 'start', tabId: 2, mode: 'tracks', independent: true, callGeneration: 'stale-call' });
+    assert.equal(result.ok, false);
+    assert.equal((await rpc(app, { type: 'status', tabId: 2 })).recordRequest, undefined);
+    // The app's Start command fails before its acceptance arrives: no accepted wait is created.
+    const reply = rpc(app, { type: 'recordRequest', action: 'start', tabId: 2 });
+    ask = await asked(app, 2);
+    result = await app.command({ type: 'command', requestId: 'app-2', action: 'start', tabId: 2, mode: 'tracks', independent: true, callGeneration: 'stale-call' });
+    assert.equal(result.ok, false);
+    next.onMessage.emit({ type: 'recordRequestResult', requestId: ask.requestId, ok: true });
+    assert.equal((await reply).recordRequest, undefined);
+    assert.equal((await rpc(app, { type: 'status', tabId: 2 })).recordRequest, undefined);
     assert.equal(app.audio.length, 0);
   } finally { app.close(); }
 });

@@ -156,3 +156,20 @@ test('popup record control: Stop for this tab only, with saving and pending feed
   assert.equal(stopping.title, 'Asking Cassini to stop recording…');
   assert.equal(popupState(active({tabId: 8, recordRequest: {action: 'stop', state: 'pending'}}), tab).record.label, 'Start recording');
 });
+test('without a health row, this tab’s reload/checking evidence reaches the record control; evidence-only ready does not enable Start', async () => {
+  const {popupState} = await state;
+  const evidence = page => status([], {tabId: 7, appRecording: 'available', tabEvidence: {tabId: 7, transport: {page},
+    callEvidence: {state: 'unknown', reason: 'unverified'}, captureCapability: {kind: 'unknown', assurance: 'unknown'}}});
+  let view = popupState(evidence('reloadRequired'), tab);
+  assert.equal(view.title, 'This tab needs to reload');
+  assert.deepEqual({...view.record}, {action: 'start', enabled: false, hint: 'Reload the tab before recording.', label: 'Start recording'});
+  view = popupState(evidence('checking'), tab);
+  assert.equal(view.title, 'Checking the page connection…');
+  assert.equal(view.record.enabled, false); assert.equal(view.record.hint, 'Wait until the page check finishes.');
+  view = popupState(evidence('ready'), tab);
+  assert.equal(view.record.enabled, false);
+  assert.match(view.record.hint, /Join the call first/);
+  // Evidence for another tab never stands in for this tab.
+  const other = evidence('reloadRequired'); other.tabEvidence.tabId = 8;
+  assert.match(popupState(other, tab).record.hint, /Join the call first/);
+});

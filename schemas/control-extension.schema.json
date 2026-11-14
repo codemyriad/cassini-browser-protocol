@@ -805,6 +805,29 @@
           "type": "string",
           "minLength": 1,
           "maxLength": 200
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200,
+          "$comment": "Browser-owned tab title, as in meetings; never page-reported."
+        },
+        "url": {
+          "type": "string",
+          "maxLength": 2048,
+          "pattern": "^https?://",
+          "$comment": "Browser-owned tab URL, as in meetings; never page-reported."
+        },
+        "documentGeneration": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "pageState": {
+          "enum": [
+            "present",
+            "closed",
+            "navigating"
+          ]
         }
       },
       "required": [
@@ -825,7 +848,9 @@
           },
           "then": {
             "required": [
-              "callGeneration"
+              "callGeneration",
+              "title",
+              "url"
             ],
             "not": {
               "required": [

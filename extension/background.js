@@ -439,47 +439,79 @@ const pendingStartFor = tabId => [...pendingStarts].some(([key,request]) => key 
 // popup-record-v1: the popup asks the connected app to Start/Stop this tab. The
 // app answers and then records through its own ordinary control command, so its
 // Library, manual-Stop memory and capture choices stay authoritative. An
-// accepted ask is shown until this tab's capture state reflects it (bounded).
+// accepted ask is shown until this tab's capture state reflects it (bounded),
+// the matching app command finishes, or the connection/opt-in it was made on
+// ends.
 const recordRequests = new Map();
 const RECORD_REQUEST_SETTLE_MS = 10000;
 function popupRecordRequest(tabId) {
   const request = recordRequests.get(tabId);
-  if (!request || request.state === "pending") return request;
+  if (!request) return request;
+  if (request.epoch !== appControl.recordEpoch || appControl.recordAvailability() !== "available") {
+    if (request.state !== "pending") recordRequests.delete(tabId);
+    return request.state === "pending" ? request : null;
+  }
+  if (request.state === "pending") return request;
   const session = sessions.get(tabId);
   const reflected = request.action === "start" ? !!session || pendingStartFor(tabId) : !session || session.stopping;
   if (reflected || Date.now() >= request.until) { recordRequests.delete(tabId); return null; }
   return request;
 }
+// The app's own start/stop command for a tab with a popup ask finished (either
+// way). An accepted ask stops waiting; a still-unanswered one never becomes an
+// accepted wait for a command that already completed or failed.
+function settleRecordRequest(command) {
+  const request = recordRequests.get(command.tabId);
+  if (!request || request.action !== command.action) return;
+  if (request.state === "pending") request.settled = true;
+  else recordRequests.delete(command.tabId);
+}
+// Browser-owned facts the app needs to resolve and title a manual Start even
+// when its verified inventory omits this tab (repaired or unverified frames).
+function recordStartBody(tabId, tab) {
+  if (sessions.has(tabId) || pendingStartFor(tabId)) throw refused("A recording is already running. Stop it before starting another.", "busy");
+  requireTrackReadiness(tabId);
+  if (![...frames].some(frame => frame.tabId === tabId && relayReady(frame) && frame.sourceCount > 0))
+    throw refused("No audio is available from that meeting yet.", "noSources");
+  const documentGeneration = documentFor(tabId), state = pageState(tabId);
+  return { action: "start", tabId, callGeneration: callInfo(tabId).generation,
+    title: [...(tab.title || "Meeting")].slice(0, 200).join(""), url: new URL(tab.url).href.slice(0, 2048),
+    ...(typeof documentGeneration === "string" && documentGeneration ? { documentGeneration } : {}),
+    ...(["present", "closed", "navigating"].includes(state) ? { pageState: state } : {}) };
+}
 async function requestRecording(action, tabId) {
   if (!["start", "stop"].includes(action)) throw refused("Unknown recording action.", "invalid");
   if (!Number.isSafeInteger(tabId) || tabId < 0) throw refused("Choose a valid browser tab.", "invalid");
   if (recordRequests.get(tabId)?.state === "pending") throw refused("Cassini is still answering the previous request.", "busy");
-  const availability = appControl.recordAvailability();
-  if (availability === "disconnected") throw popupRefusal("Cassini is not connected. Open Cassini, then try again.", "appUnavailable");
-  if (availability === "unsupported") throw popupRefusal("This version of Cassini cannot start or stop recordings from the browser. Use the Cassini app.", "unsupported");
-  let body;
+  const unavailable = appControl.recordUnavailable();
+  if (unavailable) throw unavailable;
+  let build;
   if (action === "start") {
     let tab;
     try { tab = await chrome.tabs.get(tabId); }
     catch { throw refused("That meeting is no longer available.", "gone"); }
     if (!/^https?:/.test(tab?.url || "")) throw refused("Open the meeting tab first. Recording works on web pages only.", "notWebPage");
-    if (sessions.has(tabId) || pendingStartFor(tabId)) throw refused("A recording is already running. Stop it before starting another.", "busy");
-    requireTrackReadiness(tabId);
-    if (![...frames].some(frame => frame.tabId === tabId && relayReady(frame) && frame.sourceCount > 0))
-      throw refused("No audio is available from that meeting yet.", "noSources");
-    body = { action, tabId, callGeneration: callInfo(tabId).generation };
+    recordStartBody(tabId, tab);
+    build = () => recordStartBody(tabId, tab);
   } else {
-    const session = sessions.get(tabId);
-    if (!session && !pendingStartFor(tabId)) throw refused("No recording is running in this tab.", "gone");
-    body = { action, tabId, ...(session ? { captureId: session.token } : {}) };
+    const body = () => {
+      const session = sessions.get(tabId);
+      if (!session && !pendingStartFor(tabId)) throw refused("No recording is running in this tab.", "gone");
+      return { action, tabId, ...(session ? { captureId: session.token } : {}) };
+    };
+    body();
+    build = body;
   }
   if (recordRequests.get(tabId)?.state === "pending") throw refused("Cassini is still answering the previous request.", "busy");
-  const request = { action, state: "pending" };
+  const request = { action, state: "pending", epoch: appControl.recordEpoch };
   recordRequests.set(tabId, request);
   try {
-    const answer = await appControl.requestRecording(body);
+    const answer = await appControl.requestRecording(build);
     if (!answer.ok) throw popupRefusal(answer.error, answer.code);
-    if (recordRequests.get(tabId) === request) Object.assign(request, { state: "accepted", until: Date.now() + RECORD_REQUEST_SETTLE_MS });
+    if (recordRequests.get(tabId) === request) {
+      if (request.settled || request.epoch !== appControl.recordEpoch) recordRequests.delete(tabId);
+      else Object.assign(request, { state: "accepted", until: Date.now() + RECORD_REQUEST_SETTLE_MS });
+    }
   } catch (error) {
     if (recordRequests.get(tabId) === request) recordRequests.delete(tabId);
     throw error;
@@ -1035,6 +1067,11 @@ async function reloadMeetingTab(tabId) {
   tabUpdated(tabId, {status:"loading"});
 }
 async function controlCommand(command, intent = {}) {
+  if (command.action !== "start" && command.action !== "stop") return controlCommandBody(command, intent);
+  try { return await controlCommandBody(command, intent); }
+  finally { settleRecordRequest(command); }
+}
+async function controlCommandBody(command, intent = {}) {
   await recovery;
   if (intent.cancelled) throw new Error("Recording could not start.");
   if (command.action === "reloadTab") {

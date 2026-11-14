@@ -1032,16 +1032,28 @@ recordings from the browser; nothing is sent.
 After the initial snapshot of an opted-in connection, a popup click sends one of:
 
 ```json
-{"type":"recordRequest","requestId":"popup-1731500000000-1","action":"start","tabId":2,"callGeneration":"call-A"}
+{"type":"recordRequest","requestId":"popup-1731500000000-1","action":"start","tabId":2,"callGeneration":"call-A","title":"Weekly sync","url":"https://meet.example/call","documentGeneration":"doc-A","pageState":"present"}
 {"type":"recordRequest","requestId":"popup-1731500000000-2","action":"stop","tabId":2,"captureId":"capture-1"}
 ```
 
 `requestId` is an extension-chosen string (≤128 characters), never reused on the
 connection and distinct from the app's own command IDs. `callGeneration` is the
 background's current call for that tab, so the app can bind its Start
-(`callGeneration` on the command) and refuse a stale ask. Stop names the running
-`captureId`, or omits it while the Start is still pending. The app answers each
-ask exactly once:
+(`callGeneration` on the command) and refuse a stale ask. Start also carries the
+browser-owned `title` (≤200) and `url` (`^https?://`, ≤2048), with the same
+meaning and bounds as a `meetings` row, plus `documentGeneration` and `pageState`
+when known. A verified-auto-admission-v1 inventory omits repaired or unverified
+tabs (D80.3), so the app resolves and titles a manual Start from these fields
+when the tab has no `meetings` row; they never re-admit the tab to automatic
+admission. Stop names the running `captureId`, or omits it while the Start is
+still pending; it carries no meeting metadata.
+
+Before sending an ask, the extension waits until every inventory/status change
+already notified on this connection has been published, then re-checks that the
+connection and opt-in are unchanged (otherwise `appUnavailable`/`unsupported`,
+nothing sent) and builds the ask from current state. An ask therefore never
+precedes the `meetings`/`status` snapshot that introduces its `tabId`,
+`callGeneration` or `captureId`. The app answers each ask exactly once:
 
 ```json
 {"type":"recordRequestResult","requestId":"popup-1731500000000-1","ok":true}
@@ -1072,7 +1084,11 @@ user decides again. Only the extension popup may send the private
 The trusted scoped popup status (0.2.19) adds `appRecording`
 (`available`/`disconnected`/`unsupported`) and, while an ask is outstanding or
 accepted but not yet reflected by this tab's capture state (bounded by 10 s after
-acceptance), `recordRequest:{action,state:"pending"|"accepted"}`. The popup shows
+acceptance), `recordRequest:{action,state:"pending"|"accepted"}`. An accepted ask
+belongs to the connection and opt-in it was made on: a disconnect, reconnect or
+revocation clears it. It also ends when the app's own `start`/`stop` command for
+that tab finishes, successfully or not; a command that finishes before its ask's
+`ok:true` arrives leaves no accepted wait behind. The popup shows
 **Starting…**/**Stopping…** for these, **Saving…** while `stopping`, and otherwise
 Start disabled with a reason: app not connected, app without the capability,
 reload required, page check pending, or no meeting audio yet. Stop is disabled
