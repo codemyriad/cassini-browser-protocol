@@ -50,6 +50,10 @@ tones, media-clone deduplication, and one meeting continuing after the other's
 Stop. It requires CASSINI_ISOLATED_AUDIO=1 and validates the private Pulse socket
 and sink before mutating them; it refuses to run against a desktop sound server.
 Use the GNOME private recording harness locally. Hosted CI starts its own server.
+Every test that un-mutes Chromium (`ignoreDefaultArgs: ['--mute-audio']`: `independent-sessions`, `worker-recovery`,
+`bfcache`) plays real tones and calls `requirePrivateAudio()` (`tests/support/private-audio.mjs`): it refuses to run
+without `CASSINI_ISOLATED_AUDIO=1` and a private Pulse socket, so it can never reach the desktop sound server.
+`tests/test_audio_isolation.py` fails if any test un-mutes the browser without that guard. Never run these locally outside the harness.
 The default audio writer/control bridge are test fixtures, not product hosts.
 CASSINI_NATIVE_HOST and CASSINI_CONTROL_NATIVE_HOST select actual app adapters;
 CASSINI_TEST_EXTENSION and PLAYWRIGHT_MODULE select a pinned installed extension
