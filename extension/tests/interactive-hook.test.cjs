@@ -582,3 +582,24 @@ test('a live sender without native mic lineage sets only a content-free diagnost
  assert.equal(f.read().unverifiedMicSenderObserved,true,'over-bound observation can still explain an unrooted sender');
  assert.equal(f.read().cohortQualified,false);
 });
+
+test('address fences preserve live qualified captures as overflow teardown witnesses',async()=>{
+ const f=fixture(),p=await f.peer();
+ assert.equal(await qualifies(f,p),true);
+ p.receiver.extraRows=128;await f.tick([p]);assert.equal(f.read().cohortQualified,false);
+ p.pc.close();
+ f.navigate('https://neutral.invalid/new-room');
+ const retry=await f.peer();
+ assert.equal(await qualifies(f,retry),false,'the original captured track is still live');
+ retry.pc.close();p.track.readyState='ended';
+ const next=await f.peer();
+ assert.equal(await qualifies(f,next),true);
+});
+
+test('losing an excess peer witness withholds admission for the rest of the document',async()=>{
+ const f=fixture(),peers=Array.from({length:129},()=>new f.context.RTCPeerConnection());
+ for(const pc of peers)pc.close();
+ f.navigate('https://neutral.invalid/new-room');
+ const next=await f.peer();
+ assert.equal(await qualifies(f,next),false);
+});
