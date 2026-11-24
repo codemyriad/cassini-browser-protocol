@@ -102,9 +102,11 @@ function popupStatus(result, tab, reloadedTabId) {
         'Incoming meeting audio is available, but your browser microphone is not sending (muted or listen-only), so Cassini will not start by itself. You can record manually.' :
         'Cassini has not verified an interactive media session. Listen-only calls are not recorded automatically; start recording manually once meeting audio is available.'};
     if (evidence.callEvidence.state === 'active') return {...view, tone:'good', title:'Interactive media session detected',
-      description:evidence.captureCapability.kind === 'separated' ?
+      description:(evidence.captureCapability.kind === 'separated' ?
         'Live audio is flowing both ways. This can include microphone tests or early media.' :
-        'An interactive media session is detected. Audio capture availability is checked separately in Cassini.'};
+        'An interactive media session is detected. Audio capture availability is checked separately in Cassini.') +
+        // The call verdict comes from the page alone; only recording needs the app.
+        (view.connected ? '' : ' The Cassini app is not connected, so nothing is recorded until you open it.')};
   }
   if (current?.state === 'ready') return {...view, tone: 'good', title: 'Meeting sources detected',
     description: view.connected ? 'The extension can reach audio sources on this page. You can start recording this tab.' :

@@ -1120,7 +1120,7 @@ active light or dark mode, generated from the vendored `ux/brand/tokens.json`
 the catalog's companion privacy line. There are no protocol or capture-policy changes.
 
 
-### Popup status, roster and actions (extension 0.2.34)
+### Popup status, roster and actions (extension 0.2.35)
 
 These are popup-to-worker messages and popup rendering rules. They are not app protocol: nothing here changes
 the control port, capture policy or admission. Only the extension's own popup page may send them.
@@ -1131,6 +1131,9 @@ the control port, capture policy or admission. Only the extension's own popup pa
   popup sends it when it opens and when the person presses **Check again**; a failed open check is not re-armed by
   later notices. A plain `status` runs no script in the meeting tab and shows the last open-check evidence only for
   the same browser document; for a replaced document the evidence is `unknown`.
+- **Call verdict is independent of the app.** The popup's call verdict (active, unverified) comes from the page's
+  collector alone and is shown whether or not the Cassini app link is connected, open or running. With the link
+  down, an active verdict adds that nothing is recorded until the app is opened; it never turns into "no call".
 - **No timer.** The popup does not poll. The worker pushes `{type:"changed"}` over a `cassini-popup` port (accepted
   only from the extension's own popup page) when its state changes, including app connection, disconnection and the
   record opt-in; the popup answers with a plain `status`.

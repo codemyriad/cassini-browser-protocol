@@ -254,3 +254,17 @@ test('names are shown only while the worker has meeting sources for this tab',as
   assert.deepEqual(popupState(withNames([]),tab).participants,[]);
   assert.deepEqual(popupState(withNames([{tabId:7,state:'ready'}]),tab).participants,['Hypatia']);
 });
+
+test('the call verdict does not depend on the Cassini app being connected, open or running',async()=>{
+  const {popupState}=await state;
+  const make=(connection,call)=>{const result=status([{tabId:7,state:'ready'}],{appRecording:'disconnected',tabEvidence:{tabId:7,callEvidence:call,
+    captureCapability:{kind:'separated',assurance:'observed'}}});result.browserHealth.nativeControl=connection;return popupState(result,tab)};
+  for (const connection of ['connected','disconnected']) {
+    const active=make(connection,{state:'active',reason:'activeCall'});
+    assert.equal(active.title,'Interactive media session detected',connection);assert.equal(active.tone,'good');
+    assert.equal(make(connection,{state:'unknown',reason:'unverified'}).title,'Interactive session is unverified',connection);
+  }
+  const off=make('disconnected',{state:'active',reason:'activeCall'});
+  assert.match(off.description,/Cassini app/i);   // says what the missing app means, not that the call is gone
+  assert.doesNotMatch(off.title,/not connected|unavailable/i);
+});
