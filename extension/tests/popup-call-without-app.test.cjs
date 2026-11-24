@@ -62,3 +62,45 @@ test('a remembered active verdict is not shown as current once the tab has no me
     assert.notEqual(later.tabEvidence.callEvidence.state,'active','the call ended: a refresh must not repeat "live audio is flowing"');
   }finally{release();app.close()}
 });
+
+const ended=()=>({...raw(),cohortQualified:false,receivedPeers:0,capturedSendingPeers:0,samePeerCount:0,ended:true,sourceCount:0,heard:false});
+async function scriptedTab(value){
+  const app=await setup(0);const page={value,reads:0};
+  app.pages[0].onDisconnect.emit();app.ports[0].onDisconnect.emit();
+  app.chrome.scripting={async executeScript(request){
+    if(request.world==='MAIN'){page.reads++;return [{frameId:0,documentId:'chrome-A',result:page.value()}]}
+    return [{frameId:0,documentId:'chrome-A'}];
+  }};
+  const port=app.frame(2,1,0,'chrome-A');const hello=port.sent.find(m=>m.type==='relayHello');
+  port.onMessage.emit({...hello,type:'relayReady',observerDocumentStart:true});
+  return {app,port,page};
+}
+
+test('a remembered "no call" is not repeated once the same document joins a new call',async()=>{
+  const {app,port,page}=await scriptedTab(ended);
+  try{
+    assert.equal((await rpc(app,{tabId:2,fresh:true})).tabEvidence.callEvidence.state,'inactive');
+    assert.equal((await rpc(app,{tabId:2})).tabEvidence.callEvidence.state,'inactive','a refresh keeps the checked verdict for the same call');
+    // A rejoin or reconnect in the same document: the page's collector starts a new hook generation with live sources.
+    page.value=()=>({...raw(),hookGeneration:'1'});const before=page.reads;
+    port.onMessage.emit({type:'discovery',sourceCount:3,heard:true,documentGeneration:'hook-A',callGeneration:'1'});
+    await until(()=>page.reads>before);await until(()=>true);
+    const later=await rpc(app,{tabId:2});
+    assert.equal(later.tabEvidence.transport.detail.sources,3);
+    assert.notEqual(later.tabEvidence.callEvidence.state,'inactive','the popup must not say "No call in progress" during the new call');
+  }finally{app.close()}
+});
+
+test('only the popup preview reads before binding; a publishing round reads an unlearned page once',async()=>{
+  const {app,page}=await scriptedTab(()=>null);   // the page's collector is unavailable: generations stay unknown
+  try{
+    const unlearn=()=>{for(const frame of app.api.frames)if(frame.tabId===2){frame.documentGeneration=undefined;frame.callGeneration=undefined}};
+    unlearn();app.api.genericProducer.identity=()=>'profile-1';
+    let before=page.reads;
+    await app.api.genericProducer.snapshot({verified:true,epoch:1,configurationEpoch:1});
+    assert.equal(page.reads-before,1,'a publishing round must not read the page twice');
+    unlearn();before=page.reads;
+    await app.api.genericProducer.snapshot({verified:true,preview:true,tabId:2});
+    assert.equal(page.reads-before,2,'the popup check still learns the generations before binding');
+  }finally{app.close()}
+});

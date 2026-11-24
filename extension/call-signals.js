@@ -201,8 +201,10 @@ export class GenericCallEvidenceProducer {
       } catch { return null; }
       // A document whose page generations are not learned yet (a worker that has just woken, or a handshake read
       // still in flight) would bind to nothing and then fail its own binding check once this read learns them.
-      // Learn them first, so the binding below names what the read will confirm.
-      if (!signalToken(frame.documentGeneration) || !signalToken(frame.callGeneration)) {
+      // Learn them first, so the binding below names what the read will confirm. Only the popup's local preview
+      // does this: the publishing path polls (and drops this row for one round, as before), so it never reads the
+      // page twice per round for a document whose generations stay unknown (an unavailable collector, a fenced call).
+      if (preview && (!signalToken(frame.documentGeneration) || !signalToken(frame.callGeneration))) {
         await this.read(frame);
         if (!currentPublication() || !this.currentSource(frame)) return null;
       }

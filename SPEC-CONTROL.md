@@ -1138,9 +1138,11 @@ the control port, capture policy or admission. Only the extension's own popup pa
   that nothing is being recorded (the app may be open, and a whole-tab recording uses a separate host). While a
   Start or Stop is in flight, or a recording of this tab runs, the headline shows that progress instead; the verdict
   stays in Connection details. An `inactive` (ended) verdict says "No call in progress". A remembered `active`
-  verdict from the last open check is shown as `unknown` once the tab reports no meeting sources.
-  The check also reads the page once before binding when the page's generations are not yet known (a freshly
-  woken worker), so a handshake read still in flight cannot discard it.
+  verdict from the last open check is shown as `unknown` once the tab reports no meeting sources, and a remembered
+  `active` or `inactive` verdict is shown as `unknown` once the tab is in a different call (a rejoin or reconnect in
+  the same document). The open check also reads the page once before binding when the page's generations are not
+  yet known (a freshly woken worker), so a handshake read still in flight cannot discard it. Only the open check
+  does this; the published call evidence reads the page once per round, as before.
 - **No timer.** The popup does not poll. The worker pushes `{type:"changed"}` over a `cassini-popup` port (accepted
   only from the extension's own popup page) when its state changes, including app connection, disconnection and the
   record opt-in; the popup answers with a plain `status`.
