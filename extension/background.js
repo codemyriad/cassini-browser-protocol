@@ -186,14 +186,16 @@ const ON_DEMAND_CONNECT_MS = 2000;
 async function connectTabOnDemand(tabId) {
   const live = () => { const frame = mainFrame(tabId); return !!frame && !frame.obsolete && frame.relayAlive === true; };
   // A capture or Start in progress already owns this tab's relay; never delay its status.
-  if (live() || sessions.has(tabId) || pendingStartFor(tabId)) return;
+  if (sessions.has(tabId) || pendingStartFor(tabId)) return "busy";
+  if (live()) return "live";
   let deadline;
   try {
     await Promise.race([repairTab(tabId), new Promise(resolve => { deadline = relayTimers.later(resolve, ON_DEMAND_CONNECT_MS); })]);
     // The relay's hello/ready handshake follows injection; wait for it, boundedly.
     for (let waited = 0; waited < ON_DEMAND_CONNECT_MS && !relayReady(mainFrame(tabId) || {}) && !(mainFrame(tabId)?.checking === false); waited += 100)
       await new Promise(resolve => relayTimers.later(resolve, 100));
-  } catch {} finally { relayTimers.cancel(deadline); }
+  } catch { return "failed"; } finally { relayTimers.cancel(deadline); }
+  return relayReady(mainFrame(tabId) || {}) ? "connected" : live() ? "relay-only" : "none";
 }
 let repairingTabs;
 function repairOpenTabs() {
@@ -1012,7 +1014,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       // Only the check made when the popup opens (`fresh`) touches the page; the popup's
       // refreshes read worker state alone and never run scripts in the meeting tab.
       const fresh = scoped && message.fresh === true;
-      if (fresh) await connectTabOnDemand(message.tabId);
+      const repair = fresh ? await connectTabOnDemand(message.tabId) : null;
       const result={...(scoped ? popupTabStatus(message.tabId) : status()),browserHealth:browserHealth()};
       if (scoped) {
         const snapshot=await genericProducer.snapshot({verified:true,preview:true,tabId:message.tabId});
@@ -1020,7 +1022,12 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         const frame=mainFrame(message.tabId),readiness=tabReadiness(message.tabId);
         const page=readiness?.state||(frame?(relayReady(frame)?'ready':frame.checking?'checking':'reloadRequired'):'unavailable');
         const kind=['separated','mixed'].includes(row?.remoteAudio)?row.remoteAudio:frame&&relayReady(frame)&&!readiness?'unavailable':'unknown';
-        result.tabEvidence={tabId:message.tabId,transport:{page,documentStart:frame&&relayReady(frame)?frame.observerDocumentStart===true:null},callEvidence:row?.callEvidence||{state:'unknown',reason:'unverified'},
+        result.tabEvidence={tabId:message.tabId,transport:{page,documentStart:frame&&relayReady(frame)?frame.observerDocumentStart===true:null,
+          // Content-free counts and flags for "Connection details"; no URLs, titles or page text.
+          detail:{frames:[...frames].filter(f=>f.tabId===message.tabId).length,main:!!frame,obsolete:[...frames].some(f=>f.tabId===message.tabId&&f.obsolete===true),
+            relayAlive:frame?frame.relayAlive===true:null,hookReady:frame?frame.hookReady===true:null,checking:frame?frame.checking===true:null,
+            sources:frame&&Number.isSafeInteger(frame.sourceCount)?Math.min(frame.sourceCount,64):null,nativeVerified:frame?frame.nativeSourceVerified===true:null,
+            pageState:pageState(message.tabId),repair}},callEvidence:row?.callEvidence||{state:'unknown',reason:'unverified'},
           captureCapability:{kind,assurance:kind==='unknown'?'unknown':'observed'}};
         if (fresh) result.participants=await readParticipants(message.tabId);
       }
