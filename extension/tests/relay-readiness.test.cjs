@@ -325,3 +325,32 @@ test('duplicate page hook-ready messages are forwarded only once per handshake',
  for(let i=0;i<200;i++)f.page({type:'hookReady',protocol:1,revision:3,instanceId:'current'});
  assert.equal(port.sent.filter(message=>message.type==='relayReady').length,1);
 });
+
+test('the popup reload offered for a repaired relay is accepted; the app command keeps the strict rule',async()=>{
+  const app=await setup(1),reloads=[];
+  try {
+    app.chrome.tabs.reload=async tabId=>reloads.push(tabId);
+    const popup={id:'extension',url:app.chrome.runtime.getURL('popup.html')};
+    const reload=(tabId,sender=popup)=>new Promise(resolve=>app.chrome.runtime.onMessage.emit({target:'background',type:'reloadMeetingTab',tabId},sender,resolve));
+    // setup(1) gives tab 2 a healthy relay that is not document-start trusted: a repaired relay.
+    assert.equal(app.api.controlStatus().browserHealth.tabs.find(t=>t.tabId===2).state,'ready');
+    const strict=await app.command({type:'command',requestId:'strict',action:'reloadTab',tabId:2,independent:true});
+    assert.equal(strict.ok,false);assert.equal(strict.code,'gone');assert.deepEqual(reloads,[]);
+    const accepted=await reload(2);assert.equal(accepted.error,undefined);assert.deepEqual(reloads,[2]);
+    assert.equal((await reload(99)).code,'gone','an unknown tab is still refused');
+  } finally {app.close()}
+});
+test('a document-start trusted relay is never reloaded from the popup, nor a repaired one while recording',async()=>{
+  const app=await setup(1),reloads=[];
+  try {
+    app.chrome.tabs.reload=async tabId=>reloads.push(tabId);
+    const popup={id:'extension',url:app.chrome.runtime.getURL('popup.html')};
+    const reload=tabId=>new Promise(resolve=>app.chrome.runtime.onMessage.emit({target:'background',type:'reloadMeetingTab',tabId},popup,resolve));
+    const frame=[...app.api.frames].find(f=>f.tabId===2);frame.observerDocumentStart=true;
+    assert.equal((await reload(2)).code,'gone');
+    frame.observerDocumentStart=false;
+    assert.equal((await app.command({type:'command',requestId:'go',action:'start',mode:'tracks',tabId:2,independent:true})).ok,true);
+    assert.equal((await reload(2)).code,'busy');assert.deepEqual(reloads,[]);
+    while(app.api.status().recording)await app.api.stop();
+  } finally {app.close()}
+});

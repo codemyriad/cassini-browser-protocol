@@ -1025,7 +1025,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     if (message.type === "recordRequest") return {...await requestRecording(message.action, message.tabId), browserHealth:browserHealth()};
     if (message.type === "start") await start(message.mode);
     else if (message.type === "stop") await stop();
-    else if (message.type === "reloadMeetingTab") await reloadMeetingTab(message.tabId);
+    else if (message.type === "reloadMeetingTab") await reloadMeetingTab(message.tabId, {repaired:true});
     else throw new Error("Unknown control message.");
     return {...status(), browserHealth:browserHealth()};
   })().then(respond, error => respond({ error: error.message, code: error.code ?? error.resultCode, scope: error.scope, ...(error.retired === true ? {retired:true} : {}) }));
@@ -1107,10 +1107,14 @@ async function meetings({verified=false}={}) {
   });
   return { type: "meetings", meetings: found.filter(Boolean) };
 }
-async function reloadMeetingTab(tabId) {
+// The popup also offers a reload for a healthy tab whose only relay was injected after the page
+// loaded (observerDocumentStart false): it can never verify a call until the document restarts.
+// The desktop app's reloadTab command keeps the stricter broken-meeting rule.
+const repairedRelay = tabId => { const frame = mainFrame(tabId); return !!frame && relayReady(frame) && frame.observerDocumentStart === false; };
+async function reloadMeetingTab(tabId, {repaired = false} = {}) {
   if (sessions.has(tabId) || pendingStarts.has(tabId)) throw refused("Stop and save the recording before reloading its tab.", "busy");
   const health = browserHealth().tabs.find(tab => tab.tabId === tabId);
-  if (health?.state !== "reloadRequired") throw refused("That meeting tab does not need a reload.", "gone");
+  if (health?.state !== "reloadRequired" && !(repaired && repairedRelay(tabId))) throw refused("That meeting tab does not need a reload.", "gone");
   await chrome.tabs.reload(tabId);
   tabUpdated(tabId, {status:"loading"});
 }
