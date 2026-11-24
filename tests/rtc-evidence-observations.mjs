@@ -345,6 +345,9 @@ try{
         });
         assert.equal((await packet(worker,{type:'pong',after:afterPing})).packet.seq,702);
         observation.worker.withdrawalWithHealthyPongMs=withdrawalMs;
+        // The published control signal withdraws after 2 s without renewal; wait for the frozen collector
+        // itself to pass its 2.5 s local-preview freshness bound before asserting the popup's initial check.
+        await caller.waitForFunction(()=>__cassiniCallEvidenceV1.read().ageMs>2500);
       }
       if(fixture==='synthetic-sender'){
         // Exercise the real MAIN capture scan: DOM sender dedup must never
@@ -408,7 +411,7 @@ try{
           (expected==='active'?'Interactive media session detected':unverified);
       };
       const wanted=[fixture==='duplex'?'unknown':expected,unverifiedTitle];
-      assert.ok(await popup.evaluate(shown,wanted),`popup shows ${wanted.join(' / ')} for ${fixture}`);
+      assert.ok(await popup.evaluate(shown,wanted),`popup shows ${wanted.join(' / ')} for ${fixture}, got ${await popup.locator('#status').textContent()} / ${await popup.locator('#diagnostics').textContent()}`);
       await popup.evaluate(()=>Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>{globalThis.fixtureCopy=text}}}));
       await popup.locator('summary').click();await popup.locator('#copy').click();await popup.waitForFunction(()=>typeof fixtureCopy==='string');
       assert.equal(await popup.evaluate(()=>fixtureCopy),await popup.locator('#diagnostics').textContent());
