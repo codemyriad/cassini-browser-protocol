@@ -55,7 +55,7 @@ function fixture(){
   class Sender {
     #track;constructor(track){this.#track=track;this.packets=0;this.age=0;this.pending=null}
     get track(){return this.#track}set track(value){this.#track=value}
-    async getStats(){if(this.pending)await this.pending;return new Report([['out',{id:'out',type:'outbound-rtp',kind:'audio',packetsSent:this.packets,timestamp:origin+now-this.age}]])}
+    async getStats(){this.statsReads=(this.statsReads||0)+1;if(this.pending)await this.pending;return new Report([['out',{id:'out',type:'outbound-rtp',kind:'audio',packetsSent:this.packets,timestamp:origin+now-this.age}]])}
   }
   class Receiver {
     #track=new Track();constructor(){this.packets=0;this.age=0}
@@ -506,4 +506,59 @@ test('stats overflow stays latched until closed transports and the qualified cap
  await f.tick([next]);assert.equal(f.read().cohortQualified,false);
  await f.tick([next]);assert.equal(f.read().cohortQualified,true);
  assert.equal(f.read().hookGeneration,'1');
+});
+
+function addSlot(f,peer,direction){
+ const sender=new f.context.RTCRtpSender(peer.track),receiver=new f.context.RTCRtpReceiver();
+ const slot=new f.context.RTCRtpTransceiver(sender,receiver);
+ slot.currentDirection=direction;peer.pc.slots.push(slot);
+ return {sender,receiver};
+}
+
+test('large connected peers expose late active audio slots but withhold admission',async()=>{
+ for(const direction of ['inactive','recvonly','sendonly']){
+  const f=fixture(),p=await f.peer(),duplex=p.pc.slots.pop();
+  for(let i=0;i<64;i++)addSlot(f,p,direction);
+  p.pc.slots.push(duplex);
+  await f.tick([p]);await f.tick([p]);
+  const value=f.read();
+  assert.equal(value.sourceCount,direction==='recvonly'?64:1,direction);
+  assert.equal(value.receivedPeers,1,direction);assert.equal(value.capturedSendingPeers,1,direction);
+  assert.equal(value.cohortQualified,false,direction);assert.equal(value.samePeerCount,0);
+  p.pc.slots.splice(0,64);assert.equal(await qualifies(f,p),false,'shrinking in place cannot admit the call');
+ }
+});
+
+test('a duplex slot crossing the 128-task budget cannot qualify from a partial sample',async()=>{
+ const f=fixture(),first=await f.peer();
+ for(let i=0;i<62;i++)addSlot(f,first,'sendrecv');
+ addSlot(f,first,'recvonly');
+ const last=await f.peer();
+ await f.tick([first,last]);await f.tick([first,last]);
+ assert.equal(f.read().cohortQualified,false,'127 tasks plus another duplex slot exceed the budget');
+ assert.equal(last.sender.statsReads||0,0,'the 129th getStats call must not start');
+});
+
+test('128 native stats tasks followed by an inactive slot stay within budget',async()=>{
+ const f=fixture(),first=await f.peer();
+ for(let i=0;i<63;i++)addSlot(f,first,'sendrecv');
+ const idle=await f.peer();idle.pc.slots[0].currentDirection='inactive';
+ assert.equal(await qualifies(f,first),true);
+});
+
+test('adding a 129th native stats endpoint withdraws existing proof before the next tick',async()=>{
+ const f=fixture(),first=await f.peer();
+ assert.equal(await qualifies(f,first),true);
+ for(let i=0;i<63;i++)addSlot(f,first,'sendrecv');
+ const last=await f.peer();last.pc.slots[0].currentDirection='recvonly';
+ assert.equal(f.read().cohortQualified,false);
+});
+
+test('a 65th historical qualified peer cannot be admitted without retaining its terminal endpoints',async()=>{
+ const f=fixture();
+ for(let i=0;i<65;i++){
+  const p=await f.peer();
+  assert.equal(await qualifies(f,p),i<64,'sequential peer '+(i+1));
+  p.pc.close(); // Live qualified captures keep this the same episode.
+ }
 });

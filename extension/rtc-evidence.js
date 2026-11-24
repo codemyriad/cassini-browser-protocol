@@ -380,7 +380,25 @@
   const fresh=report=>{const timestamp=data(report,'timestamp'),age=origin+now()-timestamp;return typeof timestamp==='number'&&numberFinite(timestamp)&&age>=-5&&age<=2500};
   const nativeSlots=pc=>{
     const result=list();
-    try{const slots=call(transceivers,pc);if(slots.length>64)overflow=true;for(let i=0;i<slots.length&&i<64;i++)add(result,slots[i])}catch{}
+    try{
+      const slots=call(transceivers,pc);
+      if(slots.length<=64)return slots;
+      overflow=true;
+      // Preserve source observation on large calls. Prefer live duplex slots,
+      // then fill each direction's remaining endpoint budget independently.
+      const inbound=list(),outbound=list();
+      for(let i=0;i<slots.length&&i<512&&result.length<64;i++){
+        const slot=slots[i],receiver=get(transceiverReceiver,slot),sender=get(transceiverSender,slot);
+        const incoming=receive(pc,receiver,get(receiverTrack,receiver),slot);
+        const outgoing=sending(pc,sender,get(senderTrack,sender),slot);
+        if(incoming&&outgoing)add(result,slot);
+        else if(incoming&&inbound.length<64)add(inbound,slot);
+        else if(outgoing&&outbound.length<64)add(outbound,slot);
+      }
+      const remaining=64-result.length;
+      for(let i=0;i<remaining&&i<inbound.length;i++)add(result,inbound[i]);
+      for(let i=0;i<remaining&&i<outbound.length;i++)add(result,outbound[i]);
+    }catch{}
     return result;
   };
   const sending=(pc,sender,track,slot)=>connected(pc)&&get(senderTrack,sender)===track&&live(track)&&
@@ -396,11 +414,16 @@
         const entry=peers[i];if(entry.generation!==stamp||!connected(entry.pc))continue;
         const slots=nativeSlots(entry.pc);
         for(let j=0;j<slots.length;j++){
-          if(tasks.length>=128){overflow=true;break}
           const slot=slots[j],receiver=get(transceiverReceiver,slot),track=get(receiverTrack,receiver);
-          if(receive(entry.pc,receiver,track,slot))add(tasks,{entry,slot,object:receiver,track,receive:true,promise:bounded(()=>call(receiverStats,receiver))});
+          if(receive(entry.pc,receiver,track,slot)){
+            if(tasks.length>=128){overflow=true;break}
+            add(tasks,{entry,slot,object:receiver,track,receive:true,promise:bounded(()=>call(receiverStats,receiver))});
+          }
           const sender=get(transceiverSender,slot),sent=get(senderTrack,sender);
-          if(sending(entry.pc,sender,sent,slot))add(tasks,{entry,slot,object:sender,track:sent,receive:false,promise:bounded(()=>call(senderStats,sender))});
+          if(sending(entry.pc,sender,sent,slot)){
+            if(tasks.length>=128){overflow=true;break}
+            add(tasks,{entry,slot,object:sender,track:sent,receive:false,promise:bounded(()=>call(senderStats,sender))});
+          }
         }
       }
       // All native calls have started; awaiting our own bounded promises uses
@@ -432,7 +455,7 @@
     finally{sampling=false}
   }
   function read(){
-    refresh();const instant=now();let sourceCount=0,receivedPeers=0,capturedSendingPeers=0,samePeerCount=0,
+    refresh();const instant=now();let sourceCount=0,senderCount=0,receivedPeers=0,capturedSendingPeers=0,samePeerCount=0,
       received=0,sent=0,receiveAt=0,sendAt=0,heardNow=false;
     const members=list();
     for(let i=0;i<peers.length;i++){
@@ -447,6 +470,7 @@
           if(proof?.track===track&&instant-proof.at<=2500){receiving=true;if(proof.progress>received){received=proof.progress;receiveAt=proof.at}}
         }
         if(sending(entry.pc,sender,out,slot)){
+          senderCount++;
           const proof=find(entry.senders,sender);
           if(proof?.track===out&&instant-proof.at<=2500){sendingNow=true;if(proof.progress>sent){sent=proof.progress;sendAt=proof.at}add(captured,out)}
         }
@@ -458,7 +482,9 @@
     }
     // D80.5: all these native peers belong to this one document/frame collector.
     // Never combine observations from another collector, document or relay port.
-    const cohortQualified=!overflow&&receivedPeers>0&&capturedSendingPeers>0;
+    // The topology may have grown since the last stats interval.
+    if(sourceCount+senderCount>128)overflow=true;
+    let cohortQualified=!overflow&&receivedPeers>0&&capturedSendingPeers>0;
     if(cohortQualified)for(let i=0;i<members.length;i++){
       const member=members[i];let endpoint=null;
       for(let j=0;j<qualified.length;j++)if(qualified[j].pc===member.pc)endpoint=qualified[j];
@@ -466,6 +492,7 @@
       // until a native terminal/new-session boundary, as in the same-PC path.
       if(endpoint){if(member.tracks.length)endpoint.tracks=member.tracks}
       else if(qualified.length<64)add(qualified,member);
+      else{overflow=true;cohortQualified=false;break}
     }
     const older=receiveAt<sendAt?receiveAt:sendAt,rawAge=instant-older,age=cohortQualified?(rawAge<0&&rawAge>=-5?0:rawAge):0;
     return assign(create(null),{version:2,documentGeneration,hookGeneration:''+generation,revision,ageMs:age,cohortQualified,
