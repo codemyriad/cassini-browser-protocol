@@ -169,7 +169,19 @@ export class GenericCallEvidenceProducer {
     const browserInstance=this.identity();
     if (!signalToken(browserInstance)) return null;
     if (!verified) return {browserInstance,tabs:[]};
-    const frames=[...this.frames()].filter(frame=>frame.frameId===0&&this.current(frame)&&(tabId===null||frame.tabId===tabId)).slice(0,100);
+    const frames=[...this.frames()].filter(frame=>frame.frameId===0&&this.current(frame)&&(tabId===null||frame.tabId===tabId));
+    if(frames.length>100){
+      // Scheduling hints only. Every selected row still needs a fresh, bound read.
+      const priority=frame=>{
+        if(frame.observerDocumentStart!==true||frame.nativeSourceVerified!==true)return 0;
+        const active=this.activePublications.get(frame.tabId);
+        if(active?.frame===frame&&active.browser===frame.browserDocumentId&&active.hook===frame.documentGeneration&&
+            active.generation===frame.callGeneration&&active.epoch===frame.obsoleteEpoch)return 2;
+        return frame.sourceCount>0?1:0;
+      };
+      frames.sort((a,b)=>priority(b)-priority(a));
+      frames.length=100;
+    }
     const tabs=await this.bounded(()=>this.tabs.query({}));
     if (!currentPublication()) return null;
     if (!Array.isArray(tabs)) return {browserInstance,tabs:[]};
