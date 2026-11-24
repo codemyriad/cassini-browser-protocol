@@ -347,7 +347,7 @@ try{
         observation.worker.withdrawalWithHealthyPongMs=withdrawalMs;
         // The published control signal withdraws after 2 s without renewal; wait for the frozen collector
         // itself to pass its 2.5 s local-preview freshness bound before asserting the popup's initial check.
-        await caller.waitForFunction(()=>__cassiniCallEvidenceV1.read().ageMs>2500);
+        await caller.waitForFunction(()=>__cassiniCallEvidenceV1.read().cohortQualified===false);
       }
       if(fixture==='synthetic-sender'){
         // Exercise the real MAIN capture scan: DOM sender dedup must never
