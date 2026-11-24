@@ -53,7 +53,9 @@ Use the GNOME private recording harness locally. Hosted CI starts its own server
 Every test that un-mutes Chromium (`ignoreDefaultArgs: ['--mute-audio']`: `independent-sessions`, `worker-recovery`,
 `bfcache`) plays real tones and calls `requirePrivateAudio()` (`tests/support/private-audio.mjs`): it refuses to run
 without `CASSINI_ISOLATED_AUDIO=1` and a private Pulse socket, so it can never reach the desktop sound server.
-`tests/test_audio_isolation.py` fails if any test un-mutes the browser without that guard. Never run these locally outside the harness.
+`tests/test_audio_isolation.py` fails if any test un-mutes the browser without that guard. Locally, run them under `tests/private-audio.sh` (a private PulseAudio server with a null sink on its own socket;
+`tests/private-audio.sh --fetch` once unpacks the `pulseaudio` .deb into `~/.cache`, installing nothing and leaving a PipeWire desktop untouched),
+for example `npm run test:audible`; `npm test` already wraps `worker-recovery` and `bfcache` that way.
 The default audio writer/control bridge are test fixtures, not product hosts.
 CASSINI_NATIVE_HOST and CASSINI_CONTROL_NATIVE_HOST select actual app adapters;
 CASSINI_TEST_EXTENSION and PLAYWRIGHT_MODULE select a pinned installed extension
