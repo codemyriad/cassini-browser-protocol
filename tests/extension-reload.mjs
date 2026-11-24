@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { connectReceiveSlots } from '../scenarios/product-topologies.mjs';
+import { waitForHeading } from './support/popup-check.mjs';
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE || 'playwright');
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const extensionSource = path.resolve(process.env.CASSINI_TEST_EXTENSION || path.join(root, 'extension'));
@@ -173,7 +174,7 @@ try {
     chrome.tabs.query = async options => options.active ? [await chrome.tabs.get(tabId)] : query(options);
   }, tabId);
   // The repaired relay entered after the page loaded, so it can never verify the call: the popup says to reload.
-  await popup.getByRole('heading',{name:'Reload this tab for automatic detection',exact:true}).waitFor();
+  await waitForHeading(popup,'Reload this tab for automatic detection');
   await meeting.waitForFunction(() => discovery.some(row => row.sourceCount > 0 && row.heard === true));
   const beforeStart = await popup.evaluate(tabId => chrome.runtime.sendMessage({target:'background',type:'status',tabId}), tabId);
   assert.ok(await meeting.evaluate(() => discovery.some(row => row.sourceCount > 0 && row.heard === true)),

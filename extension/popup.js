@@ -4,6 +4,8 @@ import { copyDiagnostics } from './tab-evidence.mjs';
 const element = id => document.getElementById(id);
 let pending = false, actionPending = false, reloadTabId = null, reloadedTabId = null, diagnosticText = '';
 let requestGeneration = 0;
+// The meeting page is inspected once, when the popup opens; later refreshes reuse that roster.
+let openCheckDone = false, roster = {tabId: null, names: []};
 // A refresh asked for while a poll or action is outstanding runs once it ends.
 let refreshQueued = false, lastResult = null, lastTab = null;
 // The button's target is the tab and action displayed when it was rendered.
@@ -72,8 +74,11 @@ async function refresh() {
   try {
     const {result, tab} = await boundedReply((async () => {
       const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
+      const fresh = !openCheckDone && Number.isSafeInteger(tab?.id) && tab.id >= 0;
       const result = await chrome.runtime.sendMessage({target: 'background', type: 'status',
-        ...(Number.isSafeInteger(tab?.id) && tab.id >= 0 ? {tabId: tab.id} : {})});
+        ...(Number.isSafeInteger(tab?.id) && tab.id >= 0 ? {tabId: tab.id} : {}), ...(fresh ? {fresh: true} : {})});
+      if (fresh && result && !result.error) { openCheckDone = true; roster = {tabId: tab.id, names: result.participants || []}; }
+      if (result && !result.error) result.participants = roster.tabId === tab?.id ? roster.names : [];
       return {result, tab};
     })());
     if (generation !== requestGeneration) return;
@@ -160,5 +165,16 @@ element('copy').addEventListener('click', async () => {
   } catch { element('copy-result').textContent = 'Could not copy. Select the connection details above to copy them manually.'; }
   element('copy-result').hidden = false;
 });
+// No timer: the worker pushes a change notice, and the person can ask for a fresh check.
+// The meeting page itself is inspected only by the open check and by "Check again".
+let notices = null, reconnects = 0;
+function listen() {
+  try {
+    notices = chrome.runtime.connect({name: 'cassini-popup'});
+    notices.onMessage.addListener(message => { if (message?.type === 'changed') void refresh(); });
+    notices.onDisconnect.addListener(() => { notices = null; if (reconnects++ < 3) { listen(); void refresh(); } });
+  } catch { notices = null; }
+}
+element('recheck').addEventListener('click', () => { openCheckDone = false; element('tab-status').setAttribute('aria-busy', 'true'); void refresh(); });
+listen();
 void refresh();
-setInterval(() => void refresh(), 1000);

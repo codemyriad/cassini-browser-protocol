@@ -333,7 +333,10 @@ The existing popup transport omits tabId from its legacy status requests (rather
 than sending a null reload target); explicit null remains an invalid scoped ID.
 The unpacked Chromium reload regression exercises this real popup/RPC pairing.
 
-Popup review regressions retain rejoin guidance across observed status polls,
+The popup runs no timer. It refreshes when the worker pushes a change notice over its `cassini-popup`
+port, and it inspects the meeting page (repair-on-open and the participant roster) only for the open check or
+a click on Check again (`fresh` status requests); `tests/support/popup-check.mjs` lets real-browser tests act as
+that person. Popup review regressions retain rejoin guidance across observed status refreshes,
 clear it on fresh evidence, and clear stale reload refusals on recovery or a
 worker error. The real DOM test checks the dark installation warning's computed
 foreground/background contrast, with a 4.5:1 floor. Poll-count and UI state waits

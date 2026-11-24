@@ -178,17 +178,11 @@ async function readParticipants(tabId) {
     return Array.isArray(results) && results.length === 1 && results[0]?.documentId === frame.browserDocumentId ? cleanParticipants(results[0].result) : [];
   } catch { return []; } finally { relayTimers.cancel(deadline); }
 }
-const ON_DEMAND_CONNECT_MS = 2000, ON_DEMAND_RETRY_MS = 5000;
-const onDemandAttempts = new Map();
+const ON_DEMAND_CONNECT_MS = 2000;
 async function connectTabOnDemand(tabId) {
   const live = () => { const frame = mainFrame(tabId); return !!frame && !frame.obsolete && frame.relayAlive === true; };
   // A capture or Start in progress already owns this tab's relay; never delay its status.
   if (live() || sessions.has(tabId) || pendingStartFor(tabId)) return;
-  // The popup polls every second; a page that cannot be reached is retried slowly.
-  const now = Date.now();
-  if (now - (onDemandAttempts.get(tabId) ?? -Infinity) < ON_DEMAND_RETRY_MS) return;
-  onDemandAttempts.set(tabId, now);
-  if (onDemandAttempts.size > 256) onDemandAttempts.delete(onDemandAttempts.keys().next().value);
   let deadline;
   try {
     await Promise.race([repairTab(tabId), new Promise(resolve => { deadline = relayTimers.later(resolve, ON_DEMAND_CONNECT_MS); })]);
@@ -991,7 +985,10 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       // (it opened before the extension, or its port was lost) is reconnected now,
       // not left to the next install/startup repair. A relay whose hook is missing
       // needs a reload, which repair cannot provide, so it is not retried here.
-      if (scoped) await connectTabOnDemand(message.tabId);
+      // Only the check made when the popup opens (`fresh`) touches the page; the popup's
+      // refreshes read worker state alone and never run scripts in the meeting tab.
+      const fresh = scoped && message.fresh === true;
+      if (fresh) await connectTabOnDemand(message.tabId);
       const result={...(scoped ? popupTabStatus(message.tabId) : status()),browserHealth:browserHealth()};
       if (scoped) {
         const snapshot=await genericProducer.snapshot({verified:true,preview:true,tabId:message.tabId});
@@ -1001,7 +998,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         const kind=['separated','mixed'].includes(row?.remoteAudio)?row.remoteAudio:frame&&relayReady(frame)&&frame.sourceCount===0?'unavailable':'unknown';
         result.tabEvidence={tabId:message.tabId,transport:{page,documentStart:frame&&relayReady(frame)?frame.observerDocumentStart===true:null},callEvidence:row?.callEvidence||{state:'unknown',reason:'unverified'},
           captureCapability:{kind,assurance:kind==='unknown'?'unknown':'observed'}};
-        result.participants=await readParticipants(message.tabId);
+        if (fresh) result.participants=await readParticipants(message.tabId);
       }
       return result;
     }
@@ -1154,7 +1151,15 @@ function cancelPendingStart(command) {
   const session = sessions.get(command.tabId);
   if (session && !session.ready) session.stopping = true;
 }
-function notifyControl() { appControl.publish(); }
+// Open popups hear about worker state changes instead of polling for them.
+const popupPorts = new Set();
+chrome.runtime.onConnect.addListener(port => {
+  if (port.name !== "cassini-popup" || port.sender?.id !== chrome.runtime.id || port.sender.url !== chrome.runtime.getURL("popup.html")) return;
+  popupPorts.add(port);
+  port.onDisconnect.addListener(() => popupPorts.delete(port));
+});
+function notifyPopups() { for (const port of [...popupPorts]) { try { port.postMessage({type: "changed"}); } catch { popupPorts.delete(port); } } }
+function notifyControl() { appControl.publish(); notifyPopups(); }
 const signalProducer = new CallSignalProducer({identity:()=>browserInstance,tabs:chrome.tabs,frames:()=>frames,
   current:frame=>frames.has(frame) && mainFrame(frame.tabId) === frame && relayReady(frame) && pageState(frame.tabId) === 'present',adapters:signalAdapters});
 const genericProducer = new GenericCallEvidenceProducer({identity:()=>browserInstance,tabs:chrome.tabs,frames:()=>frames,

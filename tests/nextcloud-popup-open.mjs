@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import {cp,mkdtemp,readFile,writeFile,rm} from 'node:fs/promises';
 import os from 'node:os';import path from 'node:path';import {fileURLToPath} from 'node:url';
 import {joinNextcloudTalk} from '../scenarios/nextcloud-talk.mjs';
+import {waitForHeading} from './support/popup-check.mjs';
 const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const callURL=process.env.NEXTCLOUD_TEST_CALL_URL,otherURL=process.env.NEXTCLOUD_TEST_OTHER_CALL_URL;
@@ -44,11 +45,11 @@ async function scenario(name,{room,stripRelay,expected,roster}){
   const meetingUrl=meeting.url();
   await popup.evaluate(url=>{const query=chrome.tabs.query.bind(chrome.tabs);
    chrome.tabs.query=async options=>options.active?(await query({})).filter(tab=>tab.url===url).slice(0,1):query(options);},meetingUrl);
-  const deadline=Date.now()+25000;let title='';
-  while(Date.now()<deadline){title=await popup.locator('#status').textContent().catch(()=>'')||'';if(title===expected)break;await new Promise(resolve=>setTimeout(resolve,500));}
+  await waitForHeading(popup,expected,25000);
+  const title=await popup.locator('#status').textContent();
   if(roster){ // Display-only roster from Talk's own cards, shown before any recording starts.
    const list=async()=>(await popup.locator('#participant-list li').allTextContents()).sort();
-   const until=Date.now()+15000;while(Date.now()<until&&JSON.stringify(await list())!==JSON.stringify(roster))await new Promise(resolve=>setTimeout(resolve,500));
+   const until=Date.now()+15000;while(Date.now()<until&&JSON.stringify(await list())!==JSON.stringify(roster)){await popup.locator('#recheck').click();await new Promise(resolve=>setTimeout(resolve,500));}
    assert.deepEqual(await list(),roster,'the popup names the remote participants before recording');
    assert.equal(await popup.locator('#participants').isVisible(),true);
    assert.doesNotMatch(await popup.locator('#diagnostics').textContent(),/Hypatia|Haytham/,'names stay out of the copied diagnostics');

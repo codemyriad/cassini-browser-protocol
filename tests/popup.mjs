@@ -25,7 +25,9 @@ try {
       status:{browserHealth:{extensionVersion:'0.2.20',nativeControl:'connected',worker:'ready',filesOk:true,tabs:[]}}};
     window.chrome = {
       tabs:{async query(){return [fixture.tab]}},
-      runtime:{async sendMessage(message){
+      runtime:{connect(){const listeners=[];const port={onMessage:{addListener:fn=>listeners.push(fn)},onDisconnect:{addListener(){}}};
+        (fixture.ports??=[]).push(port);fixture.push=()=>listeners.forEach(fn=>fn({type:'changed'}));return port},
+       async sendMessage(message){
         fixture.requests.push(message);
         if(message.type==='recordRequest'){
           if(fixture.recordReply)return fixture.recordReply(message);
@@ -51,6 +53,10 @@ try {
   });
   const page = await context.newPage();
   const errors=[];page.on('pageerror',error=>errors.push(error.message));
+  // The real worker pushes a change notice whenever its state changes; the fixture stands in for it
+  // after every scripted state change. The popup itself runs no timer.
+  const evaluate=page.evaluate.bind(page);
+  page.evaluate=async(...args)=>{const result=await evaluate(...args);await evaluate(()=>fixture.push?.());return result;};
   await page.goto(`http://127.0.0.1:${server.address().port}/popup.html`);
   await page.locator('main[aria-busy="false"]').waitFor();
   assert.equal(await page.locator('#status').textContent(),'No meeting sources detected');
@@ -67,7 +73,14 @@ try {
   assert.equal(await page.locator('#participants').isVisible(),false);
   await page.evaluate(()=>{fixture.status.tabEvidence={tabId:7,callEvidence:{state:'unknown',reason:'unverified'},captureCapability:{kind:'separated',assurance:'observed'}};
     fixture.status.participants=['Hypatia','<img src=x onerror=window.pwned=1>'];});
+  assert.equal(await page.locator('#participants').isVisible(),false,'a change notice never re-inspects the meeting page');
+  const statusRequests=()=>evaluate(()=>fixture.requests.filter(r=>r.type==='status'));
+  const before=await statusRequests();
+  assert.equal(before[0].fresh,true,'the open check is the first status request');
+  assert.ok(before.slice(1).every(request=>request.fresh===undefined),'refreshes after open never ask for a page check');
+  await page.locator('#recheck').click();
   await page.locator('#participants').waitFor({state:'visible'});
+  assert.equal((await statusRequests()).filter(request=>request.fresh).length,2,'Check again asks for exactly one more page check');
   assert.deepEqual(await page.locator('#participant-list li').allTextContents(),['Hypatia','<img src=x onerror=window.pwned=1>']);
   assert.equal(await page.evaluate(()=>window.pwned),undefined,'names render as text, never markup');
   assert.doesNotMatch(await page.locator('#diagnostics').textContent(),/Hypatia/);
@@ -102,7 +115,10 @@ try {
   await page.locator('#reload').click();
   await page.getByRole('heading',{name:'Tab reloaded · rejoin your call',exact:true}).waitFor();
   const polls=await page.evaluate(()=>fixture.requests.filter(r=>r.type==='status').length);
-  await page.waitForFunction(count=>fixture.requests.filter(r=>r.type==='status').length>=count+2,polls);
+  for(let notice=1;notice<=2;notice++){ // two worker change notices, each answered by one refresh
+    await evaluate(()=>fixture.push());
+    await page.waitForFunction(([count,wanted])=>fixture.requests.filter(r=>r.type==='status').length>=count+wanted,[polls,notice]);
+  }
   assert.equal(await page.locator('#status').textContent(),'Tab reloaded · rejoin your call','guidance survives refreshes without new evidence');
   await page.evaluate(()=>fixture.status.browserHealth.tabs=[{tabId:7,state:'ready'}]);
   await page.getByRole('heading',{name:'Meeting sources detected',exact:true}).waitFor();
