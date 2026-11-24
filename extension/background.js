@@ -116,7 +116,10 @@ function verifyCurrentFrame(frame) {
       frame.obsolete = false;
       try { frame.port.postMessage({type:"discover"}); }
       catch { frame.obsolete = true; return false; }
-      if (frame.frameId === 0) setPageState(frame.tabId, "present");
+      if (frame.frameId === 0) {
+        setPageState(frame.tabId, "present");
+        for (const sub of frames) if (sub.tabId === frame.tabId && sub.frameId !== 0 && relayReady(sub) && sub.observerDocumentStart === true && (!sub.nativeSourceVerified || sub.sourceCount === 0)) requestNativeDiscovery(sub);
+      }
       attachFrame(frame);
       notifyControl();
       return true;
@@ -887,6 +890,8 @@ chrome.runtime.onConnect.addListener(port => {
           await genericProducer.read(frame);
           if(!frames.has(frame)||frame.obsolete)return;
         }
+        if (message.type === "relayReady" && frame.frameId === 0)
+          for (const sub of frames) if (sub.tabId === frame.tabId && sub.frameId !== 0 && relayReady(sub) && sub.observerDocumentStart === true && (!sub.nativeSourceVerified || sub.sourceCount === 0)) requestNativeDiscovery(sub);
         attachFrame(frame);notifyControl();
       }
       return;
@@ -1012,9 +1017,9 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       if (scoped) {
         const snapshot=await genericProducer.snapshot({verified:true,preview:true,tabId:message.tabId});
         const row=snapshot?.tabs.find(row=>row.tabId===message.tabId);
-        const frame=mainFrame(message.tabId);
-        const page=tabReadiness(message.tabId)?.state||(frame?(relayReady(frame)?'ready':frame.checking?'checking':'reloadRequired'):'unavailable');
-        const kind=['separated','mixed'].includes(row?.remoteAudio)?row.remoteAudio:frame&&relayReady(frame)&&frame.sourceCount===0?'unavailable':'unknown';
+        const frame=mainFrame(message.tabId),readiness=tabReadiness(message.tabId);
+        const page=readiness?.state||(frame?(relayReady(frame)?'ready':frame.checking?'checking':'reloadRequired'):'unavailable');
+        const kind=['separated','mixed'].includes(row?.remoteAudio)?row.remoteAudio:frame&&relayReady(frame)&&!readiness?'unavailable':'unknown';
         result.tabEvidence={tabId:message.tabId,transport:{page,documentStart:frame&&relayReady(frame)?frame.observerDocumentStart===true:null},callEvidence:row?.callEvidence||{state:'unknown',reason:'unverified'},
           captureCapability:{kind,assurance:kind==='unknown'?'unknown':'observed'}};
         if (fresh) result.participants=await readParticipants(message.tabId);
