@@ -378,7 +378,7 @@
   };
   // Allow up to 5 ms negative skew from performance.now() timer coarsening vs RTCStatsReport.timestamp.
   const fresh=report=>{const timestamp=data(report,'timestamp'),age=origin+now()-timestamp;return typeof timestamp==='number'&&numberFinite(timestamp)&&age>=-5&&age<=2500};
-  const nativeSlots=pc=>{
+  const nativeSlots=(pc,diagnostic)=>{
     const result=list();
     try{
       const slots=call(transceivers,pc);
@@ -390,7 +390,7 @@
       for(let i=0;i<slots.length&&i<512&&result.length<64;i++){
         const slot=slots[i],receiver=get(transceiverReceiver,slot),sender=get(transceiverSender,slot);
         const incoming=receive(pc,receiver,get(receiverTrack,receiver),slot);
-        const outgoing=sending(pc,sender,get(senderTrack,sender),slot);
+        const outgoing=sending(pc,sender,get(senderTrack,sender),slot,diagnostic);
         if(incoming&&outgoing)add(result,slot);
         else if(incoming&&inbound.length<64)add(inbound,slot);
         else if(outgoing&&outbound.length<64)add(outbound,slot);
@@ -401,9 +401,13 @@
     }catch{}
     return result;
   };
-  const sending=(pc,sender,track,slot)=>connected(pc)&&get(senderTrack,sender)===track&&live(track)&&
-    get(trackEnabled,track)===true&&get(trackMuted,track)===false&&root(track)!==null&&
-    get(transceiverSender,slot)===sender&&(get(direction,slot)==='sendrecv'||get(direction,slot)==='sendonly');
+  const sending=(pc,sender,track,slot,diagnostic)=>{
+    if(!connected(pc)||get(senderTrack,sender)!==track||!live(track)||get(trackEnabled,track)!==true||get(trackMuted,track)!==false)return false;
+    const captured=root(track)!==null;
+    if(get(transceiverSender,slot)!==sender||(get(direction,slot)!=='sendrecv'&&get(direction,slot)!=='sendonly'))return false;
+    if(!captured&&diagnostic)diagnostic.unverifiedMicSenderObserved=true;
+    return captured;
+  };
   const receive=(pc,receiver,track,slot)=>connected(pc)&&get(receiverTrack,receiver)===track&&live(track)&&
     get(transceiverReceiver,slot)===receiver&&(get(direction,slot)==='sendrecv'||get(direction,slot)==='recvonly');
   async function sample(){
@@ -457,11 +461,11 @@
   function read(){
     refresh();const instant=now();let sourceCount=0,senderCount=0,receivedPeers=0,capturedSendingPeers=0,samePeerCount=0,
       received=0,sent=0,receiveAt=0,sendAt=0,heardNow=false;
-    const members=list();
+    const members=list(),diagnostic={unverifiedMicSenderObserved:false};
     for(let i=0;i<peers.length;i++){
       const entry=peers[i];if(entry.generation!==generation||!connected(entry.pc))continue;
       let receiving=false,sendingNow=false;
-      const slots=nativeSlots(entry.pc),captured=list();
+      const slots=nativeSlots(entry.pc,diagnostic),captured=list();
       for(let j=0;j<slots.length;j++){
         const slot=slots[j],receiver=get(transceiverReceiver,slot),track=get(receiverTrack,receiver),sender=get(transceiverSender,slot),out=get(senderTrack,sender);
         if(receive(entry.pc,receiver,track,slot)){
@@ -469,7 +473,7 @@
           if(proof?.track===track&&proof.votes>=2)entry.heard=true;
           if(proof?.track===track&&instant-proof.at<=2500){receiving=true;if(proof.progress>received){received=proof.progress;receiveAt=proof.at}}
         }
-        if(sending(entry.pc,sender,out,slot)){
+        if(sending(entry.pc,sender,out,slot,diagnostic)){
           senderCount++;
           const proof=find(entry.senders,sender);
           if(proof?.track===out&&instant-proof.at<=2500){sendingNow=true;if(proof.progress>sent){sent=proof.progress;sendAt=proof.at}add(captured,out)}
@@ -497,7 +501,7 @@
     const older=receiveAt<sendAt?receiveAt:sendAt,rawAge=instant-older,age=cohortQualified?(rawAge<0&&rawAge>=-5?0:rawAge):0;
     return assign(create(null),{version:2,documentGeneration,hookGeneration:''+generation,revision,ageMs:age,cohortQualified,
       sourceCount:sourceCount>64?64:sourceCount,heard:sourceCount>0&&heardNow,
-      receivedPeers,capturedSendingPeers,samePeerCount:overflow?0:samePeerCount,
+      receivedPeers,capturedSendingPeers,samePeerCount:overflow?0:samePeerCount,unverifiedMicSenderObserved:diagnostic.unverifiedMicSenderObserved,
       receivedVersion:received,sentVersion:sent,ended:terminal()});
   }
   call(nativeInterval,timerTarget,[sample,1000]);

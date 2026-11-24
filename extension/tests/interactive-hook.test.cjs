@@ -562,3 +562,23 @@ test('a 65th historical qualified peer cannot be admitted without retaining its 
   p.pc.close(); // Live qualified captures keep this the same episode.
  }
 });
+
+test('a live sender without native mic lineage sets only a content-free diagnostic',async()=>{
+ const f=fixture(),p=await f.peer('synthetic');
+ assert.equal(await qualifies(f,p),false);
+ assert.equal(f.read().unverifiedMicSenderObserved,true);
+ assert.equal(f.read().capturedSendingPeers,0);
+ p.pc.slots[0].currentDirection='recvonly';
+ assert.equal(f.read().unverifiedMicSenderObserved,false);
+ p.pc.slots[0].currentDirection='sendrecv';p.track.enabled=false;
+ assert.equal(f.read().unverifiedMicSenderObserved,false);
+ p.sender.track=(await f.context.navigator.mediaDevices.getUserMedia()).getAudioTracks()[0];
+ assert.equal(f.read().unverifiedMicSenderObserved,false);
+ assert.equal(f.read().cohortQualified,false,'known lineage alone cannot qualify');
+ assert.equal(await qualifies(f,p),true);
+ const generated=await f.peer('synthetic');
+ generated.pc.slots[0].currentDirection='sendonly';
+ for(let i=0;i<64;i++)addSlot(f,generated,'inactive');
+ assert.equal(f.read().unverifiedMicSenderObserved,true,'over-bound observation can still explain an unrooted sender');
+ assert.equal(f.read().cohortQualified,false);
+});

@@ -176,3 +176,11 @@ test('a previously active frame gets rechecked among 100 verified source-bearing
  assert.equal(snapshot.tabs.find(row=>row.tabId===f.frame.tabId)?.callEvidence.state,'unknown');
  assert.ok(snapshot.tabs.every(row=>row.callEvidence.state==='unknown'));
 });
+
+test('the collector mic diagnostic stays out of call-signal rows and cannot grant admission',async()=>{
+ const f=fixture();
+ Object.assign(f.sample,{unverifiedMicSenderObserved:true,cohortQualified:false,capturedSendingPeers:0,samePeerCount:0,sentVersion:0});
+ const snapshot=f.producer.finalize(await f.producer.snapshot({verified:true}));
+ assert.equal(snapshot.tabs[0].callEvidence.state,'unknown');
+ assert.equal(JSON.stringify(snapshot).includes('unverifiedMicSenderObserved'),false);
+});
