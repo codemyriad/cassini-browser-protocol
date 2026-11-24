@@ -172,7 +172,8 @@ try {
     const query = chrome.tabs.query.bind(chrome.tabs);
     chrome.tabs.query = async options => options.active ? [await chrome.tabs.get(tabId)] : query(options);
   }, tabId);
-  await popup.getByRole('heading',{name:'Interactive session is unverified',exact:true}).waitFor();
+  // The repaired relay entered after the page loaded, so it can never verify the call: the popup says to reload.
+  await popup.getByRole('heading',{name:'Reload this tab for automatic detection',exact:true}).waitFor();
   await meeting.waitForFunction(() => discovery.some(row => row.sourceCount > 0 && row.heard === true));
   const beforeStart = await popup.evaluate(tabId => chrome.runtime.sendMessage({target:'background',type:'status',tabId}), tabId);
   assert.ok(await meeting.evaluate(() => discovery.some(row => row.sourceCount > 0 && row.heard === true)),

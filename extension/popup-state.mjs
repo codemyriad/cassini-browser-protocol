@@ -73,6 +73,9 @@ function popupStatus(result, tab, reloadedTabId) {
     description: 'The extension is checking whether it can reach this meeting’s audio sources. Recording is not confirmed.'};
   if (result?.tabEvidence?.tabId === tab.id) {
     const evidence = tabEvidenceView(result,tab.id);
+    if (evidence.callEvidence.state === 'unknown' && evidence.transport.documentStart === false) return {...view, tone: 'warning', reloadTabId: tab.id,
+      title: 'Reload this tab for automatic detection',
+      description: 'This tab was already open when the extension started, so Cassini cannot verify its call. Reload the tab, then rejoin your call. You can still start a recording manually.'};
     if (evidence.callEvidence.state === 'unknown') return {...view, title:'Interactive session is unverified',
       description:'Cassini has not verified an interactive media session. Listen-only calls are not recorded automatically; start recording manually once meeting audio is available.'};
     if (evidence.callEvidence.state === 'active') return {...view, tone:'good', title:'Interactive media session detected',

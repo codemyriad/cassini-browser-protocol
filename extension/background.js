@@ -164,6 +164,25 @@ async function repairTab(tabId, frameId = null) {
   tabRepairs.set(key, repair);
   return repair;
 }
+const ON_DEMAND_CONNECT_MS = 2000, ON_DEMAND_RETRY_MS = 5000;
+const onDemandAttempts = new Map();
+async function connectTabOnDemand(tabId) {
+  const live = () => { const frame = mainFrame(tabId); return !!frame && !frame.obsolete && frame.relayAlive === true; };
+  // A capture or Start in progress already owns this tab's relay; never delay its status.
+  if (live() || sessions.has(tabId) || pendingStartFor(tabId)) return;
+  // The popup polls every second; a page that cannot be reached is retried slowly.
+  const now = Date.now();
+  if (now - (onDemandAttempts.get(tabId) ?? -Infinity) < ON_DEMAND_RETRY_MS) return;
+  onDemandAttempts.set(tabId, now);
+  if (onDemandAttempts.size > 256) onDemandAttempts.delete(onDemandAttempts.keys().next().value);
+  let deadline;
+  try {
+    await Promise.race([repairTab(tabId), new Promise(resolve => { deadline = relayTimers.later(resolve, ON_DEMAND_CONNECT_MS); })]);
+    // The relay's hello/ready handshake follows injection; wait for it, boundedly.
+    for (let waited = 0; waited < ON_DEMAND_CONNECT_MS && !relayReady(mainFrame(tabId) || {}) && !(mainFrame(tabId)?.checking === false); waited += 100)
+      await new Promise(resolve => relayTimers.later(resolve, 100));
+  } catch {} finally { relayTimers.cancel(deadline); }
+}
 let repairingTabs;
 function repairOpenTabs() {
   if (repairingTabs) return repairingTabs;
@@ -954,6 +973,11 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       const scoped = Object.prototype.hasOwnProperty.call(message, "tabId");
       if (scoped && (!Number.isSafeInteger(message.tabId) || message.tabId < 0))
         return {error:"Choose a valid browser tab.", code:"invalid"};
+      // Opening the popup asks for a fresh look at this tab. A tab with no live relay
+      // (it opened before the extension, or its port was lost) is reconnected now,
+      // not left to the next install/startup repair. A relay whose hook is missing
+      // needs a reload, which repair cannot provide, so it is not retried here.
+      if (scoped) await connectTabOnDemand(message.tabId);
       const result={...(scoped ? popupTabStatus(message.tabId) : status()),browserHealth:browserHealth()};
       if (scoped) {
         const snapshot=await genericProducer.snapshot({verified:true,preview:true,tabId:message.tabId});
@@ -961,7 +985,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         const frame=mainFrame(message.tabId);
         const page=tabReadiness(message.tabId)?.state||(frame?(relayReady(frame)?'ready':frame.checking?'checking':'reloadRequired'):'unavailable');
         const kind=['separated','mixed'].includes(row?.remoteAudio)?row.remoteAudio:frame&&relayReady(frame)&&frame.sourceCount===0?'unavailable':'unknown';
-        result.tabEvidence={tabId:message.tabId,transport:{page},callEvidence:row?.callEvidence||{state:'unknown',reason:'unverified'},
+        result.tabEvidence={tabId:message.tabId,transport:{page,documentStart:frame&&relayReady(frame)?frame.observerDocumentStart===true:null},callEvidence:row?.callEvidence||{state:'unknown',reason:'unverified'},
           captureCapability:{kind,assurance:kind==='unknown'?'unknown':'observed'}};
       }
       return result;

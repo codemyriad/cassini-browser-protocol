@@ -44,3 +44,10 @@ test('healthy transport without source media stays distinct from unavailable cap
   assert.equal(view.transport.page,'ready');assert.equal(view.callEvidence.state,'unknown');
   assert.equal(view.captureCapability.kind,'unavailable');assert.equal(view.execution.recording,false);
 });
+
+test('documentStart is a strict boolean-or-null fact in the content-free projection',async()=>{
+  const {tabEvidenceView}=await import('../tab-evidence.mjs');
+  const view=value=>tabEvidenceView({browserHealth:{tabs:[]},tabEvidence:{tabId:3,transport:{page:'ready',documentStart:value}}},3).transport.documentStart;
+  assert.equal(view(false),false);assert.equal(view(true),true);
+  for(const hostile of ['false',0,1,{},undefined,null])assert.equal(view(hostile),null);
+});

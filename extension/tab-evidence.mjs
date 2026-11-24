@@ -17,7 +17,9 @@ export function tabEvidenceView(result, tabId) {
     captureCapability:{kind:member(source?.captureCapability?.kind, ['separated','mixed','unavailable','unknown'], 'unknown'),
       assurance:member(source?.captureCapability?.assurance, ['observed','unknown'], 'unknown')},
     transport:{page:member(source?.transport?.page ?? current?.state, ['ready','checking','reloadRequired','unavailable'], 'unavailable'),
-      app:member(health?.nativeControl, ['connected','disconnected'], 'unknown')},
+      app:member(health?.nativeControl, ['connected','disconnected'], 'unknown'),
+      // false: the relay was injected into an already-open page, so it cannot verify calls until reload.
+      documentStart:typeof source?.transport?.documentStart === 'boolean' ? source.transport.documentStart : null},
     execution:{recording:scoped && result.recording === true, starting:scoped && result.starting === true,
       stopping:scoped && result.stopping === true, tracks:scoped ? count(result.tracks) : 0,
       failedSources:scoped && Array.isArray(result.failedSources) ? Math.min(4096,result.failedSources.length) : 0}

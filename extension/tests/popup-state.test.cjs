@@ -173,3 +173,17 @@ test('without a health row, this tab’s reload/checking evidence reaches the re
   const other = evidence('reloadRequired'); other.tabEvidence.tabId = 8;
   assert.match(popupState(other, tab).record.hint, /Join the call first/);
 });
+
+test('a tab whose relay was injected after the page loaded asks for a reload instead of claiming only "unverified"',async()=>{
+  const {popupState}=await state;
+  const evidence=documentStart=>status([{tabId:7,state:'ready'}],{tabEvidence:{tabId:7,transport:{page:'ready',documentStart},
+    callEvidence:{state:'unknown',reason:'unverified'},captureCapability:{kind:'separated',assurance:'observed'}}});
+  const repaired=popupState(evidence(false),tab);
+  assert.equal(repaired.title,'Reload this tab for automatic detection');
+  assert.equal(repaired.reloadTabId,7,'the popup offers the Reload button for this tab');
+  assert.equal(repaired.tone,'warning');assert.match(repaired.description,/manually/);
+  for(const trusted of [true,null])assert.equal(popupState(evidence(trusted),tab).title,'Interactive session is unverified',
+    'a document-start relay with no two-way audio is genuinely listen-only');
+  const active=evidence(false);active.tabEvidence.callEvidence={state:'active',reason:'activeCall'};
+  assert.equal(popupState(active,tab).title,'Interactive media session detected','verified active evidence is never replaced by the hint');
+});
