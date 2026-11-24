@@ -61,7 +61,7 @@ const relayReady = frame => frame.relayAlive === true && frame.hookReady === tru
 // Handshake and browser-document verification may finish in either order.
 // Neither can attach before the other, or attach twice to the same session.
 function attachFrame(frame) {
-  if (!frames.has(frame) || !relayReady(frame) || (frame.frameId !== 0 && !(frame.sourceCount > 0))) return;
+  if (!frames.has(frame) || !relayReady(frame)) return;
   const current = sessions.get(frame.tabId);
   if (current?.ready && current.mode === "tracks" && !current.stopping && !current.frames.has(frame)) {
     current.frames.add(frame);
@@ -183,6 +183,8 @@ async function readParticipants(tabId) {
   } catch { return []; } finally { relayTimers.cancel(deadline); }
 }
 const ON_DEMAND_CONNECT_MS = 2000;
+// The last open/Check-again reading of each tab's call evidence, bound to the document it came from.
+const evidenceChecks = new Map();
 async function connectTabOnDemand(tabId) {
   const live = () => { const frame = mainFrame(tabId); return !!frame && !frame.obsolete && frame.relayAlive === true; };
   // A capture or Start in progress already owns this tab's relay; never delay its status.
@@ -190,12 +192,14 @@ async function connectTabOnDemand(tabId) {
   if (live()) return "live";
   let deadline;
   try {
-    await Promise.race([repairTab(tabId), new Promise(resolve => { deadline = relayTimers.later(resolve, ON_DEMAND_CONNECT_MS); })]);
-    // The relay's hello/ready handshake follows injection; wait for it, boundedly.
-    for (let waited = 0; waited < ON_DEMAND_CONNECT_MS && !relayReady(mainFrame(tabId) || {}) && !(mainFrame(tabId)?.checking === false); waited += 100)
+    // Frame 0 only: a healthy child answering a tab-wide probe must not hide a missing main relay.
+    await Promise.race([repairTab(tabId, 0), new Promise(resolve => { deadline = relayTimers.later(resolve, ON_DEMAND_CONNECT_MS); })]);
+    // The hello/ready handshake follows injection. Wait only while a main frame is actually checking.
+    for (let waited = 0; waited < ON_DEMAND_CONNECT_MS && mainFrame(tabId)?.checking === true && !relayReady(mainFrame(tabId)); waited += 100)
       await new Promise(resolve => relayTimers.later(resolve, 100));
   } catch { return "failed"; } finally { relayTimers.cancel(deadline); }
-  return relayReady(mainFrame(tabId) || {}) ? "connected" : live() ? "relay-only" : "none";
+  const frame = mainFrame(tabId);
+  return frame && relayReady(frame) ? "connected" : live() ? "relay-only" : "none";
 }
 let repairingTabs;
 function repairOpenTabs() {
@@ -843,7 +847,6 @@ function adoptDiscovery(frame, message) {
       (frame.sourceCount !== message.sourceCount || frame.heard !== (message.heard === true))) {
     frame.sourceCount = message.sourceCount;
     frame.heard = message.heard === true;
-    if (frame.sourceCount > 0) attachFrame(frame);
     notifyControl();
   }
 
@@ -923,7 +926,8 @@ chrome.runtime.onConnect.addListener(port => {
       frame.finished?.(); notifyControl(); return;
     }
     if (session.sourceOutcomes && Array.isArray(message.discoveredSources)) {
-      try { await recordSources(session, message.discoveredSources); if (message.discoveredSources.length) session.sourceFrames.add(frame); }
+      if (message.discoveredSources.length) session.sourceFrames.add(frame);
+      try { await recordSources(session, message.discoveredSources); }
       catch (error) { failure(error.message, session, error.lossCause || "nativeHostError"); return; }
     }
     if (message.type === "stopped") {
@@ -939,9 +943,10 @@ chrome.runtime.onConnect.addListener(port => {
     }
     if (message.type === "error") { failure("The meeting page could not record separate tracks. Record the whole tab instead. Audio recorded so far was saved.", session, "frameError"); return; }
     if (message.type !== "packet" || !["track", "audio", ...(session.sourceOutcomes ? ["trackEnd", "sources"] : [])].includes(message.packet?.type)) return;
+    // Counted before the native ACK is awaited: a disconnect while the first track is in flight is a loss, not an empty child.
+    if (message.packet.type === "track" || message.packet.type === "sources") session.sourceFrames.add(frame);
     try {
       await forwardPacket(session, message.packet, spanDocument(frame));
-      if (message.packet.type === "track" || message.packet.type === "sources") session.sourceFrames.add(frame);
     } catch (error) {
       if (error.retired) { /* Already retired locally; keep other spans recording. */ }
       else if (error.code === "state" && ["source", "command"].includes(error.scope)) {
@@ -1017,9 +1022,21 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
       const repair = fresh ? await connectTabOnDemand(message.tabId) : null;
       const result={...(scoped ? popupTabStatus(message.tabId) : status()),browserHealth:browserHealth()};
       if (scoped) {
-        const snapshot=await genericProducer.snapshot({verified:true,preview:true,tabId:message.tabId});
-        const row=snapshot?.tabs.find(row=>row.tabId===message.tabId);
         const frame=mainFrame(message.tabId),readiness=tabReadiness(message.tabId);
+        // Call evidence reads the meeting page, so only the check made on open (or Check again) takes it. Change
+        // pushes reuse that reading for the same document and show it as unknown for a replaced one.
+        let row;
+        if (fresh) {
+          const snapshot=await genericProducer.snapshot({verified:true,preview:true,tabId:message.tabId});
+          row=snapshot?.tabs.find(row=>row.tabId===message.tabId);
+          const current=mainFrame(message.tabId);
+          if (row && current) { evidenceChecks.delete(message.tabId); evidenceChecks.set(message.tabId,{document:current.browserDocumentId,row:{callEvidence:row.callEvidence,remoteAudio:row.remoteAudio}}); }
+          else evidenceChecks.delete(message.tabId);
+          if (evidenceChecks.size>100) evidenceChecks.delete(evidenceChecks.keys().next().value);
+        } else {
+          const checked=evidenceChecks.get(message.tabId);
+          row=checked&&frame&&checked.document===frame.browserDocumentId?checked.row:undefined;
+        }
         const page=readiness?.state||(frame?(relayReady(frame)?'ready':frame.checking?'checking':'reloadRequired'):'unavailable');
         const kind=['separated','mixed'].includes(row?.remoteAudio)?row.remoteAudio:frame&&relayReady(frame)&&!readiness?'unavailable':'unknown';
         result.tabEvidence={tabId:message.tabId,transport:{page,documentStart:frame&&relayReady(frame)?frame.observerDocumentStart===true:null,
@@ -1029,6 +1046,8 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
             sources:frame&&Number.isSafeInteger(frame.sourceCount)?Math.min(frame.sourceCount,64):null,nativeVerified:frame?frame.nativeSourceVerified===true:null,
             pageState:pageState(message.tabId),repair}},callEvidence:row?.callEvidence||{state:'unknown',reason:'unverified'},
           captureCapability:{kind,assurance:kind==='unknown'?'unknown':'observed'}};
+        // Whole-tab Start is refused while any other recording runs; say so instead of offering it.
+        result.otherCapture=!(sessions.has(message.tabId)||pendingStartFor(message.tabId))&&(sessions.size>0||pendingStarts.size>0);
         if (fresh) result.participants=await readParticipants(message.tabId);
       }
       return result;
@@ -1054,8 +1073,8 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
     }
     if (!popup) throw new Error("Only the extension popup can control recording.");
     if (message.type === "recordRequest") return {...await requestRecording(message.action, message.tabId), browserHealth:browserHealth()};
-    if (message.type === "start") await start(message.mode);
-    else if (message.type === "stop") await stop();
+    if (message.type === "start") await start(message.mode, Number.isSafeInteger(message.tabId) && message.tabId >= 0 ? message.tabId : null);
+    else if (message.type === "stop") await stopFromPopup(message);
     else if (message.type === "reloadMeetingTab") await reloadMeetingTab(message.tabId, {repaired:true});
     else throw new Error("Unknown control message.");
     return {...status(), browserHealth:browserHealth()};
@@ -1063,6 +1082,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
   return true;
 });
 chrome.tabs.onRemoved.addListener(id => {
+  evidenceChecks.delete(id);
   for (const [key, value] of lostMeetings) if (value.tabId === id) lostMeetings.delete(key);
   if (!sessions.has(id) && ![...frames].some(f => f.tabId === id)) { notifyControl(); return; }
   setPageState(id, "closed");
@@ -1138,14 +1158,23 @@ async function meetings({verified=false}={}) {
   });
   return { type: "meetings", meetings: found.filter(Boolean) };
 }
-// The popup also offers a reload for a healthy tab whose only relay was injected after the page
-// loaded (observerDocumentStart false): it can never verify a call until the document restarts.
-// The desktop app's reloadTab command keeps the stricter broken-meeting rule.
-const repairedRelay = tabId => { const frame = mainFrame(tabId); return !!frame && relayReady(frame) && frame.observerDocumentStart === false; };
+// What the popup offers as "reload" must be exactly what the worker accepts: a broken meeting row, a relay
+// whose hook never answered (incompatible or missing), or a healthy relay injected after the page loaded
+// (observerDocumentStart false) on a tab that really carries meeting sources.
+const repairedRelay = tabId => { const frame = mainFrame(tabId); return !!frame && relayReady(frame) && frame.observerDocumentStart === false && frame.sourceCount > 0; };
+const hooklessRelay = tabId => { const frame = mainFrame(tabId); return !!frame && frame.relayAlive === true && !frame.checking && !relayReady(frame); };
+// A popup Stop names the tab and capture it displayed; it never stops a different or newer recording.
+async function stopFromPopup(message) {
+  if (!Number.isSafeInteger(message.tabId)) return stop(); // Legacy untargeted Stop (fixtures).
+  const session = sessions.get(message.tabId);
+  if (!session || (typeof message.captureId === "string" && session.token !== message.captureId)) throw refused("That recording already ended.", "gone");
+  return stop(session);
+}
 async function reloadMeetingTab(tabId, {repaired = false} = {}) {
   if (sessions.has(tabId) || pendingStarts.has(tabId)) throw refused("Stop and save the recording before reloading its tab.", "busy");
+  if (popupRecordRequest(tabId)) throw refused("Wait for the recording request to finish before reloading its tab.", "busy");
   const health = browserHealth().tabs.find(tab => tab.tabId === tabId);
-  if (health?.state !== "reloadRequired" && !(repaired && repairedRelay(tabId))) throw refused("That meeting tab does not need a reload.", "gone");
+  if (health?.state !== "reloadRequired" && !(repaired && (repairedRelay(tabId) || hooklessRelay(tabId)))) throw refused("That meeting tab does not need a reload.", "gone");
   await chrome.tabs.reload(tabId);
   tabUpdated(tabId, {status:"loading"});
 }
@@ -1206,6 +1235,7 @@ const genericProducer = new GenericCallEvidenceProducer({identity:()=>browserIns
     sourceCount:native.sourceCount,heard:native.heard})}});
 const controlCapabilities = ["independent-sessions-v1", "call-evidence-v1", "page-state-v1", "multi-stream-v1", "resume-capture-v1", "heartbeat-v1", "tab-readiness-v1", "sender-me-v1", "popup-record-v1"];
 const appControl = new AppControl({
+  changed: notifyPopups,
   runtime: chrome.runtime, alarms: chrome.alarms, busy: startBusy, capabilities: controlCapabilities, signalSnapshot:options=>options.verified?genericProducer.snapshot(options):signalProducer.snapshot(), identity: () => ({extensionVersion,extensionInstance,...companionDiagnostics}), cancelPending: cancelPendingStart,
   signalFinalize:(value,options)=>options.verified?genericProducer.finalize(value):value,
   connected: repairOpenTabs,

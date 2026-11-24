@@ -32,6 +32,8 @@ function tabFallback(result, tab) {
   if (!result?.browserHealth || !tab || !/^https?:/.test(tab.url || '')) return null;
   if (result.tabId === tab.id && (result.recording === true || result.starting === true)) return null;
   if (result.recordRequest) return null;
+  if (result.otherCapture === true) return {label: 'Record the whole tab instead', enabled: false,
+    hint: 'Another recording is running. Stop it before recording this tab.'};
   return {label: 'Record the whole tab instead', enabled: true,
     hint: 'Records everything this tab plays as one stereo track, not separate participants. Use it when separate audio cannot be reached.'};
 }
@@ -39,7 +41,8 @@ function tabFallback(result, tab) {
 export function popupState(result, tab, reloadedTabId = null) {
   const view = popupStatus(result, tab, reloadedTabId);
   // Names describe this tab's call only, and only while no capture is being reported instead.
-  view.participants = result?.tabEvidence?.tabId === tab?.id ? cleanParticipants(result.participants) : [];
+  const sourced = result?.browserHealth?.tabs?.find(item => item.tabId === tab?.id)?.state === 'ready';
+  view.participants = sourced && result?.tabEvidence?.tabId === tab?.id ? cleanParticipants(result.participants) : [];
   const health = result?.browserHealth;
   // Without a health row, this tab's own page evidence still says whether it
   // needs a reload or is being checked. Evidence-only `ready` is only a relay
@@ -50,12 +53,12 @@ export function popupState(result, tab, reloadedTabId = null) {
   let record = recordControl(result, tab, current);
   // A whole-tab capture is started by this popup's own click, so its Stop is direct too (no app ask).
   const wholeTab = result?.tabId === tab?.id && result?.mode === 'tab' && (result.recording === true || result.starting === true);
-  if (record && wholeTab && record.action === 'stop' && result.stopping !== true) record = {action: 'stop', enabled: true, hint: '', label: 'Stop recording', direct: true};
+  if (record && wholeTab && record.action === 'stop' && result.stopping !== true) record = {action: 'stop', enabled: true, hint: '', label: 'Stop recording', direct: true, tabId: tab.id, captureId: typeof result.captureId === 'string' ? result.captureId : null};
   const fallback = tabFallback(result, tab);
   const request = record && result.tabId === tab?.id ? result.recordRequest : null;
-  if (request?.action === 'start') return {...view, record, fallback: null, tone: 'neutral', title: 'Asking Cassini to start recording…',
+  if (request?.action === 'start') return {...view, record, fallback: null, reloadTabId: null, tone: 'neutral', title: 'Asking Cassini to start recording…',
     description: 'Cassini starts the recording with your settings for browser meetings. Waiting for it to confirm.', note: 'Recording is not yet confirmed'};
-  if (request?.action === 'stop') return {...view, record, fallback: null, title: 'Asking Cassini to stop recording…',
+  if (request?.action === 'stop') return {...view, record, fallback: null, reloadTabId: null, title: 'Asking Cassini to stop recording…',
     description: 'Waiting for Cassini to stop and save this recording.'};
   return {...view, record, fallback};
 }
@@ -82,7 +85,8 @@ function popupStatus(result, tab, reloadedTabId) {
       result.tracks > 0 ? 'The extension is capturing audio for this tab. Check Cassini for the recording and its saved audio.' :
         'No audio tracks have been reported for this capture yet. Check the meeting in Cassini.',
     note: result.tracks > 0 ? `${result.tracks} browser audio ${result.tracks === 1 ? 'track' : 'tracks'} · stop here or in Cassini` : 'Waiting for browser audio tracks'};
-  if (reloadedTabId === tab.id && !current) return {...view, title: 'Tab reloaded · rejoin your call',
+  const sourcedRow = health?.tabs?.find(item => item.tabId === tab.id);
+  if (reloadedTabId === tab.id && !sourcedRow) return {...view, title: 'Tab reloaded · rejoin your call',
     description: 'Waiting for fresh meeting sources. Reloading does not confirm that audio is available.'};
   if (current?.state === 'reloadRequired') return {...view, tone: 'warning', reloadTabId: tab.id,
     title: 'This tab needs to reload', description: 'Cassini cannot reach the meeting’s audio sources on this page. Reload the tab, then rejoin your call.'};
@@ -90,11 +94,11 @@ function popupStatus(result, tab, reloadedTabId) {
     description: 'The extension is checking whether it can reach this meeting’s audio sources. Recording is not confirmed.'};
   if (result?.tabEvidence?.tabId === tab.id) {
     const evidence = tabEvidenceView(result,tab.id);
-    if (evidence.callEvidence.state === 'unknown' && evidence.transport.documentStart === false) return {...view, tone: 'warning', reloadTabId: tab.id,
+    if (evidence.callEvidence.state === 'unknown' && evidence.transport.documentStart === false && sourcedRow?.state === 'ready') return {...view, tone: 'warning', reloadTabId: tab.id,
       title: 'Reload this tab for automatic detection',
       description: 'This tab was already open when the extension started, so Cassini cannot verify its call. Reload the tab, then rejoin your call. You can still start a recording manually.'};
     if (evidence.callEvidence.state === 'unknown') return {...view, title:'Interactive session is unverified',
-      description:current?.state === 'ready' ?
+      description:sourcedRow?.state === 'ready' ?
         'Incoming meeting audio is available, but your browser microphone is not sending (muted or listen-only), so Cassini will not start by itself. You can record manually.' :
         'Cassini has not verified an interactive media session. Listen-only calls are not recorded automatically; start recording manually once meeting audio is available.'};
     if (evidence.callEvidence.state === 'active') return {...view, tone:'good', title:'Interactive media session detected',

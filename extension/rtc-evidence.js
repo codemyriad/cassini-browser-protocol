@@ -496,7 +496,15 @@
       // until a native terminal/new-session boundary, as in the same-PC path.
       if(endpoint){if(member.tracks.length)endpoint.tracks=member.tracks}
       else if(qualified.length<64)add(qualified,member);
-      else{overflow=true;cohortQualified=false;break}
+      else{
+        // No room to qualify it: keep its endpoint as a teardown witness (once per peer) so the end of the
+        // episode is never reported while its microphone is still live; with no room even for that, never report it.
+        overflow=true;cohortQualified=false;
+        let witness=null;for(let j=0;j<overflowQualified.length;j++)if(overflowQualified[j].pc===member.pc)witness=overflowQualified[j];
+        if(witness){if(member.tracks.length)witness.tracks=member.tracks}
+        else if(overflowQualified.length<64)add(overflowQualified,member);
+        else lostEndpoint=true;
+      }
     }
     const older=receiveAt<sendAt?receiveAt:sendAt,rawAge=instant-older,age=cohortQualified?(rawAge<0&&rawAge>=-5?0:rawAge):0;
     return assign(create(null),{version:2,documentGeneration,hookGeneration:''+generation,revision,ageMs:age,cohortQualified,

@@ -216,3 +216,41 @@ test('a whole-tab capture started from the popup stops directly, even with no ap
   const saving=popupState({browserHealth:{nativeControl:'connected',filesOk:true,tabs:[]},recording:true,stopping:true,tabId:7,tracks:1,mode:'tab'},tab);
   assert.equal(saving.record.enabled,false,'no second stop while saving');
 });
+
+// PR #108 review: the card follows what the worker really has for the tab.
+const evidenceFor = (extra = {}) => ({tabEvidence: {tabId: 7, transport: {page: 'ready', documentStart: false}, callEvidence: {state: 'unknown', reason: 'unverified'}, captureCapability: {kind: 'separated', assurance: 'observed'}}, ...extra});
+
+test('the repaired-tab reload prompt and the listen-only explanation need real meeting sources, not a bare relay handshake',async()=>{
+  const {popupState}=await state;
+  const bare=popupState(status([],evidenceFor()),tab);
+  assert.equal(bare.reloadTabId,null,'no meeting row, no reload prompt');
+  assert.doesNotMatch(bare.description,/Incoming meeting audio is available/);
+  const sourced=popupState(status([{tabId:7,state:'ready'}],evidenceFor()),tab);
+  assert.equal(sourced.reloadTabId,7);assert.equal(sourced.title,'Reload this tab for automatic detection');
+  const trusted=popupState(status([{tabId:7,state:'ready'}],{tabEvidence:{...evidenceFor().tabEvidence,transport:{page:'ready',documentStart:true}}}),tab);
+  assert.match(trusted.description,/Incoming meeting audio is available/);
+  const handshakeOnly=popupState(status([],{tabEvidence:{...evidenceFor().tabEvidence,transport:{page:'ready',documentStart:true}}}),tab);
+  assert.doesNotMatch(handshakeOnly.description,/Incoming meeting audio is available/,'a relay handshake alone is not incoming audio');
+});
+
+test('no reload is offered while the app answers a Start or Stop ask',async()=>{
+  const {popupState}=await state;
+  for(const action of ['start','stop']){
+    const view=popupState(status([{tabId:7,state:'ready'}],{...evidenceFor(),tabId:7,recordRequest:{action,state:'accepted'}}),tab);
+    assert.equal(view.reloadTabId,null,action);
+  }
+});
+
+test('the reload guidance survives the worker push that follows the click, and the old roster does not',async()=>{
+  const {popupState}=await state;
+  const afterClick=status([],{tabEvidence:{tabId:7,transport:{page:'unavailable'},callEvidence:{state:'unknown',reason:'unverified'},captureCapability:{kind:'unknown',assurance:'unknown'}}});
+  assert.equal(popupState(afterClick,tab,7).title,'Tab reloaded · rejoin your call','an evidence-only fallback row is not fresh meeting sources');
+  assert.equal(popupState(status([{tabId:7,state:'ready'}],evidenceFor()),tab,7).title,'Reload this tab for automatic detection','real sources end the waiting guidance');
+});
+
+test('names are shown only while the worker has meeting sources for this tab',async()=>{
+  const {popupState}=await state;
+  const withNames=tabs=>status(tabs,{...evidenceFor(),participants:['Hypatia']});
+  assert.deepEqual(popupState(withNames([]),tab).participants,[]);
+  assert.deepEqual(popupState(withNames([{tabId:7,state:'ready'}]),tab).participants,['Hypatia']);
+});

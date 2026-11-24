@@ -36,3 +36,7 @@ test('the popup lists names only for its own tab and never in the copied diagnos
   const request=popupState({...result(7),tabId:7,recordRequest:{action:'start',state:'pending'}},tab);
   assert.deepEqual(request.participants,['Hypatia','Ibn al-Haytham'],'the roster survives the pending-start card');
 });
+
+test('an oversized page name is bounded inside the page world, before anything is transferred',()=>withDocument([
+  media(card('a',['A'.repeat(4096)])),media(card('b',['🌙'.repeat(900)]))],
+  read=>{const names=read();assert.equal([...names[0]].length,200);assert.equal([...names[1]].length,200);}));

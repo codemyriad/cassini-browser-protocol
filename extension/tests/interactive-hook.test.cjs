@@ -563,6 +563,22 @@ test('a 65th historical qualified peer cannot be admitted without retaining its 
  }
 });
 
+test('the collector never reports ended while the omitted 65th historical sender microphone is still live',async()=>{
+ const f=fixture(),calls=[];
+ for(let i=0;i<65;i++){
+  const p=await f.peer();
+  calls.push(p);
+  assert.equal(await qualifies(f,p),i<64,'sequential peer '+(i+1));
+  p.pc.close();
+ }
+ for(const p of calls.slice(0,64))p.track.readyState='ended';
+ assert.equal(calls[64].track.readyState,'live');
+ assert.equal(f.read().ended,false,'an omitted live endpoint withholds the end');
+ assert.equal(f.read().ended,false,'repeated reads keep it withheld and do not exhaust the witness list');
+ calls[64].track.readyState='ended';
+ assert.equal(f.read().ended,true,'the end is reported once that endpoint really ended');
+});
+
 test('a live sender without native mic lineage sets only a content-free diagnostic',async()=>{
  const f=fixture(),p=await f.peer('synthetic');
  assert.equal(await qualifies(f,p),false);

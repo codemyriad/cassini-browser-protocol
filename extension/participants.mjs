@@ -15,7 +15,8 @@ export function readTalkParticipants() {
     const names = new Set();
     for (const node of card.querySelectorAll('.participant-name')) {
       if (node.closest('.video-container[id]') !== card) continue;
-      const name = node.textContent.replace(/\s+/g, ' ').trim();
+      // Bound inside the page world too, so an oversized name is never transferred.
+      const name = [...node.textContent.slice(0, 1024).replace(/\s+/g, ' ').trim()].slice(0, 200).join('');
       if (name) names.add(name);
     }
     if (names.size === 1) seen.set(participant, [...names][0]);

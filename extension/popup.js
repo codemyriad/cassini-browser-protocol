@@ -9,7 +9,7 @@ let openCheckDone = false, roster = {tabId: null, names: []};
 // A refresh asked for while a poll or action is outstanding runs once it ends.
 let refreshQueued = false, lastResult = null, lastTab = null;
 // The button's target is the tab and action displayed when it was rendered.
-let recordTarget = null, recordError = null, tabTarget = null, directStop = false;
+let recordTarget = null, recordError = null, tabTarget = null, directStop = null;
 function boundedReply(promise, ms = 4000) {
   let timer;
   return Promise.race([promise, new Promise((_, reject) => {
@@ -63,7 +63,7 @@ function render(result, tab) {
   element('record-tab').disabled = !view.fallback?.enabled;
   element('record-tab-hint').textContent = view.fallback?.hint || '';
   element('record-tab-hint').hidden = !view.fallback?.hint;
-  directStop = view.record?.direct === true;
+  directStop = view.record?.direct === true ? {tabId: view.record.tabId, captureId: view.record.captureId} : null;
   const names = view.participants || [];
   element('participants').hidden = names.length === 0;
   element('participant-list').replaceChildren(...names.map(name => Object.assign(document.createElement('li'), {textContent: name})));
@@ -81,9 +81,10 @@ async function refresh() {
     const {result, tab} = await boundedReply((async () => {
       const [tab] = await chrome.tabs.query({active: true, currentWindow: true});
       const fresh = !openCheckDone && Number.isSafeInteger(tab?.id) && tab.id >= 0;
+      if (fresh) openCheckDone = true;
       const result = await chrome.runtime.sendMessage({target: 'background', type: 'status',
         ...(Number.isSafeInteger(tab?.id) && tab.id >= 0 ? {tabId: tab.id} : {}), ...(fresh ? {fresh: true} : {})});
-      if (fresh && result && !result.error) { openCheckDone = true; roster = {tabId: tab.id, names: result.participants || []}; }
+      if (fresh && result && !result.error) roster = {tabId: tab.id, names: result.participants || []};
       if (result && !result.error) result.participants = roster.tabId === tab?.id ? roster.names : [];
       return {result, tab};
     })());
@@ -104,6 +105,8 @@ async function refresh() {
     element('reload').hidden = element('reload-warning').hidden = true;
     recordError = null; showRecordError('');
     renderRecord(null, null);
+    roster = {tabId: null, names: []}; tabTarget = null; directStop = null;
+    element('participants').hidden = true; element('record-tab').hidden = true; element('record-tab-hint').hidden = true;
     diagnosticText = JSON.stringify({schemaVersion:1,error:'statusUnavailable'});
     element('diagnostics').textContent = diagnosticText;
     element('copy').disabled = false;
@@ -126,7 +129,7 @@ element('reload').addEventListener('click', async () => {
   try {
     const result = await chrome.runtime.sendMessage({target: 'background', type: 'reloadMeetingTab', tabId});
     if (!result || result.error) throw new Error(result?.error || 'The tab could not be reloaded');
-    reloadedTabId = tabId;
+    reloadedTabId = tabId; roster = {tabId: null, names: []};
     element('status').textContent = 'Tab reloaded · rejoin your call';
     element('explanation').textContent = 'Waiting for fresh meeting sources. Reloading does not confirm that audio is available.';
     element('card').dataset.tone = 'neutral';
@@ -138,10 +141,11 @@ element('reload').addEventListener('click', async () => {
 // Whole-tab fallback: the person's own click, handled entirely in this browser.
 element('record-tab').addEventListener('click', async () => {
   if (actionPending || tabTarget === null) return;
+  const target = tabTarget;
   actionPending = true; ++requestGeneration; tabTarget = null; showRecordError('');
   element('record-tab').disabled = true;
   try {
-    const result = await boundedReply(chrome.runtime.sendMessage({target: 'background', type: 'start', mode: 'tab'}), 15000);
+    const result = await boundedReply(chrome.runtime.sendMessage({target: 'background', type: 'start', mode: 'tab', tabId: target.tabId}), 15000);
     if (!result || result.error) throw new Error(result?.error || 'The tab could not be recorded.');
   } catch (error) { showRecordError(error.message); }
   finally { actionPending = false; refreshQueued = true; drainRefresh(); }
@@ -149,9 +153,10 @@ element('record-tab').addEventListener('click', async () => {
 element('record').addEventListener('click', async () => {
   if (actionPending || recordTarget === null) return;
   if (directStop) {
+    const target = directStop;
     actionPending = true; ++requestGeneration; recordTarget = null; showRecordError('');
     try {
-      const result = await boundedReply(chrome.runtime.sendMessage({target: 'background', type: 'stop'}), 15000);
+      const result = await boundedReply(chrome.runtime.sendMessage({target: 'background', type: 'stop', tabId: target.tabId, ...(target.captureId ? {captureId: target.captureId} : {})}), 15000);
       if (!result || result.error) throw new Error(result?.error || 'The recording could not be stopped.');
     } catch (error) { showRecordError(error.message); }
     finally { actionPending = false; refreshQueued = true; drainRefresh(); }

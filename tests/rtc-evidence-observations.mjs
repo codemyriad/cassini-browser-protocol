@@ -403,11 +403,17 @@ try{
       await popup.waitForFunction(()=>document.querySelector('main')?.getAttribute('aria-busy')==='false');
       // A relay injected after the page loaded can never verify a call: the popup asks for a reload instead.
       const unverifiedTitle=fixture==='repaired-frame-positive-media'?'Reload this tab for automatic detection':'Interactive session is unverified';
-      await popup.waitForFunction(([expected,unverified])=>{
+      // This fixture opens the popup as a plain tab, so its open check ran before the tab lookup was pointed at the
+      // meeting. Like a person, press Check again until the page shows the state the fixture should produce.
+      const shown=([expected,unverified])=>{
         const text=document.querySelector('#diagnostics').textContent;
-        return text&&JSON.parse(text).callEvidence?.state===expected&&document.querySelector('#status').textContent===
+        return !!text&&JSON.parse(text).callEvidence?.state===expected&&document.querySelector('#status').textContent===
           (expected==='active'?'Interactive media session detected':unverified);
-      },[fixture==='duplex'?'unknown':expected,unverifiedTitle]);
+      };
+      const wanted=[fixture==='duplex'?'unknown':expected,unverifiedTitle];
+      const until=Date.now()+30000;let seen=false;
+      while(!(seen=await popup.evaluate(shown,wanted))&&Date.now()<until){await popup.locator('#recheck').click();await new Promise(resolve=>setTimeout(resolve,500));}
+      assert.ok(seen,`popup shows ${wanted.join(' / ')} for ${fixture}`);
       await popup.evaluate(()=>Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>{globalThis.fixtureCopy=text}}}));
       await popup.locator('summary').click();await popup.locator('#copy').click();await popup.waitForFunction(()=>typeof fixtureCopy==='string');
       assert.equal(await popup.evaluate(()=>fixtureCopy),await popup.locator('#diagnostics').textContent());
