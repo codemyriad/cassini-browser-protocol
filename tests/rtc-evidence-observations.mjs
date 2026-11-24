@@ -401,11 +401,13 @@ try{
       const popup=await context.newPage();await popup.goto(`chrome-extension://${extensionId}/popup.html`);
       await popup.evaluate(tabId=>{const query=chrome.tabs.query.bind(chrome.tabs);chrome.tabs.query=async options=>options.active?[await chrome.tabs.get(tabId)]:query(options)},tabId);
       await popup.waitForFunction(()=>document.querySelector('main')?.getAttribute('aria-busy')==='false');
-      await popup.waitForFunction(expected=>{
+      // A relay injected after the page loaded can never verify a call: the popup asks for a reload instead.
+      const unverifiedTitle=fixture==='repaired-frame-positive-media'?'Reload this tab for automatic detection':'Interactive session is unverified';
+      await popup.waitForFunction(([expected,unverified])=>{
         const text=document.querySelector('#diagnostics').textContent;
         return text&&JSON.parse(text).callEvidence?.state===expected&&document.querySelector('#status').textContent===
-          (expected==='active'?'Interactive media session detected':'Interactive session is unverified');
-      },fixture==='duplex'?'unknown':expected);
+          (expected==='active'?'Interactive media session detected':unverified);
+      },[fixture==='duplex'?'unknown':expected,unverifiedTitle]);
       await popup.evaluate(()=>Object.defineProperty(navigator,'clipboard',{value:{writeText:async text=>{globalThis.fixtureCopy=text}}}));
       await popup.locator('summary').click();await popup.locator('#copy').click();await popup.waitForFunction(()=>typeof fixtureCopy==='string');
       assert.equal(await popup.evaluate(()=>fixtureCopy),await popup.locator('#diagnostics').textContent());
