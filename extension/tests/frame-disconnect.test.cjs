@@ -48,3 +48,51 @@ test('BFCache-like retained disconnect keeps the same capture and accepts a fres
   assert.equal(app.audio.length,1);assert.equal(app.audio[0].sent.filter(p=>p.type==='start').length,1);
  }finally{await app.api.stop();app.close()}
 });
+
+test('decorative zero-RTP child frame is never attached for capture and its departure never stops a non-retained session',async()=>{
+ const app=await setup(3,{},['source-outcomes-v1']);
+ const send=async(page,packet,id)=>{page.onMessage.emit({type:'packet',request:id,packet});await until(()=>page.sent.some(m=>m.type==='ack'&&m.request===id));return page.sent.find(m=>m.type==='ack'&&m.request===id)};
+ try {
+  const child1=app.frame(2,0,4);
+  assert.equal((await app.command({type:'command',requestId:'start',action:'start',mode:'tracks',tabId:2,independent:true})).ok,true);
+  assert.equal(app.pages[0].sent.some(p=>p.type==='start'),true);
+  assert.equal(child1.sent.some(p=>p.type==='start'),false,'zero-RTP child frame must not receive start');
+  child1.onMessage.emit({type:'packet',request:99,packet:{type:'track',id:'child-dom-media',kind:'media',sampleRate:48000,channels:1}});
+  assert.equal((await send(app.pages[0],{type:'track',id:'main-remote',kind:'remote',sampleRate:48000,channels:1},1)).error,undefined);
+  assert.equal((await send(app.pages[0],{type:'audio',id:'main-remote',sequence:0,offsetMs:0,pcm:'AAA='},2)).error,undefined);
+  assert.equal(app.audio[0].sent.some(p=>p.id==='child-dom-media'),false,'unrelated child DOM media never reaches the native host');
+  assert.equal(disconnect(app,child1,undefined),1);
+  const child2=app.frame(2,0,5);
+  assert.equal(child2.sent.some(p=>p.type==='start'),false,'late zero-RTP child frame must not receive start');
+  assert.equal(disconnect(app,child2,undefined),1);
+  assert.equal(app.api.status().recording,true);
+  assert.equal(app.audio[0].closed,false);
+  assert.equal((await send(app.pages[0],{type:'audio',id:'main-remote',sequence:1,offsetMs:20,pcm:'AAA='},3)).error,undefined);
+  assert.equal((await app.command({type:'command',requestId:'stop',action:'stop',tabId:2,independent:true})).ok,true);
+  assert.equal(app.audio[0].sent.find(p=>p.type==='stop').failureReason,undefined);
+ }finally{await app.api.stop();app.close()}
+});
+
+test('an attached child frame that contributed no sources does not end main capture on disconnect, while a contributing child frame does',async()=>{
+ const app=await setup(2,{},['source-outcomes-v1']);
+ const send=async(page,packet,id)=>{page.onMessage.emit({type:'packet',request:id,packet});await until(()=>page.sent.some(m=>m.type==='ack'&&m.request===id));return page.sent.find(m=>m.type==='ack'&&m.request===id)};
+ try {
+  const idleChild=app.frame(2,1,4);
+  assert.equal((await app.command({type:'command',requestId:'start',action:'start',mode:'tracks',tabId:2,independent:true})).ok,true);
+  assert.equal(idleChild.sent.some(p=>p.type==='start'),true);
+  assert.equal((await send(app.pages[0],{type:'track',id:'main-voice',kind:'remote',sampleRate:48000,channels:1},1)).error,undefined);
+  idleChild.onMessage.emit({type:'discovery',sourceCount:0,heard:false});
+  assert.equal(disconnect(app,idleChild,undefined),1);
+  assert.equal(app.api.status().stopping,false,'empty departing child must not fail main capture');
+  assert.equal(app.api.status().recording,true,'empty departing child must not fail main capture');
+  assert.equal(app.audio[0].closed,false);
+  const speakingChild=app.frame(2,1,6);
+  await until(()=>speakingChild.sent.some(p=>p.type==='start'));
+  assert.equal((await send(speakingChild,{type:'track',id:'child-voice',kind:'remote',sampleRate:48000,channels:1},2)).error,undefined);
+  assert.equal(disconnect(app,speakingChild,undefined),1);
+  await until(()=>app.audio[0].closed&&!app.api.status().recording);
+  const stop=app.audio[0].sent.find(p=>p.type==='stop');
+  assert.equal(stop.failureReason,'lost');
+  assert.equal(stop.cause,'frameClosed');
+ }finally{await app.api.stop();app.close()}
+});

@@ -60,7 +60,7 @@ const relayReady = frame => frame.relayAlive === true && frame.hookReady === tru
 // Handshake and browser-document verification may finish in either order.
 // Neither can attach before the other, or attach twice to the same session.
 function attachFrame(frame) {
-  if (!frames.has(frame) || !relayReady(frame)) return;
+  if (!frames.has(frame) || !relayReady(frame) || (frame.frameId !== 0 && !(frame.sourceCount > 0))) return;
   const current = sessions.get(frame.tabId);
   if (current?.ready && current.mode === "tracks" && !current.stopping && !current.frames.has(frame)) {
     current.frames.add(frame);
@@ -634,7 +634,7 @@ async function start(mode, tabId = null, options = {}) {
     identity.url = callAddress(tab.url);
     const target = options.resumeCapture;
     const session = { callGeneration: identity.generation, mode, tabId: tab.id, independent: options.independent === true, captureLocal: options.captureLocal !== false, keepOnNavigation: options.keepOnNavigation === true, token: target?.captureId ?? crypto.randomUUID(), origin: target?.timelineOriginMs ?? Date.now(), resumeTarget: target,
-      frames: new Set(), tracks: 0, trackIds: new Set(), trackReservations: new Set(), endedTrackIds: new Set(), trackSources: new Map(), discoveredSources: new Map(), sourceUpdates: new Set(), lastTab: tab, lastSourceCount: 0, stopping: false, problem: null };
+      frames: new Set(), sourceFrames: new Set(), tracks: 0, trackIds: new Set(), trackReservations: new Set(), endedTrackIds: new Set(), trackSources: new Map(), discoveredSources: new Map(), sourceUpdates: new Set(), lastTab: tab, lastSourceCount: 0, stopping: false, problem: null };
     sessions.set(tab.id, session);
     request.session = session; // A popup Stop bound to this start follows it to its capture.
     notifyControl();
@@ -837,6 +837,7 @@ function adoptDiscovery(frame, message) {
       (frame.sourceCount !== message.sourceCount || frame.heard !== (message.heard === true))) {
     frame.sourceCount = message.sourceCount;
     frame.heard = message.heard === true;
+    if (frame.sourceCount > 0) attachFrame(frame);
     notifyControl();
   }
 
@@ -896,15 +897,18 @@ chrome.runtime.onConnect.addListener(port => {
     if (!session?.frames.has(frame)) return;
     if (session.keepOnNavigation && (frame.obsolete || pageState(frame.tabId) !== "present") &&
         ["stopped", "error"].includes(message.type) && !session.stopping) {
-      session.frames.delete(frame);
+      session.frames.delete(frame); session.sourceFrames.delete(frame);
       frame.sourceCount = 0; frame.heard = false;
       frame.finished?.(); notifyControl(); return;
     }
     if (session.sourceOutcomes && Array.isArray(message.discoveredSources)) {
-      try { await recordSources(session, message.discoveredSources); }
+      try { await recordSources(session, message.discoveredSources); if (message.discoveredSources.length) session.sourceFrames.add(frame); }
       catch (error) { failure(error.message, session, error.lossCause || "nativeHostError"); return; }
     }
     if (message.type === "stopped") {
+      const emptyChild = frame.frameId !== 0 && !session.sourceFrames.has(frame) &&
+        (session.sourceFrames.size > 0 || [...frames].some(f => f !== frame && f.tabId === frame.tabId && relayReady(f) && f.sourceCount > 0));
+      if (!session.stopping && emptyChild) { session.frames.delete(frame); frame.finished?.(); return; }
       if (!session.stopping) failure("The meeting page stopped sending audio. The recording so far was saved.", session, "lifecycle");
       frame.finished?.(); return;
     }
@@ -916,6 +920,7 @@ chrome.runtime.onConnect.addListener(port => {
     if (message.type !== "packet" || !["track", "audio", ...(session.sourceOutcomes ? ["trackEnd", "sources"] : [])].includes(message.packet?.type)) return;
     try {
       await forwardPacket(session, message.packet, spanDocument(frame));
+      if (message.packet.type === "track" || message.packet.type === "sources") session.sourceFrames.add(frame);
     } catch (error) {
       if (error.retired) { /* Already retired locally; keep other spans recording. */ }
       else if (error.code === "state" && ["source", "command"].includes(error.scope)) {
@@ -953,8 +958,11 @@ chrome.runtime.onConnect.addListener(port => {
     frame.finished?.();
     const session = sessions.get(frame.tabId);
     if (session?.frames.has(frame)) {
+      const contributed = session.sourceFrames.delete(frame);
       session.frames.delete(frame);
-      if (!session.stopping && !session.keepOnNavigation) failure("The meeting page closed or navigated away. The recording so far was saved.", session, "frameClosed");
+      const emptyChild = frame.frameId !== 0 && !contributed &&
+        (session.sourceFrames.size > 0 || [...frames].some(f => f.tabId === frame.tabId && relayReady(f) && f.sourceCount > 0));
+      if (!session.stopping && !session.keepOnNavigation && !emptyChild) failure("The meeting page closed or navigated away. The recording so far was saved.", session, "frameClosed");
       if (session.keepOnNavigation && ![...frames].some(f => f.tabId === frame.tabId && f.sourceCount > 0))
         setPageState(frame.tabId, "navigating");
     }
