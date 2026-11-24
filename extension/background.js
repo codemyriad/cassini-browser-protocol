@@ -1036,6 +1036,12 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         } else {
           const checked=evidenceChecks.get(message.tabId);
           row=checked&&frame&&checked.document===frame.browserDocumentId?checked.row:undefined;
+          // A remembered "active" is not repeated once the page reports no meeting sources: the call may have ended.
+          // A remembered verdict names the call it saw; once the tab is in a different call (a rejoin or reconnect in
+          // the same document), neither "active" nor "No call in progress" describes it.
+          if (row?.callEvidence?.state==='active' && !(frame.sourceCount>0) ||
+              ['active','inactive'].includes(row?.callEvidence?.state) && row.callEvidence.callGeneration!==callInfo(message.tabId).generation)
+            row={...row,callEvidence:{state:'unknown',reason:'unverified'}};
         }
         const page=readiness?.state||(frame?(relayReady(frame)?'ready':frame.checking?'checking':'reloadRequired'):'unavailable');
         const kind=['separated','mixed'].includes(row?.remoteAudio)?row.remoteAudio:frame&&relayReady(frame)&&!readiness?'unavailable':'unknown';
