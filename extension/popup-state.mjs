@@ -26,6 +26,16 @@ export function recordControl(result, tab, current) {
   return {action: 'start', enabled: !hint, hint, label: 'Start recording'};
 }
 
+// Whole-tab recording is always the person's explicit browser click: the app cannot obtain it.
+// It records everything the tab plays, so it is offered next to, never instead of, Start recording.
+function tabFallback(result, tab) {
+  if (!result?.browserHealth || !tab || !/^https?:/.test(tab.url || '')) return null;
+  if (result.tabId === tab.id && (result.recording === true || result.starting === true)) return null;
+  if (result.recordRequest) return null;
+  return {label: 'Record the whole tab instead', enabled: true,
+    hint: 'Records everything this tab plays as one stereo track, not separate participants. Use it when separate audio cannot be reached.'};
+}
+
 export function popupState(result, tab, reloadedTabId = null) {
   const view = popupStatus(result, tab, reloadedTabId);
   // Names describe this tab's call only, and only while no capture is being reported instead.
@@ -37,13 +47,17 @@ export function popupState(result, tab, reloadedTabId = null) {
   const page = result?.tabEvidence?.tabId === tab?.id ? tabEvidenceView(result, tab?.id).transport.page : null;
   const current = health?.tabs?.find(item => item.tabId === tab?.id) ||
     (page === 'reloadRequired' || page === 'checking' ? {state: page} : null);
-  const record = recordControl(result, tab, current);
+  let record = recordControl(result, tab, current);
+  // A whole-tab capture is started by this popup's own click, so its Stop is direct too (no app ask).
+  const wholeTab = result?.tabId === tab?.id && result?.mode === 'tab' && (result.recording === true || result.starting === true);
+  if (record && wholeTab && record.action === 'stop' && result.stopping !== true) record = {action: 'stop', enabled: true, hint: '', label: 'Stop recording', direct: true};
+  const fallback = tabFallback(result, tab);
   const request = record && result.tabId === tab?.id ? result.recordRequest : null;
-  if (request?.action === 'start') return {...view, record, tone: 'neutral', title: 'Asking Cassini to start recording…',
+  if (request?.action === 'start') return {...view, record, fallback: null, tone: 'neutral', title: 'Asking Cassini to start recording…',
     description: 'Cassini starts the recording with your settings for browser meetings. Waiting for it to confirm.', note: 'Recording is not yet confirmed'};
-  if (request?.action === 'stop') return {...view, record, title: 'Asking Cassini to stop recording…',
+  if (request?.action === 'stop') return {...view, record, fallback: null, title: 'Asking Cassini to stop recording…',
     description: 'Waiting for Cassini to stop and save this recording.'};
-  return {...view, record};
+  return {...view, record, fallback};
 }
 
 function popupStatus(result, tab, reloadedTabId) {
@@ -80,7 +94,9 @@ function popupStatus(result, tab, reloadedTabId) {
       title: 'Reload this tab for automatic detection',
       description: 'This tab was already open when the extension started, so Cassini cannot verify its call. Reload the tab, then rejoin your call. You can still start a recording manually.'};
     if (evidence.callEvidence.state === 'unknown') return {...view, title:'Interactive session is unverified',
-      description:'Cassini has not verified an interactive media session. Listen-only calls are not recorded automatically; start recording manually once meeting audio is available.'};
+      description:current?.state === 'ready' ?
+        'Incoming meeting audio is available, but your browser microphone is not sending (muted or listen-only), so Cassini will not start by itself. You can record manually.' :
+        'Cassini has not verified an interactive media session. Listen-only calls are not recorded automatically; start recording manually once meeting audio is available.'};
     if (evidence.callEvidence.state === 'active') return {...view, tone:'good', title:'Interactive media session detected',
       description:evidence.captureCapability.kind === 'separated' ?
         'Live audio is flowing both ways. This can include microphone tests or early media.' :

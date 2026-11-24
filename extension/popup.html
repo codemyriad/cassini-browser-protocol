@@ -40,6 +40,7 @@ button:disabled { opacity: .55; cursor: default; }
 #record::before { content: ''; flex: none; width: 8px; height: 8px; border-radius: 50%; background: var(--cx-on-record); }
 #record[data-action="stop"]::before { border-radius: 1.5px; }
 #record:hover:not(:disabled) { background: var(--cx-record); filter: brightness(.9); }
+#record-tab-hint { margin: 7px 0 0; color: var(--cx-ink-3); font-size: 10px; line-height: 1.5; }
 #record-hint { margin: 7px 0 0; color: var(--cx-ink-2); font-size: 11px; line-height: 1.5; }
 button:focus-visible, summary:focus-visible { outline: 3px solid var(--cx-accent); outline-offset: 3px; }
 #reload-warning { margin: 7px 0 0; color: var(--cx-ink-3); font-size: 10px; line-height: 1.5; }
@@ -63,6 +64,7 @@ summary { width: fit-content; cursor: pointer; color: var(--cx-ink-3); font-size
  <p id="installation-warning" hidden>Some audio capture files could not be read. See connection details; this check does not determine page readiness.</p>
  <p id="recording-note">Start recording asks the Cassini app on this computer to record this tab.</p>
  <button id="record" hidden disabled aria-describedby="record-hint">Start recording</button><p id="record-hint" hidden></p>
+ <button id="record-tab" hidden>Record the whole tab instead</button><p id="record-tab-hint" hidden></p>
  <p id="record-error" role="status" hidden></p>
  <button id="reload" hidden>Reload meeting tab</button><p id="reload-warning" hidden>Reloading briefly disconnects you from the call.</p>
  <p id="action-error" role="status" hidden></p>

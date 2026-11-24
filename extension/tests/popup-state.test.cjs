@@ -9,7 +9,7 @@ test('healthy source transport and unknown call evidence explain the listen-only
   const result=status([{tabId:7,state:'ready'}],{tabEvidence:{tabId:7,
     callEvidence:{state:'unknown',reason:'unverified'},captureCapability:{kind:'separated',assurance:'observed'}}});
   const view=popupState(result,tab);
-  assert.equal(view.title,'Interactive session is unverified');assert.match(view.description,/Listen-only.*manually/);
+  assert.equal(view.title,'Interactive session is unverified');assert.match(view.description,/microphone is not sending.*listen-only.*record manually/);
   assert.equal(view.reloadTabId,null);assert.equal(view.connected,true);
   result.tabEvidence.callEvidence={state:'active',reason:'activeCall'};
   assert.equal(popupState(result,tab).title,'Interactive media session detected');
@@ -186,4 +186,33 @@ test('a tab whose relay was injected after the page loaded asks for a reload ins
     'a document-start relay with no two-way audio is genuinely listen-only');
   const active=evidence(false);active.tabEvidence.callEvidence={state:'active',reason:'activeCall'};
   assert.equal(popupState(active,tab).title,'Interactive media session detected','verified active evidence is never replaced by the hint');
+});
+
+test('listen-only copy names the cause only when meeting sources are really there',async()=>{
+  const {popupState}=await state;
+  const evidence=tabs=>status(tabs,{tabEvidence:{tabId:7,callEvidence:{state:'unknown',reason:'unverified'},captureCapability:{kind:'unknown',assurance:'unknown'}}});
+  assert.match(popupState(evidence([{tabId:7,state:'ready'}]),tab).description,/Incoming meeting audio is available/);
+  assert.doesNotMatch(popupState(evidence([]),tab).description,/Incoming meeting audio is available/);
+});
+
+test('the whole-tab fallback is an explicit browser action offered beside Start, never during a capture',async()=>{
+  const {popupState}=await state;
+  const idle=popupState(status([]),tab);
+  assert.equal(idle.fallback.enabled,true);assert.equal(idle.fallback.label,'Record the whole tab instead');
+  assert.match(idle.fallback.hint,/one stereo track, not separate participants/);
+  assert.equal(popupState(status([]),{...tab,url:'chrome://extensions'}).fallback,null,'only web pages');
+  assert.equal(popupState({},tab).fallback,null,'no worker answer, no action');
+  for(const busy of [{recording:true,tabId:7,tracks:1},{starting:true,tabId:7},{recordRequest:{action:'start',state:'pending'},tabId:7}])
+    assert.equal(popupState(status([],busy),tab).fallback,null);
+  assert.equal(popupState(status([],{recording:true,tabId:8,tracks:1}),tab).fallback.enabled,true,'another tab capture does not hide it here');
+});
+
+test('a whole-tab capture started from the popup stops directly, even with no app link; a tracks capture still asks the app',async()=>{
+  const {popupState}=await state;
+  const wholeTab=popupState({browserHealth:{nativeControl:'disconnected',filesOk:true,tabs:[]},recording:true,tabId:7,tracks:1,mode:'tab',appRecording:'disconnected'},tab);
+  assert.equal(wholeTab.record.action,'stop');assert.equal(wholeTab.record.enabled,true);assert.equal(wholeTab.record.direct,true);
+  const tracks=popupState({browserHealth:{nativeControl:'disconnected',filesOk:true,tabs:[]},recording:true,tabId:7,tracks:1,mode:'tracks',appRecording:'disconnected'},tab);
+  assert.equal(tracks.record.enabled,false);assert.equal(tracks.record.direct,undefined);
+  const saving=popupState({browserHealth:{nativeControl:'connected',filesOk:true,tabs:[]},recording:true,stopping:true,tabId:7,tracks:1,mode:'tab'},tab);
+  assert.equal(saving.record.enabled,false,'no second stop while saving');
 });

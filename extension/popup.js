@@ -9,7 +9,7 @@ let openCheckDone = false, roster = {tabId: null, names: []};
 // A refresh asked for while a poll or action is outstanding runs once it ends.
 let refreshQueued = false, lastResult = null, lastTab = null;
 // The button's target is the tab and action displayed when it was rendered.
-let recordTarget = null, recordError = null;
+let recordTarget = null, recordError = null, tabTarget = null, directStop = false;
 function boundedReply(promise, ms = 4000) {
   let timer;
   return Promise.race([promise, new Promise((_, reject) => {
@@ -58,6 +58,12 @@ function render(result, tab) {
   element('reload').hidden = reloadTabId === null;
   element('reload-warning').hidden = reloadTabId === null;
   renderRecord(view.record, tab);
+  tabTarget = view.fallback?.enabled ? {tabId: tab.id} : null;
+  element('record-tab').hidden = !view.fallback;
+  element('record-tab').disabled = !view.fallback?.enabled;
+  element('record-tab-hint').textContent = view.fallback?.hint || '';
+  element('record-tab-hint').hidden = !view.fallback?.hint;
+  directStop = view.record?.direct === true;
   const names = view.participants || [];
   element('participants').hidden = names.length === 0;
   element('participant-list').replaceChildren(...names.map(name => Object.assign(document.createElement('li'), {textContent: name})));
@@ -129,8 +135,28 @@ element('reload').addEventListener('click', async () => {
   } catch (error) { showActionError(error.message); }
   finally { actionPending = false; element('reload').disabled = false; drainRefresh(); }
 });
+// Whole-tab fallback: the person's own click, handled entirely in this browser.
+element('record-tab').addEventListener('click', async () => {
+  if (actionPending || tabTarget === null) return;
+  actionPending = true; ++requestGeneration; tabTarget = null; showRecordError('');
+  element('record-tab').disabled = true;
+  try {
+    const result = await boundedReply(chrome.runtime.sendMessage({target: 'background', type: 'start', mode: 'tab'}), 15000);
+    if (!result || result.error) throw new Error(result?.error || 'The tab could not be recorded.');
+  } catch (error) { showRecordError(error.message); }
+  finally { actionPending = false; refreshQueued = true; drainRefresh(); }
+});
 element('record').addEventListener('click', async () => {
   if (actionPending || recordTarget === null) return;
+  if (directStop) {
+    actionPending = true; ++requestGeneration; recordTarget = null; showRecordError('');
+    try {
+      const result = await boundedReply(chrome.runtime.sendMessage({target: 'background', type: 'stop'}), 15000);
+      if (!result || result.error) throw new Error(result?.error || 'The recording could not be stopped.');
+    } catch (error) { showRecordError(error.message); }
+    finally { actionPending = false; refreshQueued = true; drainRefresh(); }
+    return;
+  }
   // Never re-read the active tab here: the ask targets the tab the user saw.
   const {tabId, action} = recordTarget;
   actionPending = true;

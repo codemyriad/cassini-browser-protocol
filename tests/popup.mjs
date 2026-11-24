@@ -86,6 +86,21 @@ try {
   assert.doesNotMatch(await page.locator('#diagnostics').textContent(),/Hypatia/);
   await page.evaluate(()=>{delete fixture.status.participants;delete fixture.status.tabEvidence;});
   await page.locator('#participants').waitFor({state:'hidden'});
+  // Whole-tab fallback: visible, explicit, handled by the browser alone; its Stop is direct as well.
+  assert.equal(await page.locator('#record-tab').isVisible(),true);
+  assert.match(await page.locator('#record-tab-hint').textContent(),/one stereo track, not separate participants/);
+  await page.locator('#record-tab').click();
+  await page.waitForFunction(()=>fixture.requests.some(r=>r.type==='start'));
+  assert.deepEqual(await evaluate(()=>fixture.requests.find(r=>r.type==='start')),{target:'background',type:'start',mode:'tab'});
+  await page.evaluate(()=>{fixture.captures=[{tabId:7,recording:true,tracks:1,mode:'tab'}]});
+  await page.waitForFunction(()=>document.querySelector('#record').textContent==='Stop recording'&&!document.querySelector('#record').disabled);
+  assert.equal(await page.locator('#record-tab').isVisible(),false,'no fallback while capturing');
+  const asked=()=>evaluate(()=>fixture.requests.filter(r=>r.type==='recordRequest'&&r.action==='stop').length);
+  const askedBefore=await asked();
+  await page.locator('#record').click();
+  await page.waitForFunction(()=>fixture.requests.some(r=>r.type==='stop'));
+  assert.equal(await asked(),askedBefore,'a whole-tab stop never asks the app');
+  await page.evaluate(()=>{delete fixture.captures;fixture.requests=fixture.requests.filter(r=>r.type==='status')});
   await page.evaluate(()=>{
     fixture.status.browserHealth.tabs=[{tabId:7,state:'reloadRequired'}];
     fixture.captures=[{tabId:3,recording:true,tracks:1},{tabId:7,recording:true,tracks:2}];
