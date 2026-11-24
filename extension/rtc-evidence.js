@@ -64,7 +64,8 @@
   const timerTarget=globalThis;
   const timeout=(fn,ms)=>call(nativeTimeout,timerTarget,[fn,ms]);
   const addressOf=()=>{const value=get(href,locationObject)||'',fragment=call(indexOf,value,['#']);return fragment<0?value:call(slice,value,[0,fragment])};
-  const roots=list(), peers=list(), qualified=list();
+  const roots=list(), peers=list(), excessPeers=list(), excessRoots=list();
+  let qualified=list(), overflowQualified=list(), lostEndpoint=false;
   let overflow=false, generation=0, revision=0, receivedVersion=0, sentVersion=0,
     address=addressOf(), sampling=false, heard=false;
   const documentGeneration=call(uuid,cryptoObject);
@@ -80,9 +81,24 @@
     if(lineageIndex)return lookup(lineageIndex,track)||null;
     for(let i=0;i<roots.length;i++)if(roots[i].track===track)return roots[i];return null;
   };
+  // Compact in place without consulting page-owned array methods.
+  const retire=(entries,ended)=>{
+    let kept=0;
+    for(let i=0;i<entries.length;i++)if(!ended(entries[i]))entries[kept++]=entries[i];
+    entries.length=kept;
+  };
+  // Omitted endpoints are teardown witnesses only. If even these bounded
+  // references fill, a new document is the only fully observable boundary.
+  const rememberExcess=(entries,item,limit,ended)=>{
+    overflow=true;
+    if(entries.length>=limit)retire(entries,ended);
+    if(entries.length<limit)add(entries,item);else lostEndpoint=true;
+  };
+  const endedTrack=track=>get(trackState,track)==='ended';
   const rememberRoot=(track,ancestor=track,node=null)=>{
     if(lineageOf(track))return;
-    if(roots.length>=1024){overflow=true;return}
+    if(roots.length>=1024)retire(roots,value=>endedTrack(value.track));
+    if(roots.length>=1024){rememberExcess(excessRoots,track,1024,endedTrack);return}
     const value={track,root:ancestor,node};
     if(lineageIndex&&!remember(lineageIndex,track,value))return;add(roots,value);
   };
@@ -181,20 +197,33 @@
   };
   const closed=pc=>get(signaling,pc)==='closed'||get(connection,pc)==='closed';
   const connected=pc=>!closed(pc)&&(get(connection,pc)==='connected'||get(ice,pc)==='connected'||get(ice,pc)==='completed');
-  const terminal=()=>{
-    if(!qualified.length)return false;
+  const endpointsEnded=endpoints=>{
     const check=terminalCheck();
-    for(let i=0;i<qualified.length;i++){
-      const entry=qualified[i];if(!closed(entry.pc))return false;
+    for(let i=0;i<endpoints.length;i++){
+      const entry=endpoints[i];if(!closed(entry.pc))return false;
       for(let j=0;j<entry.tracks.length;j++)if(!finished(entry.tracks[j],check))return false;
     }
-    for(let i=0;i<peers.length;i++)if(!closed(peers[i].pc))return false;
     return true;
+  };
+  const excessEnded=()=>{
+    if(lostEndpoint)return false;
+    retire(excessPeers,closed);retire(excessRoots,endedTrack);
+    return !excessPeers.length&&!excessRoots.length&&endpointsEnded(overflowQualified);
+  };
+  const terminal=()=>{
+    if(!qualified.length)return false;
+    for(let i=0;i<peers.length;i++)if(!closed(peers[i].pc))return false;
+    return endpointsEnded(qualified)&&(!overflow||excessEnded());
   };
   const reset=()=>{heard=false;qualified.length=0;for(let i=0;i<peers.length;i++){peers[i].receivers=list();peers[i].senders=list();peers[i].generation=null}};
   const refresh=()=>{
     const next=addressOf();
-    if(next!==address){address=next;generation++;reset()}
+    if(next!==address){
+      // An address fence invalidates proof, but cannot erase outstanding
+      // native teardown witnesses or declare those endpoints ended.
+      if(overflow&&qualified.length){overflowQualified=qualified;qualified=list()}
+      address=next;generation++;reset();
+    }
   };
   const record=pc=>{for(let i=0;i<peers.length;i++)if(peers[i].pc===pc)return peers[i];return null};
   const register=pc=>{
@@ -202,10 +231,13 @@
     if(terminal()){generation++;reset()}
     // Retire closed objects before applying the bound. Qualified endpoints keep
     // the minimal terminal references until a native new-session boundary.
-    for(let i=peers.length-1;i>=0;i--)if(closed(peers[i].pc)){
-      for(let j=i;j<peers.length-1;j++)peers[j]=peers[j+1];peers.length--;
+    retire(peers,entry=>closed(entry.pc));
+    // Only construction of a new native transport after complete teardown
+    // can release the latch. Its stats start with empty directional baselines.
+    if(overflow&&!qualified.length&&!peers.length&&excessEnded()){
+      overflow=false;overflowQualified.length=0;
     }
-    if(peers.length>=64){overflow=true;return}
+    if(peers.length>=64){rememberExcess(excessPeers,pc,64,closed);return}
     add(peers,{pc,generation,receivers:list(),senders:list(),heard:false});
   };
   const capture=globalThis.navigator.mediaDevices;
