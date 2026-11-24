@@ -95,7 +95,7 @@ function popupStatus(result, tab, reloadedTabId) {
   if (result?.tabEvidence?.tabId === tab.id) {
     const evidence = tabEvidenceView(result,tab.id);
     if (evidence.callEvidence.state === 'inactive') return {...view, title: 'No call in progress',
-      description: 'The call on this tab has ended or has not started. Join a call and Cassini will notice it.'};
+      description: 'The call on this tab has ended or has not started. Join a call and it will be detected here.'};
     if (evidence.callEvidence.state === 'unknown' && evidence.transport.documentStart === false && sourcedRow?.state === 'ready') return {...view, tone: 'warning', reloadTabId: tab.id,
       title: 'Reload this tab for automatic detection',
       description: 'This tab was already open when the extension started, so Cassini cannot verify its call. Reload the tab, then rejoin your call. You can still start a recording manually.'};

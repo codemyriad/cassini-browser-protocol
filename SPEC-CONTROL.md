@@ -1120,7 +1120,7 @@ active light or dark mode, generated from the vendored `ux/brand/tokens.json`
 the catalog's companion privacy line. There are no protocol or capture-policy changes.
 
 
-### Popup status, roster and actions (extension 0.2.36)
+### Popup status, roster and actions (extension 0.2.37)
 
 These are popup-to-worker messages and popup rendering rules. They are not app protocol: nothing here changes
 the control port, capture policy or admission. Only the extension's own popup page may send them.
