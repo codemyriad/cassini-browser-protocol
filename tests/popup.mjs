@@ -10,7 +10,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const tokens = JSON.parse(await readFile(path.join(root,'ux/brand/tokens.json'),'utf8')).tokens;
 const server = createServer(async (request, response) => {
   const file = request.url?.slice(1);
-  if (!['popup.html', 'popup.js', 'popup-state.mjs', 'tab-evidence.mjs', 'brand-tokens.css', 'brand/saturn-nav.svg'].includes(file)) {response.writeHead(404).end();return;}
+  if (!['popup.html', 'popup.js', 'popup-state.mjs', 'tab-evidence.mjs', 'participants.mjs', 'brand-tokens.css', 'brand/saturn-nav.svg'].includes(file)) {response.writeHead(404).end();return;}
   const types = {html: 'text/html', css: 'text/css', svg: 'image/svg+xml'};
   response.setHeader('Content-Type', types[file.split('.').pop()] || 'text/javascript');
   response.end(await readFile(path.join(root,'extension',file)));
@@ -63,6 +63,16 @@ try {
   await page.evaluate(()=>fixture.status.browserHealth.tabs=[{tabId:3,state:'reloadRequired'},{tabId:7,state:'ready'}]);
   await page.getByRole('heading',{name:'Meeting sources detected',exact:true}).waitFor();
   assert.equal(await page.locator('#reload').isVisible(),false);
+  // Participant roster: display-only text for this tab, never markup, cleared when it goes away.
+  assert.equal(await page.locator('#participants').isVisible(),false);
+  await page.evaluate(()=>{fixture.status.tabEvidence={tabId:7,callEvidence:{state:'unknown',reason:'unverified'},captureCapability:{kind:'separated',assurance:'observed'}};
+    fixture.status.participants=['Hypatia','<img src=x onerror=window.pwned=1>'];});
+  await page.locator('#participants').waitFor({state:'visible'});
+  assert.deepEqual(await page.locator('#participant-list li').allTextContents(),['Hypatia','<img src=x onerror=window.pwned=1>']);
+  assert.equal(await page.evaluate(()=>window.pwned),undefined,'names render as text, never markup');
+  assert.doesNotMatch(await page.locator('#diagnostics').textContent(),/Hypatia/);
+  await page.evaluate(()=>{delete fixture.status.participants;delete fixture.status.tabEvidence;});
+  await page.locator('#participants').waitFor({state:'hidden'});
   await page.evaluate(()=>{
     fixture.status.browserHealth.tabs=[{tabId:7,state:'reloadRequired'}];
     fixture.captures=[{tabId:3,recording:true,tracks:1},{tabId:7,recording:true,tracks:2}];

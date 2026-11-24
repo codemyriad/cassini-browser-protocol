@@ -56,6 +56,9 @@ function render(result, tab) {
   element('reload').hidden = reloadTabId === null;
   element('reload-warning').hidden = reloadTabId === null;
   renderRecord(view.record, tab);
+  const names = view.participants || [];
+  element('participants').hidden = names.length === 0;
+  element('participant-list').replaceChildren(...names.map(name => Object.assign(document.createElement('li'), {textContent: name})));
   // Do not copy meeting URLs/titles or filesystem paths into the report.
   diagnosticText = JSON.stringify(copyDiagnostics(result, tab?.id), null, 2);
   element('diagnostics').textContent = diagnosticText;

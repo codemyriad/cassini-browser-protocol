@@ -1,4 +1,5 @@
 import { AppControl } from "./app-control.js";
+import { readTalkParticipants, cleanParticipants } from "./participants.mjs";
 import { browserProfileIdentity, SiteSignalAdapters, CallSignalProducer, GenericCallEvidenceProducer } from "./call-signals.js";
 
 async function hasOffscreenDocument() {
@@ -163,6 +164,19 @@ async function repairTab(tabId, frameId = null) {
   })().finally(() => { tabRepairs.delete(key); notifyControl(); });
   tabRepairs.set(key, repair);
   return repair;
+}
+// Display-only names from the meeting page's own cards; never part of diagnostics or admission.
+async function readParticipants(tabId) {
+  const frame = mainFrame(tabId);
+  if (!frame || !relayReady(frame) || !(frame.sourceCount > 0) || typeof frame.browserDocumentId !== "string" || !frame.browserDocumentId || !chrome.scripting?.executeScript) return [];
+  let deadline;
+  try {
+    const results = await Promise.race([
+      chrome.scripting.executeScript({target:{tabId, documentIds:[frame.browserDocumentId]}, world:"ISOLATED", func:readTalkParticipants}),
+      new Promise(resolve => { deadline = relayTimers.later(() => resolve(null), 750); })
+    ]);
+    return Array.isArray(results) && results.length === 1 && results[0]?.documentId === frame.browserDocumentId ? cleanParticipants(results[0].result) : [];
+  } catch { return []; } finally { relayTimers.cancel(deadline); }
 }
 const ON_DEMAND_CONNECT_MS = 2000, ON_DEMAND_RETRY_MS = 5000;
 const onDemandAttempts = new Map();
@@ -987,6 +1001,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         const kind=['separated','mixed'].includes(row?.remoteAudio)?row.remoteAudio:frame&&relayReady(frame)&&frame.sourceCount===0?'unavailable':'unknown';
         result.tabEvidence={tabId:message.tabId,transport:{page,documentStart:frame&&relayReady(frame)?frame.observerDocumentStart===true:null},callEvidence:row?.callEvidence||{state:'unknown',reason:'unverified'},
           captureCapability:{kind,assurance:kind==='unknown'?'unknown':'observed'}};
+        result.participants=await readParticipants(message.tabId);
       }
       return result;
     }

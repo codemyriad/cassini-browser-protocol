@@ -20,7 +20,7 @@ async function wave(frequency){
  for(let i=0;i<frames;i++)data.writeInt16LE(Math.round(6000*Math.sin(2*Math.PI*frequency*i/rate)),44+i*2);
  const file=path.join(temporary,'input-'+frequency+'.wav');await writeFile(file,data);return file;
 }
-async function scenario(name,{room,stripRelay,expected}){
+async function scenario(name,{room,stripRelay,expected,roster}){
  const extension=path.join(temporary,name,'extension');await cp(path.join(root,'extension'),extension,{recursive:true});
  const manifestPath=path.join(extension,'manifest.json'),manifest=JSON.parse(await readFile(manifestPath,'utf8'));
  if(stripRelay)manifest.content_scripts=manifest.content_scripts.filter(entry=>!entry.js.includes('relay.js'));
@@ -46,11 +46,18 @@ async function scenario(name,{room,stripRelay,expected}){
    chrome.tabs.query=async options=>options.active?(await query({})).filter(tab=>tab.url===url).slice(0,1):query(options);},meetingUrl);
   const deadline=Date.now()+25000;let title='';
   while(Date.now()<deadline){title=await popup.locator('#status').textContent().catch(()=>'')||'';if(title===expected)break;await new Promise(resolve=>setTimeout(resolve,500));}
+  if(roster){ // Display-only roster from Talk's own cards, shown before any recording starts.
+   const list=async()=>(await popup.locator('#participant-list li').allTextContents()).sort();
+   const until=Date.now()+15000;while(Date.now()<until&&JSON.stringify(await list())!==JSON.stringify(roster))await new Promise(resolve=>setTimeout(resolve,500));
+   assert.deepEqual(await list(),roster,'the popup names the remote participants before recording');
+   assert.equal(await popup.locator('#participants').isVisible(),true);
+   assert.doesNotMatch(await popup.locator('#diagnostics').textContent(),/Hypatia|Haytham/,'names stay out of the copied diagnostics');
+  }
   return title;
  }finally{await context?.close();for(const browser of others)await browser.close();}
 }
 try{
- assert.equal(await scenario('trusted',{room:callURL,stripRelay:false,expected:'Interactive media session detected'}),'Interactive media session detected');
+ assert.equal(await scenario('trusted',{room:callURL,stripRelay:false,expected:'Interactive media session detected',roster:['Hypatia','Ibn al-Haytham']}),'Interactive media session detected');
  assert.equal(await scenario('reopened',{room:otherURL,stripRelay:true,expected:'Reload this tab for automatic detection'}),'Reload this tab for automatic detection');
- console.log('PASS popup on a real Talk call: interactive session when trusted, reload prompt when the relay arrived after the page');
+ console.log('PASS popup on a real Talk call: interactive session and participant names when trusted, reload prompt when the relay arrived after the page');
 }finally{await rm(temporary,{recursive:true,force:true});}

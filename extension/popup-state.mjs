@@ -1,6 +1,7 @@
 // Only describe evidence exposed by the current worker. A native port, a page
 // hook, a recording request, and confirmed saved audio are different things.
 import { tabEvidenceView } from './tab-evidence.mjs';
+import { cleanParticipants } from './participants.mjs';
 
 // popup-record-v1: Start/Stop asks the connected Cassini app. The button only
 // reflects this tab's own capture state and says why it is unavailable.
@@ -27,6 +28,8 @@ export function recordControl(result, tab, current) {
 
 export function popupState(result, tab, reloadedTabId = null) {
   const view = popupStatus(result, tab, reloadedTabId);
+  // Names describe this tab's call only, and only while no capture is being reported instead.
+  view.participants = result?.tabEvidence?.tabId === tab?.id ? cleanParticipants(result.participants) : [];
   const health = result?.browserHealth;
   // Without a health row, this tab's own page evidence still says whether it
   // needs a reload or is being checked. Evidence-only `ready` is only a relay
