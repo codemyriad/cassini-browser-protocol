@@ -11,6 +11,7 @@ const frames = new Set();
 // extension reload/update. No content script can read this storage area.
 const relayProtocol = 1;
 const TAB_READY_DEADLINE_MS = 2500;
+const DRAIN_READY_DEADLINE_MS = 10000;
 const relayTimers = {later:(fn,ms)=>setTimeout(fn,ms), cancel:id=>clearTimeout(id)};
 const extensionVersion = chrome.runtime.getManifest?.().version || "test";
 // A local-file check is diagnostic only. It never changes capability gating
@@ -853,17 +854,30 @@ chrome.runtime.onConnect.addListener(port => {
     if (frames.has(frame) && !frame.obsolete) setPageState(frame.tabId, "present");
   });
 
+  const armHandshakeDeadline = ms => {
+    relayTimers.cancel(frame.handshakeDeadline);
+    frame.handshakeDeadline = relayTimers.later(() => {
+      if (!frames.has(frame) || !frame.checking) return;
+      frame.checking = false; notifyControl();
+    }, ms);
+  };
   port.onMessage.addListener(async message => {
     if (!identitiesHydrated) await recovery;
     if (!frames.has(frame)) return;
-    if (message.type === "relayHello" || message.type === "relayReady" || message.type === "relayUnavailable") {
+    if (message.type === "relayHello" || message.type === "relayDraining" || message.type === "relayReady" || message.type === "relayUnavailable") {
       if (message.protocol !== relayProtocol || message.instanceId !== extensionInstance) return;
+      if (message.type === "relayDraining") {
+        if (!frame.checking || frame.drainingDeadline) return;
+        frame.drainingDeadline = true; frame.relayAlive = true; frame.observerDocumentStart = message.observerDocumentStart === true;
+        armHandshakeDeadline(DRAIN_READY_DEADLINE_MS);
+        return;
+      }
       const trustedReady=frame.relayAlive&&frame.hookReady&&frame.observerDocumentStart===true;
       if(message.type==='relayReady'&&frame.relayAlive&&frame.hookReady&&frame.observerDocumentStart===(message.observerDocumentStart===true))return;
       frame.relayAlive = true;
       frame.observerDocumentStart = message.observerDocumentStart === true;
       if (message.type !== "relayHello") {
-        frame.checking = false; clearTimeout(frame.handshakeDeadline); frame.hookReady = message.type === "relayReady";
+        frame.checking = false; relayTimers.cancel(frame.handshakeDeadline); frame.hookReady = message.type === "relayReady";
         frame.hookSeen ||= frame.hookReady;
       }
       // Cache matching readiness during verification, but do not publish or
@@ -952,7 +966,7 @@ chrome.runtime.onConnect.addListener(port => {
       if (lostMeetings.size > 100) lostMeetings.delete(lostMeetings.keys().next().value);
       void repairTab(frame.tabId, frame.frameId);
     }
-    clearTimeout(frame.handshakeDeadline);
+    relayTimers.cancel(frame.handshakeDeadline);
     frames.delete(frame);
     notifyControl();
     frame.finished?.();
@@ -969,10 +983,7 @@ chrome.runtime.onConnect.addListener(port => {
   });
   const hello = () => {
     if (!frames.has(frame)) return;
-    frame.handshakeDeadline = setTimeout(() => {
-      if (!frames.has(frame) || !frame.checking) return;
-      frame.checking = false; notifyControl();
-    }, TAB_READY_DEADLINE_MS);
+    armHandshakeDeadline(TAB_READY_DEADLINE_MS);
     port.postMessage({type:"relayHello",protocol:relayProtocol,instanceId:extensionInstance});
   };
   if (extensionInstance) hello(); else void identityReady.then(hello).catch(() => {});
