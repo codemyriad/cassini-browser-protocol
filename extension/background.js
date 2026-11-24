@@ -498,17 +498,31 @@ const pendingStartFor = tabId => !!pendingStartRequest(tabId);
 // ends.
 const recordRequests = new Map();
 const RECORD_REQUEST_SETTLE_MS = 10000;
+function clearRecordRequest(tabId, { notify = false } = {}) {
+  const request = recordRequests.get(tabId);
+  if (!request) return false;
+  if (request.timer != null) { sessionTimers.cancel(request.timer); request.timer = null; }
+  recordRequests.delete(tabId);
+  if (notify) notifyPopups();
+  return true;
+}
+function pruneRecordRequests() {
+  for (const [tabId, request] of [...recordRequests]) {
+    if (request.state !== "pending" && (request.epoch !== appControl.recordEpoch || appControl.recordAvailability() !== "available"))
+      clearRecordRequest(tabId);
+  }
+}
 function popupRecordRequest(tabId) {
   const request = recordRequests.get(tabId);
   if (!request) return request;
   if (request.epoch !== appControl.recordEpoch || appControl.recordAvailability() !== "available") {
-    if (request.state !== "pending") recordRequests.delete(tabId);
+    if (request.state !== "pending") clearRecordRequest(tabId);
     return request.state === "pending" ? request : null;
   }
   if (request.state === "pending") return request;
   const session = sessions.get(tabId);
   const reflected = request.action === "start" ? !!session || pendingStartFor(tabId) : !session || session.stopping;
-  if (reflected || Date.now() >= request.until) { recordRequests.delete(tabId); return null; }
+  if (reflected || Date.now() >= request.until) { clearRecordRequest(tabId); return null; }
   return request;
 }
 // The app's own start/stop command for a tab with a popup ask finished (either
@@ -518,7 +532,7 @@ function settleRecordRequest(command) {
   const request = recordRequests.get(command.tabId);
   if (!request || request.action !== command.action) return;
   if (request.state === "pending") request.settled = true;
-  else recordRequests.delete(command.tabId);
+  else clearRecordRequest(command.tabId, { notify: true });
 }
 // Browser-owned facts the app needs to resolve and title a manual Start even
 // when its verified inventory omits this tab (repaired or unverified frames).
@@ -567,17 +581,26 @@ async function requestRecording(action, tabId) {
     };
   }
   if (recordRequests.get(tabId)?.state === "pending") throw refused("Cassini is still answering the previous request.", "busy");
+  clearRecordRequest(tabId);
   const request = { action, state: "pending", epoch: appControl.recordEpoch };
   recordRequests.set(tabId, request);
   try {
     const answer = await appControl.requestRecording(build);
     if (!answer.ok) throw popupRefusal(answer.error, answer.code);
     if (recordRequests.get(tabId) === request) {
-      if (request.settled || request.epoch !== appControl.recordEpoch) recordRequests.delete(tabId);
-      else Object.assign(request, { state: "accepted", until: Date.now() + RECORD_REQUEST_SETTLE_MS });
+      if (request.settled || request.epoch !== appControl.recordEpoch) clearRecordRequest(tabId);
+      else {
+        Object.assign(request, { state: "accepted", until: Date.now() + RECORD_REQUEST_SETTLE_MS });
+        request.timer = sessionTimers.later(() => {
+          if (recordRequests.get(tabId) !== request) return;
+          request.timer = null;
+          recordRequests.delete(tabId);
+          notifyPopups();
+        }, RECORD_REQUEST_SETTLE_MS);
+      }
     }
   } catch (error) {
-    if (recordRequests.get(tabId) === request) recordRequests.delete(tabId);
+    if (recordRequests.get(tabId) === request) clearRecordRequest(tabId);
     throw error;
   }
   return popupTabStatus(tabId);
@@ -1111,6 +1134,7 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
 });
 chrome.tabs.onRemoved.addListener(id => {
   evidenceChecks.delete(id);
+  clearRecordRequest(id);
   for (const [key, value] of lostMeetings) if (value.tabId === id) lostMeetings.delete(key);
   if (!sessions.has(id) && ![...frames].some(f => f.tabId === id)) { notifyControl(); return; }
   setPageState(id, "closed");
@@ -1265,7 +1289,7 @@ const genericProducer = new GenericCallEvidenceProducer({identity:()=>browserIns
     sourceCount:native.sourceCount,heard:native.heard})}});
 const controlCapabilities = ["independent-sessions-v1", "call-evidence-v1", "page-state-v1", "multi-stream-v1", "resume-capture-v1", "heartbeat-v1", "tab-readiness-v1", "sender-me-v1", "popup-record-v1"];
 const appControl = new AppControl({
-  changed: notifyPopups,
+  changed: () => { pruneRecordRequests(); notifyPopups(); },
   runtime: chrome.runtime, alarms: chrome.alarms, busy: startBusy, capabilities: controlCapabilities, signalSnapshot:options=>options.verified?genericProducer.snapshot(options):signalProducer.snapshot(), identity: () => ({extensionVersion,extensionInstance,...companionDiagnostics}), cancelPending: cancelPendingStart,
   signalFinalize:(value,options)=>options.verified?genericProducer.finalize(value):value,
   connected: repairOpenTabs,
