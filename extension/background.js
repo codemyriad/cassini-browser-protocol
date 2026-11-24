@@ -1036,6 +1036,9 @@ chrome.runtime.onMessage.addListener((message, sender, respond) => {
         } else {
           const checked=evidenceChecks.get(message.tabId);
           row=checked&&frame&&checked.document===frame.browserDocumentId?checked.row:undefined;
+          // A remembered "active" is not repeated once the page reports no meeting sources: the call may have ended.
+          if (row?.callEvidence?.state==='active' && !(frame.sourceCount>0))
+            row={...row,callEvidence:{state:'unknown',reason:'unverified'}};
         }
         const page=readiness?.state||(frame?(relayReady(frame)?'ready':frame.checking?'checking':'reloadRequired'):'unavailable');
         const kind=['separated','mixed'].includes(row?.remoteAudio)?row.remoteAudio:frame&&relayReady(frame)&&!readiness?'unavailable':'unknown';

@@ -1120,7 +1120,7 @@ active light or dark mode, generated from the vendored `ux/brand/tokens.json`
 the catalog's companion privacy line. There are no protocol or capture-policy changes.
 
 
-### Popup status, roster and actions (extension 0.2.35)
+### Popup status, roster and actions (extension 0.2.36)
 
 These are popup-to-worker messages and popup rendering rules. They are not app protocol: nothing here changes
 the control port, capture policy or admission. Only the extension's own popup page may send them.
@@ -1131,9 +1131,16 @@ the control port, capture policy or admission. Only the extension's own popup pa
   popup sends it when it opens and when the person presses **Check again**; a failed open check is not re-armed by
   later notices. A plain `status` runs no script in the meeting tab and shows the last open-check evidence only for
   the same browser document; for a replaced document the evidence is `unknown`.
-- **Call verdict is independent of the app.** The popup's call verdict (active, unverified) comes from the page's
-  collector alone and is shown whether or not the Cassini app link is connected, open or running. With the link
-  down, an active verdict adds that nothing is recorded until the app is opened; it never turns into "no call".
+- **Call verdict is independent of the app.** The popup's call verdict (active, unverified, no call) comes from the
+  page's collector alone. It is shown whether or not the Cassini app link is connected, open or running, and the
+  open check does not wait for the profile identity that is only used to publish to the app. With the link down,
+  the verdict text adds that the *app link* is not connected, so the popup cannot ask it to record; it never claims
+  that nothing is being recorded (the app may be open, and a whole-tab recording uses a separate host). While a
+  Start or Stop is in flight, or a recording of this tab runs, the headline shows that progress instead; the verdict
+  stays in Connection details. An `inactive` (ended) verdict says "No call in progress". A remembered `active`
+  verdict from the last open check is shown as `unknown` once the tab reports no meeting sources.
+  The check also reads the page once before binding when the page's generations are not yet known (a freshly
+  woken worker), so a handshake read still in flight cannot discard it.
 - **No timer.** The popup does not poll. The worker pushes `{type:"changed"}` over a `cassini-popup` port (accepted
   only from the extension's own popup page) when its state changes, including app connection, disconnection and the
   record opt-in; the popup answers with a plain `status`.

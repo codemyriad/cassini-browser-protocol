@@ -265,6 +265,18 @@ test('the call verdict does not depend on the Cassini app being connected, open 
     assert.equal(make(connection,{state:'unknown',reason:'unverified'}).title,'Interactive session is unverified',connection);
   }
   const off=make('disconnected',{state:'active',reason:'activeCall'});
-  assert.match(off.description,/Cassini app/i);   // says what the missing app means, not that the call is gone
+  assert.match(off.description,/app link is not connected, so the popup cannot ask it to record/);   // what the missing app means, not that the call is gone
   assert.doesNotMatch(off.title,/not connected|unavailable/i);
+  // ...and says nothing about the app while it is connected.
+  assert.doesNotMatch(make('connected',{state:'active',reason:'activeCall'}).description,/not connected/);
+});
+test('an ended call says no call is in progress instead of offering to record it',async()=>{
+  const {popupState}=await state;
+  for (const connection of ['connected','disconnected']) {
+    const result=status([],{tabEvidence:{tabId:7,transport:{page:'ready'},callEvidence:{state:'inactive',reason:'callEnded'},
+      captureCapability:{kind:'unknown',assurance:'unknown'}}});result.browserHealth.nativeControl=connection;
+    const view=popupState(result,tab);
+    assert.equal(view.title,'No call in progress',connection);assert.notEqual(view.tone,'good');
+    assert.doesNotMatch(view.description,/start recording this tab/i);
+  }
 });

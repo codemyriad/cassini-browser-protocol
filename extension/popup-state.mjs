@@ -94,6 +94,8 @@ function popupStatus(result, tab, reloadedTabId) {
     description: 'The extension is checking whether it can reach this meeting’s audio sources. Recording is not confirmed.'};
   if (result?.tabEvidence?.tabId === tab.id) {
     const evidence = tabEvidenceView(result,tab.id);
+    if (evidence.callEvidence.state === 'inactive') return {...view, title: 'No call in progress',
+      description: 'The call on this tab has ended or has not started. Join a call and Cassini will notice it.'};
     if (evidence.callEvidence.state === 'unknown' && evidence.transport.documentStart === false && sourcedRow?.state === 'ready') return {...view, tone: 'warning', reloadTabId: tab.id,
       title: 'Reload this tab for automatic detection',
       description: 'This tab was already open when the extension started, so Cassini cannot verify its call. Reload the tab, then rejoin your call. You can still start a recording manually.'};
@@ -106,7 +108,7 @@ function popupStatus(result, tab, reloadedTabId) {
         'Live audio is flowing both ways. This can include microphone tests or early media.' :
         'An interactive media session is detected. Audio capture availability is checked separately in Cassini.') +
         // The call verdict comes from the page alone; only recording needs the app.
-        (view.connected ? '' : ' The Cassini app is not connected, so nothing is recorded until you open it.')};
+        (view.connected ? '' : ' Cassini’s app link is not connected, so the popup cannot ask it to record.')};
   }
   if (current?.state === 'ready') return {...view, tone: 'good', title: 'Meeting sources detected',
     description: view.connected ? 'The extension can reach audio sources on this page. You can start recording this tab.' :
