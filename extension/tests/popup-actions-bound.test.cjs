@@ -129,7 +129,7 @@ test('change pushes never run scripts in the meeting tab; they reuse the open ch
     // The document is replaced: the old reading is never shown for the new one.
     port.onDisconnect.emit();
     relayPort(app, 5, { documentId: 'doc-5b' });
-    await new Promise(resolve => setTimeout(resolve, 50)); // the new relay's own registration may read the collector
+    await until(() => [...app.api.frames].some(f => f.tabId === 5 && f.browserDocumentId === 'doc-5b' && f.nativeSourceVerified === true));
     const beforeStatus = reads;
     const replaced = await rpc(app, { type: 'status', tabId: 5 });
     assert.equal(replaced.tabEvidence.callEvidence.state, 'unknown', 'the old reading is not shown for the new document');
@@ -153,17 +153,17 @@ test('on open, a missing main relay is reconnected through frame 0 even when a c
 });
 
 test('opening the popup on a tab that cannot be injected returns at once instead of waiting out the handshake', async () => {
-  const app = await setup(0), waits = [];
+  const app = await setup(0), waits = [], pending = new Map();
+  let timerId = 0;
   try {
-    const later = app.api.relayTimers.later;
-    app.api.relayTimers.later = (fn, ms) => { waits.push(ms); return later(fn, ms); };
+    app.api.relayTimers.later = (fn, ms) => { const id = ++timerId; waits.push(ms); pending.set(id, { fn, ms }); return id; };
+    app.api.relayTimers.cancel = id => { pending.delete(id); };
     app.tabs.set(9, { id: 9, title: 'Settings', url: 'chrome://settings' });
     app.chrome.tabs.sendMessage = async () => { throw Error('No receiver'); };
     app.chrome.scripting = { async executeScript() { throw Error('Cannot access a chrome:// URL'); } };
-    const started = Date.now();
     const status = await rpc(app, { type: 'status', tabId: 9, fresh: true });
     assert.equal(waits.filter(ms => ms === 100).length, 0, 'no 100 ms polling loop');
-    assert.ok(Date.now() - started < 1500);
+    assert.equal(pending.size, 0, 'all bounded deadlines are cancelled without ever firing');
     assert.equal(status.tabEvidence.transport.detail.main, false);
   } finally { app.close(); }
 });

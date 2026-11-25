@@ -8,17 +8,26 @@ const raw=()=>({version:2,cohortQualified:true,documentGeneration:'hook-A',hookG
   receivedPeers:1,capturedSendingPeers:1,samePeerCount:1,receivedVersion:3,sentVersion:3,ended:false,sourceCount:3,heard:true});
 
 async function coldTab({appPresent,gateFirstRead}){
-  const app=await setup(0);let release;const gate=new Promise(resolve=>release=resolve);let reads=0;
+  const app=await setup(0);let release,firstStarted,secondStarted;
+  const gate=new Promise(resolve=>release=resolve);
+  const firstRead=new Promise(resolve=>firstStarted=resolve);
+  const secondRead=new Promise(resolve=>secondStarted=resolve);
+  let reads=0;
   app.pages[0].onDisconnect.emit();
   if(!appPresent)app.ports[0].onDisconnect.emit();      // the Cassini app is not running: no control port
   app.chrome.scripting={async executeScript(request){
-    if(request.world==='MAIN'){if(gateFirstRead&&reads++===0)await gate;return [{frameId:0,documentId:'chrome-A',result:raw()}]}
+    if(request.world==='MAIN'){
+      const index=++reads;
+      if(index===1){firstStarted();if(gateFirstRead)await gate;}
+      else if(index===2)secondStarted();
+      return [{frameId:0,documentId:'chrome-A',result:raw()}];
+    }
     return [{frameId:0,documentId:'chrome-A'}];
   }};
   const port=app.frame(2,1,0,'chrome-A');const hello=port.sent.find(m=>m.type==='relayHello');
   // Only the handshake: the worker has not yet learned the page's document/call generations.
   port.onMessage.emit({...hello,type:'relayReady',observerDocumentStart:true});
-  return {app,release,port};
+  return {app,release,port,firstRead,secondRead};
 }
 
 for(const appPresent of [true,false])test(`a call in progress is reported with the app ${appPresent?'connected':'absent'}`,async()=>{
@@ -32,11 +41,11 @@ for(const appPresent of [true,false])test(`a call in progress is reported with t
 });
 
 test('the popup-open check is not lost while the handshake read of a freshly started worker is still in flight',async()=>{
-  const {app,release}=await coldTab({appPresent:false,gateFirstRead:true});
+  const {app,release,firstRead,secondRead}=await coldTab({appPresent:false,gateFirstRead:true});
   try{
-    await until(()=>true);
+    await firstRead;
     const check=rpc(app,{tabId:2,fresh:true});
-    await new Promise(resolve=>setTimeout(resolve,20));release();
+    await secondRead;release();
     const result=await check;
     assert.equal(result.tabEvidence.callEvidence.state,'active','an active call must not show as unverified because the worker was cold');
   }finally{release();app.close()}
